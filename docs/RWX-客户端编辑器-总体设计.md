@@ -87,3 +87,54 @@
 - **热重载**：改完 ini 能否不重启游戏生效，决定预览体验；需先确认 ModManager 是否支持 reload。
 - **写盘安全**：所有保存走「备份 + 临时文件 + 原子替换」，禁止直接覆盖。
 - **范围蔓延**：三种模式全做会非常大，P0 只碰一条线，其余先留接口。
+
+## 10. 补充：JVM 模组带来的变化（勘察 my-first-mod-1.0.0.jar 之后）
+
+样例 jar 7.7MB，内容：`mod.toml`（id / entrypoint / name / version / minGameVersion）、
+编译后的 Kotlin 类（含 `ComposableSingletons`、`HudSnapshot`）、`assets/`（mod-info.txt、build.json、music、maps、模板）。
+mod-api 44 个 kt，模组可用的面：`game`（tick/调度/队伍/观察者）、`units`（DSL 造单位 + rawSection 逃生口）、
+`unitWorld`、`commands`、`maps`、`rules`、`localization`、`audio`、`graphics`（含 `registerHud(id, order) { @Composable }`）、`ui`、`ai`。
+**模组不再是纯数据，是可执行代码 + 资源 + 描述文件。**
+
+### 10.1 模组两种形态（编辑器必须都认）
+
+| 形态 | 工程内容 | 编辑器要做的 |
+| --- | --- | --- |
+| 数据模组 | `mods/units/<mod>/`：mod-info.txt、单位 ini、模板、贴图、音乐、地图 | ini 无损编辑、字段表单、模板展开、资源预览 |
+| JVM 模组 | `mod.toml` + Kotlin/Java 源码 + gradle 工程 + 编译产物 jar + assets/ | 工程树、gradle 构建、API 补全、运行预览、HUD 预览、（可选）无代码生成代码 |
+
+两者可以共存：JVM 模组照样带 `assets/mod-info.txt` 里的单位/地图/音乐段，
+所以模组编辑模式要能「一个工程里既有 ini 又有代码」。
+
+### 10.2 对编辑器底座的影响
+
+- 工程模型要升级成 **Project**：不止一个目录，而是「描述文件 + 源集 + 资源集 + 构建脚本」。
+- 需要构建集成：调用本机 gradle 编译模组（编辑器内嵌任务队列、输出到面板）。
+- 需要运行/预览集成：起一局加载该模组，看单位、看 HUD 层（`registerHud` 支持多图层 order，可单独预览某一层）。
+- 代码模组能执行任意逻辑 → 打开第三方模组工程时给出「会执行代码」的提示，预览运行前可要求确认。
+
+### 10.3 打包模式的定义（老师这句是准绳）
+
+> 打包模式就是把软件和模组合起来的模式。
+
+所以打包模式的产物 = **客户端（引擎 jar / app-image / runtime）+ 选定模组（含 JVM jar 与 assets）+ 清单**，
+要处理的事情：
+
+1. 选择包含哪些模组、加载顺序、启用状态（写进整合包的 preferences/modSettings）。
+2. 资源合并与冲突：同名文件、同 id 模组、同动画标签、同贴图路径 —— 冲突要报出来让人选。
+3. **类冲突**：样例 jar 7.7MB，很可能自带了 Compose 运行时；多模组各带一份时靠 per-mod classLoader 隔离，
+   但共享类型（mod-api、compose runtime）必须只有一份 —— 打包时要检测并裁剪重复依赖。
+4. 清单与校验：文件清单、sha256、版本号、更新链接（样例 build.json 里就有 updateLink/updateType 字段）。
+5. 产物可验证：解包后能跑、能加载每个模组、CHANGED-FILES 自动生成。
+
+### 10.4 修订后的 P0（最小切片）
+
+原 P0 只做 ini 一条线，现在加一条：**打开 JVM 模组工程（只读）**——工程树看到 `mod.toml`、源码、assets，
+并能改 `mod.toml` 的 name/version/description 并存盘。不构建、不运行。
+理由：编辑器要同时服务两种形态，先把「工程模型」这个底座验证掉，比先做深 ini 表单更值。
+
+### 10.5 待老师定的新问题
+
+1. JVM 模组工程的构建由 IDE 管（内置 gradle 任务）还是「只打开、构建走命令行」？
+2. 打包时模组自带的 Compose/依赖怎么处理：强制剥离（用宿主的一份）还是允许带（隔离加载）？
+3. 无代码路径：单位表单是生成 **DSL 代码** 还是生成 **rawSection ini**？（样例里 rawSection 与 DSL 并存）
