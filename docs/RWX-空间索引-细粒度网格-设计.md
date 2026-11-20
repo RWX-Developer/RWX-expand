@@ -75,3 +75,17 @@
 1. 128×128 的格边长是否该随地图尺寸自适应？小图会不会格太碎、维护成本超过收益？
 2. 单位跨格维护：按 tick 全量重扫 vs 按移动距离增量更新，哪个更便宜？
 3. 32×32 是否还要保留（内存/兼容），还是细格直接替代？
+
+## 9. 开工前环境体检（2026-11-20 实测）
+
+| 项目 | 状态 |
+| --- | --- |
+| 磁盘 D: | 276G 总 / 235G 已用 / **42G 可用（86%）** —— 大项目要先确认占用 |
+| JDK | zulu25.38.109-ca-jdk25.0.5.0.3-win_x64（JAVA_HOME 需手动 export） |
+| Gradle | gradle-9.8.0，命令 `:desktop:packageUberJarForCurrentOS :bench-mod:build` |
+| 整合包 jar | 113685373（md5 9fa6f407…），备份 66 份在 logs-archive/ |
+| bench 脚本 | bench-headless.bat / bench-enable-mod.bat / bench-disable-mod.bat 三个 |
+| 源码树 | 干净，HEAD=63f46f8，远端 main 已同步 |
+| 代理 | gh pin-proxy 127.0.0.1:18099，约 4 小时寿命，推代码前先 curl 探活 |
+
+构建一次约 2 分钟（改 core）/ 1 分钟（只改 bench-mod）；无头台架一次 1500 tick 约 70～90 秒。
