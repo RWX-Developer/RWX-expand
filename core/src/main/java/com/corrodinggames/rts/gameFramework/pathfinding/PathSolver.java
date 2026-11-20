@@ -101,7 +101,8 @@ public final class PathSolver implements Runnable {
             f();
             linkedListE = t;
         } else {
-            linkedListE = e();
+            // RWX：-Drwx.pathing=2 走并行新求解器（A* + 边界安全的吸附策略），默认仍用旧实现。
+            linkedListE = "2".equals(System.getProperty("rwx.pathing")) ? RwxPathSolver2.solve(this, this.D) : e();
             if (PATH_STATS) {
                 solvedCount++;
             }

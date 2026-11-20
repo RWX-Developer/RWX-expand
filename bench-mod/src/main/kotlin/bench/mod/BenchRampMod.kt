@@ -147,6 +147,9 @@ class BenchRampMod : JvmMod() {
                 }
             })
         }
+        // RWX：寻路 A/B 台架。-Dbench.path=N 刷 N 只兵并每 90 tick 全体改目标，制造持续寻路。
+        val pathN = System.getProperty("bench.path", "0").toInt()
+        if (pathN > 0) armPathBench(pathN)
         if (target <= 0 && trigTarget <= 0) return
         val batch = System.getProperty("bench.batch", "40").toInt()
         val interval = System.getProperty("bench.interval", "4").toLong()
@@ -198,6 +201,49 @@ class BenchRampMod : JvmMod() {
             }
         })
         api.game.log(LogLevel.INFO, "BENCH ramp armed target=" + target + " trig=" + trigTarget + " batch=" + batch + " interval=" + interval + " spread=" + spread + " trigTarget=" + trigTarget)
+    }
+
+    private fun armPathBench(n: Int) {
+        val spawned = ArrayList<UnitInstanceId>()
+        val rnd = java.util.Random(20261121L)
+        var waves = 0
+        api.game.repeat(2, ModTask { a ->
+        val team = a.game.localTeam() ?: a.game.team(0)
+        teamId = team?.teamId ?: 0
+        while (spawned.size < n) {
+            val x = 500f + rnd.nextFloat() * 900f
+            val y = 500f + rnd.nextFloat() * 900f
+            val ref = a.unitWorld.spawn(UnitSpawnRequest(UnitId("bench:fodder"), teamId, WorldPosition(x, y)))
+            if (ref == null) break
+            spawned.add(ref.instanceId)
+        }
+        if (spawned.size >= n && a.game.tick % 90L == 0L) {
+            waves++
+            val tx = 300f + rnd.nextFloat() * 3600f
+            val ty = 300f + rnd.nextFloat() * 3600f
+            val t0 = System.nanoTime()
+            var accepted = 0
+            var offset = 0
+            while (offset < spawned.size) {
+                val end = minOf(offset + 60, spawned.size)
+                val res = a.commands.submit(
+                    UnitCommandRequest(
+                        teamId = teamId,
+                        unitIds = spawned.subList(offset, end).toList(),
+                        type = UnitCommandType.MOVE,
+                        target = UnitCommandTarget.Point(WorldPosition(tx, ty)),
+                        stopCurrentAction = true,
+                    ),
+                )
+                if (res.accepted) accepted++
+                offset = end
+            }
+            val ms = (System.nanoTime() - t0) / 1_000_000.0
+            a.game.log(LogLevel.INFO, "BENCH_PATH wave=" + waves + " tick=" + a.game.tick + " units=" + spawned.size
+                + " target=" + tx.toInt() + "," + ty.toInt() + " submitMs=" + String.format("%.2f", ms) + " accepted=" + accepted)
+        }
+        })
+        api.game.log(LogLevel.INFO, "BENCH path armed n=" + n)
     }
 
     override fun dispose() {}
