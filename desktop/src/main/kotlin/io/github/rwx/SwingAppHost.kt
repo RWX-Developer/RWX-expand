@@ -174,6 +174,10 @@ class SwingAppHost private constructor(
             return
         }
         val state = uiState
+        if (System.getenv("RWX_PROBE_FRAME") != null) {
+            println("RWX_VIS updateVisibility screen=" + state?.screen + " showComposeOverlay=" + state?.showComposeOverlay + " gameRequested=" + gameRequested)
+            System.out.flush()
+        }
         val showGame = gameRequested
         val showUi = !showGame || overlayRequested || state?.showComposeOverlay == true ||
             state?.inGameOverlay?.visible == true
@@ -184,11 +188,14 @@ class SwingAppHost private constructor(
         composeTexturePanel.nativePresentation = showGame && showUi
         snapshotPanel.isVisible = !showGame && true && (state == null ||
             state.battleBackgroundVisible || state.screen == AppScreen.Paused || state.screen == AppScreen.InGame)
+        // 渲染线程按这个开关决定要不要在交换缓冲前读回合成帧。
+        io.github.rwx.slick.SlickCanvasHost.snapshotPanelActive = snapshotPanel.isVisible
         if (changed) {
             content.revalidate()
             content.repaint()
             if (showUi) menuPanel.requestFocusInWindow() else gameCanvas.requestFocusInWindow()
         }
+        composeTexturePanel.renderNow()
     }
 
     private fun resizeContent() {
@@ -296,6 +303,7 @@ class SwingAppHost private constructor(
                 frameProvider = { host.composeTexturePanel.uiFrame },
                 inputDispatcher = host.composeTexturePanel::dispatchInput,
             )
+            SlickCanvasHost.installUiRenderRequester { host.composeTexturePanel.renderNow() }
             frame.pack()
             if (fullscreen) frame.bounds = GraphicsEnvironment.getLocalGraphicsEnvironment()
                 .defaultScreenDevice.defaultConfiguration.bounds else frame.setLocationRelativeTo(null)

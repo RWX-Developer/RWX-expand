@@ -76,15 +76,20 @@ public final class UnitSpatialIndex {
     }
 
     public final void b(float f, float f2, float f3, UnitList unitList) {
+        b(f, f2, f3, 50.0f, unitList);
+    }
+
+    /** RWX 性能模式：按用途收紧格边距（原版 50px 在 32 格上会多扫 ±1~2 格）。 */
+    public final void b(float f, float f2, float f3, float margin, UnitList unitList) {
         UnitStatisticsManager[][] unitStatisticsManagerArr = this.e;
         float f4 = f - f3;
         float f5 = f + f3;
         float f6 = f2 - f3;
         float f7 = f2 + f3;
-        int iA = a(f4 - 50.0f);
-        int iA2 = a(f5 + 50.0f);
-        int iB = b(f6 - 50.0f);
-        int iB2 = b(f7 + 50.0f);
+        int iA = a(f4 - margin);
+        int iA2 = a(f5 + margin);
+        int iB = b(f6 - margin);
+        int iB2 = b(f7 + margin);
         for (int i = iA; i <= iA2; i++) {
             for (int i2 = iB; i2 <= iB2; i2++) {
                 com.corrodinggames.rts.game.units.management.UnitList unitList2 = unitStatisticsManagerArr[i][i2].a;

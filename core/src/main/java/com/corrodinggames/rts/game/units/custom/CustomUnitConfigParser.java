@@ -89,6 +89,111 @@ public class CustomUnitConfigParser {
     /* JADX INFO: renamed from: m */
     public static FastArrayList tempUnitList = new FastArrayList();
 
+    // ==== RWX: 并行加载单位配置 ====
+    // 实测：本 MOD 下并行反而更慢（29.8s vs 串行 22.6s），瓶颈是 GL 侧贴图/队伍色生成，
+    // 而 GL 必须串行回主线程，所以默认关闭。想试验加 -Drwx.parallelUnitParse=true。
+    private static final boolean PARALLEL_UNIT_ENABLED = Boolean.getBoolean("rwx.parallelUnitParse");
+    private static final int PARALLEL_UNIT_MIN_FILES = 8;
+    private static final int PARALLEL_UNIT_THREADS = Math.max(1, Math.min(8, Runtime.getRuntime().availableProcessors() - 1));
+    private static final java.util.concurrent.ExecutorService PARALLEL_UNIT_POOL = java.util.concurrent.Executors.newFixedThreadPool(PARALLEL_UNIT_THREADS, new java.util.concurrent.ThreadFactory() {
+        @Override
+        public Thread newThread(Runnable runnable) {
+            Thread thread = new Thread(runnable, "rwx-unit-parse");
+            thread.setDaemon(true);
+            return thread;
+        }
+    });
+    private static final ArrayList<PendingUnitFile> pendingUnitFiles = new ArrayList<>();
+    private static boolean parallelCollectMode = false;
+    private static final ThreadLocal<ArrayList<CustomUnitConfig>> parallelUnitResults = new ThreadLocal<>();
+    private static final Object imageLoadLock = new Object();
+    private static final Object soundLoadLock = new Object();
+    // 贴图/音效只能在持有 GL 上下文的线程上创建（Slick 的 Image 构造当场就绑 GL），
+    // 所以解析线程把它们排进 glWork，由主线程在等待期间代跑。
+    private static final java.util.concurrent.LinkedBlockingQueue<Runnable> glWork = new java.util.concurrent.LinkedBlockingQueue<>();
+    private static volatile Thread glOwnerThread = null;
+
+    private static final class PendingUnitFile {
+        final String path;
+        final ModInfo mod;
+        final String argA;
+        final String argB;
+
+        PendingUnitFile(String str, ModInfo modInfo, String str2, String str3) {
+            this.path = str;
+            this.mod = modInfo;
+            this.argA = str2;
+            this.argB = str3;
+        }
+    }
+
+    private static void runPendingUnitFiles() {
+        parallelCollectMode = false;
+        int size = pendingUnitFiles.size();
+        if (size == 0) {
+            return;
+        }
+        if (size < PARALLEL_UNIT_MIN_FILES || PARALLEL_UNIT_THREADS <= 1) {
+            for (int i = 0; i < size; i++) {
+                PendingUnitFile pendingUnitFile = pendingUnitFiles.get(i);
+                long jA = PerformanceProfiler.a();
+                loadUnitConfigFile(pendingUnitFile.path, pendingUnitFile.mod, pendingUnitFile.argA, pendingUnitFile.argB);
+                recordLoadPhaseTime(jA, LoadPhase.unitParse);
+            }
+            pendingUnitFiles.clear();
+            return;
+        }
+        final int count = size;
+        final ArrayList<CustomUnitConfig>[] results = new ArrayList[count];
+        final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(count);
+        long jA = PerformanceProfiler.a();
+        for (int i = 0; i < count; i++) {
+            final int index = i;
+            final PendingUnitFile pendingUnitFile = pendingUnitFiles.get(i);
+            PARALLEL_UNIT_POOL.execute(new Runnable() {
+                @Override
+                public void run() {
+                    ArrayList<CustomUnitConfig> arrayList = new ArrayList<>();
+                    parallelUnitResults.set(arrayList);
+                    try {
+                        loadUnitConfigFile(pendingUnitFile.path, pendingUnitFile.mod, pendingUnitFile.argA, pendingUnitFile.argB);
+                    } catch (Throwable th) {
+                        GameEngine.log("parallel unit load failed: " + pendingUnitFile.path + " : " + th);
+                    } finally {
+                        results[index] = arrayList;
+                        parallelUnitResults.remove();
+                        latch.countDown();
+                    }
+                }
+            });
+        }
+        try {
+            while (!latch.await(1L, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                Runnable glRunnable;
+                while ((glRunnable = glWork.poll()) != null) {
+                    glRunnable.run();
+                }
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            GameEngine.log("parallel unit load interrupted: " + e);
+        }
+        Runnable glRunnable;
+        while ((glRunnable = glWork.poll()) != null) {
+            glRunnable.run();
+        }
+        synchronized (CustomUnitConfig.allConfigs) {
+            for (int i = 0; i < count; i++) {
+                ArrayList<CustomUnitConfig> arrayList = results[i];
+                if (arrayList != null) {
+                    CustomUnitConfig.allConfigs.addAll(arrayList);
+                }
+            }
+        }
+        GameEngine.log("Parallel unit parse: " + count + " files on " + PARALLEL_UNIT_THREADS + " threads in:" + PerformanceProfiler.a(PerformanceProfiler.a(jA)));
+        pendingUnitFiles.clear();
+    }
+
     /* JADX INFO: renamed from: n */
     static HashMap iniCache = new HashMap();
 
@@ -969,19 +1074,20 @@ public class CustomUnitConfigParser {
         byte[] array = null;
         byte[][] array2 = null;
         ByteBuffer[] array3 = null;
-        try {
-            array = new byte[8000000];
-            array[0] = instance.memoryProbeWriteByte;
-            instance.memoryProbeReadByte = array[1];
-            array2 = new byte[][]{new byte[3000000], new byte[3000000]};
-            array2[0][0] = instance.memoryProbeWriteByte;
-            array2[1][0] = instance.memoryProbeWriteByte;
-            if (!GameEngine.isAndroidPlatform()) {
-                array3 = new ByteBuffer[]{ByteBuffer.allocateDirect(5000000), ByteBuffer.allocateDirect(5000000), ByteBuffer.allocateDirect(5000000), ByteBuffer.allocateDirect(5000000)};
+        if (GameEngine.isAndroidPlatform()) {
+            // 桌面端跳过这段内存探针：它为了测一次可写性先分配 8MB+6MB（桌面上还要再加
+            // 4 个 5MB 直连缓冲），结尾再连调两次 System.gc()。大内存挂机机器上纯属启动浪费。
+            try {
+                array = new byte[8000000];
+                array[0] = instance.memoryProbeWriteByte;
+                instance.memoryProbeReadByte = array[1];
+                array2 = new byte[][]{new byte[3000000], new byte[3000000]};
+                array2[0][0] = instance.memoryProbeWriteByte;
+                array2[1][0] = instance.memoryProbeWriteByte;
+            } catch (final OutOfMemoryError outOfMemoryError) {
+                System.gc();
+                GameEngine.log("Failed to reserve memory pre-mod load");
             }
-        } catch (final OutOfMemoryError outOfMemoryError) {
-            System.gc();
-            GameEngine.log("Failed to reserve memory pre-mod load");
         }
         synchronized (CustomUnitConfig.allConfigs) {
             CustomUnitConfig.allConfigs.clear();
@@ -1094,6 +1200,13 @@ public class CustomUnitConfigParser {
         if (modInfo != null) {
             modInfo.hasError = true;
         }
+        final boolean parallelTop = PARALLEL_UNIT_ENABLED && !parallelCollectMode;
+        if (parallelTop) {
+            parallelCollectMode = true;
+            if (glOwnerThread == null) {
+                glOwnerThread = Thread.currentThread();
+            }
+        }
         if (!z2) {
             for (String str4 : strArrListFiles) {
                 if (str4.equalsIgnoreCase("all-units.template")) {
@@ -1122,6 +1235,8 @@ public class CustomUnitConfigParser {
                     }
                     if (str5.equalsIgnoreCase("desktop.ini")) {
                         GameEngine.log("Skipping possible system file: " + str6);
+                    } else if (parallelCollectMode) {
+                        pendingUnitFiles.add(new PendingUnitFile(str6, modByShortName, str2, str3));
                     } else {
                         long jA = PerformanceProfiler.a();
                         loadUnitConfigFile(str6, modByShortName, str2, str3);
@@ -1159,6 +1274,9 @@ public class CustomUnitConfigParser {
                     }
                 }
             }
+        }
+        if (parallelTop) {
+            runPendingUnitFiles();
         }
     }
 
@@ -1377,7 +1495,7 @@ public class CustomUnitConfigParser {
                     if (textureFromCache != null) {
                         customUnitConfig.shadowTexture = textureFromCache;
                     } else {
-                        customUnitConfig.shadowTexture = BaseUnit.attackUnit(customUnitConfig.baseTexture, customUnitConfig.frameWidth, customUnitConfig.frameHeight);
+                        customUnitConfig.shadowTexture = runOnGlThreadAttack(customUnitConfig.baseTexture, customUnitConfig.frameWidth, customUnitConfig.frameHeight);
                         trackImageMemory(customUnitConfig.shadowTexture);
                         if (customUnitConfig.shadowTexture != null) {
                             putTextureInCache(str7, customUnitConfig.shadowTexture);
@@ -1389,7 +1507,7 @@ public class CustomUnitConfigParser {
                     if (textureFromCache2 != null) {
                         customUnitConfig.shadowTexture = textureFromCache2;
                     } else {
-                        customUnitConfig.shadowTexture = BaseUnit.attackUnit(customUnitConfig.baseTexture, customUnitConfig.baseTexture.m(), customUnitConfig.baseTexture.l());
+                        customUnitConfig.shadowTexture = runOnGlThreadAttack(customUnitConfig.baseTexture, customUnitConfig.baseTexture.m(), customUnitConfig.baseTexture.l());
                         trackImageMemory(customUnitConfig.shadowTexture);
                         if (customUnitConfig.shadowTexture != null) {
                             putTextureInCache(str8, customUnitConfig.shadowTexture);
@@ -1402,10 +1520,22 @@ public class CustomUnitConfigParser {
                 if (iniFile.getBoolean("graphics", "image_shadow_frames", (Boolean) false).booleanValue()) {
                     customUnitConfig.hasShadowFrames = true;
                 }
-                customUnitConfig.teamColoredBaseTextures = customUnitConfig.a(customUnitConfig.baseTexture, customUnitConfig.teamColoringMode);
+                final CustomUnitConfig teamColorUnit = customUnitConfig;
+                customUnitConfig.teamColoredBaseTextures = runOnGlThreadGet(new java.util.concurrent.Callable<Texture[]>() {
+                    @Override
+                    public Texture[] call() {
+                        return teamColorUnit.a(teamColorUnit.baseTexture, teamColorUnit.teamColoringMode);
+                    }
+                });
                 customUnitConfig.teamColorsOnTurret = iniFile.getBoolean("graphics", "teamColorsOnTurret", (Boolean) false).booleanValue();
                 if (customUnitConfig.teamColorsOnTurret && customUnitConfig.image_turret != null) {
-                    customUnitConfig.teamColoredTurretTextures = customUnitConfig.a(customUnitConfig.image_turret, customUnitConfig.teamColoringMode);
+                    final CustomUnitConfig teamColorTurretUnit = customUnitConfig;
+                    customUnitConfig.teamColoredTurretTextures = runOnGlThreadGet(new java.util.concurrent.Callable<Texture[]>() {
+                        @Override
+                        public Texture[] call() {
+                            return teamColorTurretUnit.a(teamColorTurretUnit.image_turret, teamColorTurretUnit.teamColoringMode);
+                        }
+                    });
                 }
                 float fFloatValue = iniFile.getFloat("graphics", "scaleImagesTo", Float.valueOf(-1.0f)).floatValue();
                 if (fFloatValue > 0.0f) {
@@ -2326,6 +2456,17 @@ public class CustomUnitConfigParser {
                 }
                 customUnitConfig.aiTags = iniFile.getAnimationSet(customUnitConfig, "ai", "aiTags", (AnimationSet) null);
                 customUnitConfig.disableUse = iniFile.getBoolean("ai", "disableUse", (Boolean) false).booleanValue();
+                // RWX: 作者完全没写 [ai] 建造键时记下来，BaseZone 按原版同角色阶梯打分
+                // （原版矿场 0.98/工厂 0.8/炮塔 0.47 vs 模组默认 0.05，差 16~20 倍）
+                customUnitConfig.rwAiBuildDefaultsUntouched = !iniFile.hasKey("ai", "buildPriority")
+                        && !iniFile.hasKey("ai", "recommendedInEachBaseNum")
+                        && !iniFile.hasKey("ai", "recommendedInEachBasePriorityIfUnmet")
+                        && !iniFile.hasKey("ai", "maxEachBase")
+                        && !iniFile.hasKey("ai", "maxGlobal")
+                        && !iniFile.hasKey("ai", "nonInBaseExtraPriority")
+                        && !iniFile.hasKey("ai", "noneInBaseExtraPriority")
+                        && !iniFile.hasKey("ai", "nonGlobalExtraPriority")
+                        && !iniFile.hasKey("ai", "noneGlobalExtraPriority");
                 customUnitConfig.buildPriority = iniFile.getFloat("ai", "buildPriority", Float.valueOf(0.05f)).floatValue();
                 customUnitConfig.recommendedInEachBaseNum = iniFile.getInt("ai", "recommendedInEachBaseNum", (Integer) 0).intValue();
                 customUnitConfig.recommendedInEachBasePriorityIfUnmet = iniFile.getFloat("ai", "recommendedInEachBasePriorityIfUnmet", Float.valueOf(0.5f)).floatValue();
@@ -2333,6 +2474,10 @@ public class CustomUnitConfigParser {
                 customUnitConfig.maxGlobal = iniFile.getInt("ai", "maxGlobal", (Integer) (-1)).intValue();
                 if (customUnitConfig.maxEachBase < customUnitConfig.recommendedInEachBaseNum) {
                     throw new RuntimeException("[ai]recommendedInEachBaseNum is smaller than maxEachBase");
+                }
+                if (customUnitConfig.rwAiBuildDefaultsUntouched) {
+                    // RWX: 原版建筑没有每基地 2 座的隐性硬帽，模组建筑也不该有
+                    customUnitConfig.maxEachBase = -1;
                 }
                 if (!customUnitConfig.isBuildingUnit) {
                     if (iniFile.hasKey("ai", "recommendedInEachBaseNum")) {
@@ -2447,8 +2592,13 @@ public class CustomUnitConfigParser {
                 if (modInfo != null) {
                     modInfo.imageMemory++;
                 }
-                synchronized (CustomUnitConfig.allConfigs) {
-                    CustomUnitConfig.allConfigs.add(customUnitConfig);
+                ArrayList<CustomUnitConfig> collected = parallelUnitResults.get();
+                if (collected != null) {
+                    collected.add(customUnitConfig);
+                } else {
+                    synchronized (CustomUnitConfig.allConfigs) {
+                        CustomUnitConfig.allConfigs.add(customUnitConfig);
+                    }
                 }
                 recordLoadPhaseTime(jA, LoadPhase.unitParsePartD);
                 return customUnitConfig;
@@ -3087,7 +3237,9 @@ public class CustomUnitConfigParser {
 
     /* JADX INFO: renamed from: a */
     public static void recordLoadPhaseTime(long j, LoadPhase loadPhase) {
-        loadPhase.o += (double) PerformanceProfiler.a(j);
+        synchronized (LoadPhase.class) {
+            loadPhase.o += (double) PerformanceProfiler.a(j);
+        }
     }
 
     /* JADX INFO: renamed from: i */
@@ -3125,6 +3277,100 @@ public class CustomUnitConfigParser {
 
     /* JADX INFO: renamed from: b */
     public static Texture loadTextureInternal(String str, String str2, boolean z, CustomUnitConfig customUnitConfig) {
+        if (glOwnerThread != null && Thread.currentThread() != glOwnerThread) {
+            return runOnGlThreadTexture(str, str2, z, customUnitConfig);
+        }
+        return loadTextureInternal0(str, str2, z, customUnitConfig);
+    }
+
+    private static void runOnGlThread(final Runnable runnable) {
+        if (glOwnerThread == null || Thread.currentThread() == glOwnerThread) {
+            runnable.run();
+            return;
+        }
+        final java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
+        glWork.add(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    runnable.run();
+                } finally {
+                    done.countDown();
+                }
+            }
+        });
+        try {
+            done.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    public static <T> T runOnGlThreadGet(final java.util.concurrent.Callable<T> action) {
+        final Object[] result = new Object[1];
+        final Throwable[] error = new Throwable[1];
+        runOnGlThread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    result[0] = action.call();
+                } catch (Throwable th) {
+                    error[0] = th;
+                }
+            }
+        });
+        if (error[0] instanceof RuntimeException) {
+            throw (RuntimeException) error[0];
+        }
+        if (error[0] != null) {
+            throw new RuntimeException(error[0]);
+        }
+        return (T) result[0];
+    }
+
+    private static Texture runOnGlThreadAttack(final Texture texture, final int i, final int i2) {
+        final Texture[] result = new Texture[1];
+        runOnGlThread(new Runnable() {
+            @Override
+            public void run() {
+                result[0] = BaseUnit.attackUnit(texture, i, i2);
+            }
+        });
+        return result[0];
+    }
+
+    private static Texture runOnGlThreadTexture(final String str, final String str2, final boolean z, final CustomUnitConfig customUnitConfig) {
+        final Texture[] result = new Texture[1];
+        final Throwable[] error = new Throwable[1];
+        final java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
+        glWork.add(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    result[0] = loadTextureInternal0(str, str2, z, customUnitConfig);
+                } catch (Throwable th) {
+                    error[0] = th;
+                } finally {
+                    done.countDown();
+                }
+            }
+        });
+        try {
+            done.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        if (error[0] instanceof RuntimeException) {
+            throw (RuntimeException) error[0];
+        }
+        if (error[0] != null) {
+            throw new RuntimeException(error[0]);
+        }
+        return result[0];
+    }
+
+    private static Texture loadTextureInternal0(String str, String str2, boolean z, CustomUnitConfig customUnitConfig) {
         Texture textureA;
         if (str2 == null || str2.equalsIgnoreCase("NONE") || str2.equals(VariableScope.nullOrMissingString)) {
             return null;
@@ -3208,23 +3454,37 @@ public class CustomUnitConfigParser {
 
     /* JADX INFO: renamed from: a */
     public static void putTextureInCache(String str, Texture texture) {
-        imageCache.put(str, texture);
+        synchronized (imageCache) {
+            imageCache.put(str, texture);
+        }
     }
 
     /* JADX INFO: renamed from: c */
     public static Texture getTextureFromCache(String str) {
-        Texture texture = (Texture) imageCache.get(str);
-        if (texture != null) {
-            imageCacheHitCount++;
-            trackImageMemory(texture);
-            texture.t();
-            return texture;
+        Texture texture;
+        synchronized (imageCache) {
+            texture = (Texture) imageCache.get(str);
+            if (texture != null) {
+                imageCacheHitCount++;
+                trackImageMemory(texture);
+            } else {
+                if (logImageCacheMiss) {
+                    GameEngine.log("loadImageInConf: cache miss: " + str);
+                }
+                imageCacheMissCount++;
+            }
         }
-        if (logImageCacheMiss) {
-            GameEngine.log("loadImageInConf: cache miss: " + str);
+        if (texture == null) {
+            return null;
         }
-        imageCacheMissCount++;
-        return null;
+        final Texture cachedTexture = texture;
+        runOnGlThread(new Runnable() {
+            @Override
+            public void run() {
+                cachedTexture.t();
+            }
+        });
+        return texture;
     }
 
     /* JADX INFO: renamed from: a */
@@ -3237,6 +3497,43 @@ public class CustomUnitConfigParser {
 
     /* JADX INFO: renamed from: b */
     public static Sound loadSoundByPath(String str, String str2, CustomUnitConfig customUnitConfig) {
+        if (glOwnerThread != null && Thread.currentThread() != glOwnerThread) {
+            return runOnGlThreadSound(str, str2, customUnitConfig);
+        }
+        return loadSoundByPath0(str, str2, customUnitConfig);
+    }
+
+    private static Sound runOnGlThreadSound(final String str, final String str2, final CustomUnitConfig customUnitConfig) {
+        final Sound[] result = new Sound[1];
+        final Throwable[] error = new Throwable[1];
+        final java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
+        glWork.add(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    result[0] = loadSoundByPath0(str, str2, customUnitConfig);
+                } catch (Throwable th) {
+                    error[0] = th;
+                } finally {
+                    done.countDown();
+                }
+            }
+        });
+        try {
+            done.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        if (error[0] instanceof RuntimeException) {
+            throw (RuntimeException) error[0];
+        }
+        if (error[0] != null) {
+            throw new RuntimeException(error[0]);
+        }
+        return result[0];
+    }
+
+    private static Sound loadSoundByPath0(String str, String str2, CustomUnitConfig customUnitConfig) {
         if (str2 == null || str2.equalsIgnoreCase("NONE")) {
             return null;
         }

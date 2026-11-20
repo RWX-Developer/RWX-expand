@@ -81,17 +81,19 @@ object UnitEventRuntime {
     ) {
         if (!acceptsEvents()) return
         if (nativeEvent == UnitEventType.tookDamage || nativeEvent == UnitEventType.newWaypointGivenByPlayer) return
+        // RWX：先查注册表再转换 tag——没注册 JVM 事件的单位原样也要白白转换一遍
+        // （中文 tag 靠抛异常过滤，60 秒上万次 fillInStackTrace 就是这么来的）
+        val registration = registrations[self.unitConfig] ?: return
         val kind = nativeEvent.toApiKind()
         val (source, target) = routeRelatedUnit(kind, relatedUnit)
-        val tags = nativeTags.toApiTags()
         val payload = when (kind) {
             UnitEventKind.QUEUE_ITEM_ADDED,
-            UnitEventKind.QUEUE_ITEM_CANCELLED -> UnitEventPayload.Queue(tags)
+            UnitEventKind.QUEUE_ITEM_CANCELLED -> UnitEventPayload.Queue(nativeTags.toApiTags())
 
-            UnitEventKind.MESSAGE_RECEIVED -> UnitEventPayload.Message(tags)
+            UnitEventKind.MESSAGE_RECEIVED -> UnitEventPayload.Message(nativeTags.toApiTags())
             else -> UnitEventPayload.None
         }
-        enqueue(self, kind, source, target, payload)
+        enqueue(registration, self, kind, source, target, payload)
     }
 
     @JvmStatic
@@ -102,8 +104,11 @@ object UnitEventRuntime {
         amount: Float,
     ) {
         if (!acceptsEvents()) return
+        // RWX：注册查询前置（同上，伤害是最高频事件，别让没注册的挨打单位白转一遍 tag）
+        val registration = registrations[self.unitConfig] ?: return
         val tags = projectileTags.toApiTags()
         enqueue(
+            registration = registration,
             self = self,
             kind = UnitEventKind.TOOK_DAMAGE,
             source = source,
@@ -119,8 +124,10 @@ object UnitEventRuntime {
     @JvmStatic
     fun enqueueWaypoint(self: CustomUnit, command: UnitCommand) {
         if (!acceptsEvents()) return
+        val registration = registrations[self.unitConfig] ?: return
         val target = command.targetUnit
         enqueue(
+            registration = registration,
             self = self,
             kind = UnitEventKind.WAYPOINT_GIVEN_BY_PLAYER,
             source = null,
@@ -366,7 +373,7 @@ object UnitEventRuntime {
     }
 
     private fun AnimationSet?.toApiTags(): Set<Tag> = this?.a
-        ?.mapNotNull { nativeTag -> runCatching { Tag(nativeTag.toString()) }.getOrNull() }
+        ?.mapNotNull { nativeTag -> Tag.ofOrNull(nativeTag.toString()) }
         ?.toSet()
         .orEmpty()
 

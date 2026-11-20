@@ -48,6 +48,25 @@ class HeadlessGameSession(
 
     val tick: Int get() = synchronized(gameLock) { gameEngine?.currentTick ?: 0 }
 
+    fun applySides(sideCount: Int): Boolean =
+        synchronized(gameLock) {
+            if (sideCount <= 0) return false
+            var changed = false
+            for (team in com.corrodinggames.rts.game.PlayerTeam.getTeams()) {
+                if (team == null || team.teamId < 0 || team.isSpectatorTeamColor) continue
+                team.teamColorId = team.teamId % sideCount
+                changed = true
+            }
+            changed
+        }
+
+    fun applyTeamLayout(layout: com.corrodinggames.rts.gameFramework.network.TeamLayoutType): Boolean =
+        synchronized(gameLock) {
+            val engine = gameEngine ?: return false
+            engine.networkEngine.a(layout)
+            true
+        }
+
     fun step(deltaSeconds: Float = 1f / 60f) = updateFrame(defaultPreloadViewport, deltaSeconds)
 
     override fun updateFrame(viewport: Viewport, deltaSeconds: Float, drainVisibleLayerBuffers: Boolean) {

@@ -305,6 +305,11 @@ class SlickGameSession(
    ) {
        lastSlickViewport = normalizedViewport(viewport)
        lastViewport = lastSlickViewport
+       if (drainVisibleLayerBuffers) {
+           // 加载页要求「把图块缓存排干净」；这个参数以前在这里被直接丢掉，
+           // 加载进度就永远卡在最后一小截。
+           activeGame()?.armUrgentLayerBufferDrain()
+       }
        syncRequestedMapFromSession()
         startSlickGameIfNeeded()
         pollSlickFrameSnapshot()
@@ -497,6 +502,11 @@ class SlickGameSession(
         activeGame?.setGameVisible(visible, pausedBackground)
         if (visible && !uiOverlay) {
             SlickCanvasHost.requestGameFocus()
+        }
+        if (!visible) {
+            // 画面交还给 Compose 之前留一份最新的合成帧，并把加载期的排干压力撤掉。
+            activeGame?.clearUrgentLayerBufferDrain()
+            activeGame?.armCompositedCapture(1)
         }
         if (visible) {
             startSlickGameIfNeeded()
@@ -696,10 +706,14 @@ class SlickGameSession(
             markRendererMenuBackgroundReady()
             CoreUiEventQueue.requestMenuBackgroundReady()
             logger.info { "Embedded Slick menu background ready: $mapPath" }
+            SlickCanvasHost.nudgePresentation()
             return
         }
         markRendererMapReady(mapPath, viewport)
         logger.info { "Embedded Slick map ready: $mapPath" }
+        // 就绪之后主动多读几帧合成结果：快照面板（暂停页、后台战局）拿到的才是当前画面，
+        // 不是退出上一幕时留下的残影。
+        activeGame()?.armCompositedCapture()
         println("RWX_SLICK_MAP_READY:$mapPath")
         System.out.flush()
     }

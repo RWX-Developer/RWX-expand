@@ -23,6 +23,16 @@ public final class UnitList extends AbstractList<BaseUnit> implements Serializab
         return i;
     }
 
+    public UnitList() {
+    }
+
+    /** RWX 预热容量：避免稳态列表每次 clear 后从 12 起重新翻倍拷贝。 */
+    public UnitList(int initialCapacity) {
+        if (initialCapacity > 0) {
+            this.c = (BaseUnit[]) Array.newInstance(BaseUnit.class, initialCapacity);
+        }
+    }
+
     public BaseUnit[] a() {
         return this.c;
     }

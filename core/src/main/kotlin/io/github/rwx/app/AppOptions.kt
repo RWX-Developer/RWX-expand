@@ -20,7 +20,9 @@ data class AppOptions(
     val backendId: String? = null,
     val autoReplay: String? = null,
     val headlessMapPath: String? = null,
+    val headlessSavedGame: String? = null,
     val headlessTickLimit: Int? = null,
+    val headlessTeamLayout: String? = null,
 ) {
     val headless: Boolean get() = backendId == "headless"
 
@@ -39,8 +41,10 @@ data class AppOptions(
         private const val BACKEND_PREFIX = "--render-backend="
         private const val AUTO_REPLAY_PREFIX = "--auto-replay="
         private const val HEADLESS_ARG = "--headless"
+    private const val TEAM_LAYOUT_PREFIX = "--team-layout="
         private const val MAP_PREFIX = "--map="
         private const val TICKS_PREFIX = "--ticks="
+        private const val SAVED_GAME_PREFIX = "--saved-game="
 
         private val screensByArgument = mapOf(
             "main-menu" to AppScreen.MainMenu,
@@ -92,7 +96,9 @@ data class AppOptions(
             var autoReplay: String? = null
             var headless = false
             var headlessMapPath: String? = null
+            var headlessSavedGame: String? = null
             var headlessTickLimit: Int? = null
+    var headlessTeamLayout: String? = null
 
             args.forEach { arg ->
                 when {
@@ -113,9 +119,19 @@ data class AppOptions(
                             require(it.isNotEmpty()) { "Map path must not be empty" }
                         }
                     }
+                    arg.startsWith(SAVED_GAME_PREFIX) -> {
+                        headlessSavedGame = arg.removePrefix(SAVED_GAME_PREFIX).trim().also {
+                            require(it.isNotEmpty()) { "Saved game name must not be empty" }
+                        }
+                    }
                     arg.startsWith(TICKS_PREFIX) -> {
                         headlessTickLimit = arg.removePrefix(TICKS_PREFIX).toIntOrNull().also {
                             require(it != null && it > 0) { "Tick limit must be a positive integer" }
+                        }
+                    }
+                    arg.startsWith(TEAM_LAYOUT_PREFIX) -> {
+                        headlessTeamLayout = arg.removePrefix(TEAM_LAYOUT_PREFIX).trim().lowercase().also {
+                            require(it.isNotEmpty()) { "Team layout must not be empty" }
                         }
                     }
                     arg == AUTO_START_SINGLE_PLAYER_UI_ARG -> autoStartSinglePlayerFromUi = true
@@ -156,10 +172,10 @@ data class AppOptions(
                 }
                 rendererId = "headless"
             }
-            if (rendererId == "headless" || headlessMapPath != null || headlessTickLimit != null) {
+            if (rendererId == "headless" || headlessMapPath != null || headlessSavedGame != null || headlessTickLimit != null) {
                 require(isDesktop && rendererId == "headless") { "Headless arguments require desktop headless mode" }
-                require(listOfNotNull(headlessMapPath, autoReplay, joinServer).size <= 1) {
-                    "Select only one headless map, replay or server"
+                require(listOfNotNull(headlessMapPath, headlessSavedGame, autoReplay, joinServer).size <= 1) {
+                    "Select only one headless map, saved game, replay or server"
                 }
             }
 
@@ -179,7 +195,9 @@ data class AppOptions(
                 backendId = rendererId,
                 autoReplay = autoReplay,
                 headlessMapPath = headlessMapPath,
+                headlessSavedGame = headlessSavedGame,
                 headlessTickLimit = headlessTickLimit,
+        headlessTeamLayout = headlessTeamLayout,
             )
         }
 

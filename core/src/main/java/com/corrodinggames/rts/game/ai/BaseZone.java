@@ -24,6 +24,8 @@ import io.github.rwx.geometry.PointF;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 
 /* JADX INFO: renamed from: com.corrodinggames.rts.game.a.i */
@@ -224,16 +226,32 @@ public class BaseZone extends AIStrategyNode {
     }
 
     /* JADX INFO: renamed from: a */
+    // RWX：getBestBuildingToBuild 的建筑类型循环里每型最多调 3 次本方法，每次扫
+    // (2×半径格+25)² 个格子（约 1.1 万格 × getPathingOverride/BaseBuilding 查询）——
+    // 实测 GBB 一次 50~60ms，是 AI_ZONES 尖峰的主源。结果只跟 zone 位置与地图资源态
+    // 有关，与本 tick 内调了几次无关，改成按 tick 记忆：每 zone 每 tick 至多扫一遍。
+    // 注意 tempPoint1 是本对象复用的 PointF，同 tick 内所有命中返回同一引用（原版语义相同）。
+    private int rwxResTick = -1;
+    private PointF rwxResCache;
+
     public PointF findClosestResource() {
         MapTile pathingOverrideTileAt;
         GameEngine gameEngine = GameEngine.getInstance();
+        long tFcr = io.github.rwx.probe.RwxPerf.now();
+        if (this.rwxResTick == gameEngine.currentTick) {
+            io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.AI_FCR, tFcr);
+            return this.rwxResCache;
+        }
         PointF pointF = null;
         int i = (int) (this.radius * gameEngine.tileMap.tileScaleX);
+        // RWX：资源池不总落在 zone 半径内（MC 的矿场必须建在资源池上）。
+        // 向外多扫一圈，避免因为「半径内恰好没有池子」就把整类建筑判死。
+        int iExtra = i + 12;
         gameEngine.tileMap.setCursorTileIndexFromWorldPoint(this.posX, this.posY);
         int i2 = gameEngine.tileMap.cursorTileX;
         int i3 = gameEngine.tileMap.cursorTileY;
-        for (int i4 = i2 - i; i4 <= i2 + i; i4++) {
-            for (int i5 = i3 - i; i5 <= i3 + i; i5++) {
+        for (int i4 = i2 - iExtra; i4 <= i2 + iExtra; i4++) {
+            for (int i5 = i3 - iExtra; i5 <= i3 + iExtra; i5++) {
                 if (gameEngine.tileMap.isInBounds(i4, i5) && (pathingOverrideTileAt = gameEngine.tileMap.getPathingOverrideTileAt(i4, i5)) != null && pathingOverrideTileAt.isResourcePool) {
                     BaseUnit baseUnitB = BaseBuilding.b(i4, i5);
                     boolean z = false;
@@ -253,6 +271,9 @@ public class BaseZone extends AIStrategyNode {
                 }
             }
         }
+        this.rwxResTick = gameEngine.currentTick;
+        this.rwxResCache = pointF;
+        io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.AI_FCR, tFcr);
         return pointF;
     }
 
@@ -265,8 +286,9 @@ public class BaseZone extends AIStrategyNode {
     public void updateUnitsInZone() {
         this.unitTypesInZone.clear();
         this.unitsInZone.clear();
-        BaseUnit[] baseUnitArrA = BaseUnit.bE.a();
-        int size = BaseUnit.bE.size();
+        // RWX：updateUnitsInZone：谓词要求 team == aiController，走本队快照
+        BaseUnit[] baseUnitArrA = this.aiController.rwxTeamUnits();
+        int size = Math.min(this.aiController.rwxSnapSize, baseUnitArrA.length);
         for (int i = 0; i < size; i++) {
             BaseUnit baseUnit = baseUnitArrA[i];
             if (baseUnit.team == this.aiController && !baseUnit.isDead && !baseUnit.u() && countUnitsForStrategy(baseUnit)) {
@@ -288,33 +310,79 @@ public class BaseZone extends AIStrategyNode {
     }
 
     /* JADX INFO: renamed from: b */
+    // RWX：canBuild = 「本 zone 里任一工厂能否造 unitType」。它只依赖 zone 自身的 unitsInZone，
+    // 而 getBestBuildingToBuild 每调用一次要对 ~120 个建筑类型各跑一遍（每型 units×types 双层扫），
+    // 实测占 GBB 的 97%（CanB 52ms / 尖峰 56ms）。unitsInZone 每 tick 只在 rwxZoneScan 刷新一次，
+    // 于是按 (建筑类型 → 结果) 记忆一个 tick：同 tick 内每型只算一次。
+    // RWX：canBuild =「本 zone 任一工厂可造该型」，原实现是 类型×unitsInZone×动作 三层嵌套，
+    // GBB 每调一次把它对 ~120 个建筑类型各跑一遍——实测 CanB 占尖峰 92%（52/56ms）。
+    // 改成每 tick 用「工厂的动作表」直接物化可造类型集合：unitsInZone 每 tick 才刷新，
+    // 集合与逐点查询逻辑等价（谓词仍是 canUseActionForUnitType(型,true)），代价 O(工厂×动作)。
+    private int rwxCanBTick = -1;
+    private final HashSet rwxCanBSet = new HashSet();
+
     public boolean canBuild(UnitType unitType) {
-        if ((GameEngine.getInstance().isDemo && !unitType.isAvailableInDemo()) || unitType.w()) {
+        GameEngine gameEngine = GameEngine.getInstance();
+        if (gameEngine.isDemo && !unitType.isAvailableInDemo()) {
             return false;
         }
-        Object[] objArrA = this.unitTypesInZone.a();
-        int size = this.unitTypesInZone.size();
+        if (unitType.w()) {
+            return false;
+        }
+        this.rwxRefreshBuildableSet(gameEngine.currentTick);
+        return this.rwxCanBSet.contains(unitType);
+    }
+
+    private void rwxRefreshBuildableSet(int tick) {
+        if (this.rwxCanBTick == tick) {
+            return;
+        }
+        this.rwxCanBTick = tick;
+        this.rwxCanBSet.clear();
+        BaseUnit[] baseUnitArrA = this.unitsInZone.a();
+        int size = this.unitsInZone.size();
         for (int i = 0; i < size; i++) {
-            UnitType unitType2 = (UnitType) objArrA[i];
-            BaseUnit[] baseUnitArrA = this.unitsInZone.a();
-            int i2 = 0;
-            int size2 = this.unitsInZone.size();
-            while (true) {
-                if (i2 < size2) {
-                    BaseUnit baseUnit = baseUnitArrA[i2];
-                    if (baseUnit.r() != unitType2 || !(baseUnit instanceof OrderableUnit)) {
-                        i2++;
-                    } else if (((OrderableUnit) baseUnit).canUseActionForUnitType(unitType, true)) {
-                        return true;
-                    } else {
-                        i2++;
-                    }
-                } else {
-                    break;
+            BaseUnit baseUnit = baseUnitArrA[i];
+            // 候选只从工厂类单位的生产动作里取（attached 型），谓词仍走 canUseActionForUnitType，
+            // 与原三层循环（unitsInZone × unitTypesInZone × 动作匹配）判定逐字等价。
+            if (!(baseUnit instanceof FactoryQueueInterface) || !(baseUnit instanceof OrderableUnit)) {
+                continue;
+            }
+            OrderableUnit builder = (OrderableUnit) baseUnit;
+            if (builder.r() == null) {
+                continue;
+            }
+            ArrayList actions = builder.getAvailableActions();
+            if (actions == null) {
+                continue;
+            }
+            for (Object o : actions) {
+                AbstractUnitAction action = (AbstractUnitAction) o;
+                UnitType t = action.getAttachedUnitType();
+                if (t != null && !this.rwxCanBSet.contains(t) && builder.canUseActionForUnitType(t, true)) {
+                    this.rwxCanBSet.add(t);
                 }
             }
         }
-        return false;
+    }
+
+    // RWX: RWX_AI_STATS=1 时统计 AI 建筑选择分布（默认零开销）；RWX_AI_LEGACY=1 回退旧 0.05 平权重行为
+    static final boolean RWX_AI_STATS = System.getenv("RWX_AI_STATS") != null;
+    static final boolean RWX_AI_LEGACY = System.getenv("RWX_AI_LEGACY") != null;
+    private static final HashMap rwPickCounts = new HashMap();
+    private static int rwPickTotal = 0;
+    private static final HashMap rwUnitStats = new HashMap();
+    private static int rwUnitAttempts = 0;
+
+    private static void rwNoteUnit(String str) {
+        if (!RWX_AI_STATS) {
+            return;
+        }
+        Integer num = (Integer) rwUnitStats.get(str);
+        rwUnitStats.put(str, num == null ? 1 : num.intValue() + 1);
+        if ((++rwUnitAttempts) % 100 == 0) {
+            GameEngine.log("RWX_AISTATS_UNITS n=" + rwUnitAttempts + " " + rwUnitStats);
+        }
     }
 
     /* JADX INFO: renamed from: c */
@@ -327,7 +395,12 @@ public class BaseZone extends AIStrategyNode {
         UnitType unitType = null;
         float f = -1.0f;
         for (UnitType unitType2 : UnitTypeEnum.ae) {
-            if (unitType2.isBuildingUnit() && canBuild(unitType2)) {
+            if (!unitType2.isBuildingUnit()) continue;
+            long tCanB = io.github.rwx.probe.RwxPerf.now();
+            boolean rwxCanB = canBuild(unitType2);
+            io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.AI_CANB, tCanB);
+            if (rwxCanB) {
+                long tCnt = io.github.rwx.probe.RwxPerf.now();
                 int iAssignTaskToUnitTypeOnCommand = this.aiController.assignTaskToUnitTypeOnCommand(unitType2, UnitFilterMode.include);
                 int iCountUnitsOfType = countUnitsOfType(unitType2);
                 boolean z = false;
@@ -340,6 +413,7 @@ public class BaseZone extends AIStrategyNode {
                             iCountUnitsOfType += countUnitsOfType(unitType3);
                         }
                     }
+                io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.AI_CNT, tCnt);
                 }
                 float f2 = -2.0f;
                 if (unitType2.p() && !z) {
@@ -431,7 +505,71 @@ public class BaseZone extends AIStrategyNode {
                 }
                 if (z) {
                     CustomUnitConfig customUnitConfig2 = (CustomUnitConfig) unitType2;
-                    if (!customUnitConfig2.disableUse && ((iAssignTaskToUnitTypeOnCommand < customUnitConfig2.maxGlobal || customUnitConfig2.maxGlobal == -1) && (iCountUnitsOfType < customUnitConfig2.maxEachBase || customUnitConfig2.maxEachBase == -1))) {
+                    if (customUnitConfig2.disableUse) {
+                        f2 = -2.0f;
+                    } else if (!RWX_AI_LEGACY && customUnitConfig2.rwAiBuildDefaultsUntouched) {
+                        // RWX: 没写 [ai] 键的模组建筑按原版同角色阶梯打分（原来只有 0.05 平权重，
+                        // 与原版矿场 0.98/工厂 0.8/炮塔 0.47 差 16~20 倍，AI 永远先挑原版建筑）。
+                        if (unitType2.p()) {
+                            // 矿场：与 mineFactory 分支同构
+                            if (findClosestResource() == null) {
+                                f2 = -2.0f;
+                            } else if (Utility.getRandomIntInRange(0, 100) < 90) {
+                                int i3 = iCountUnitsOfType;
+                                if (i3 == 0) {
+                                    f2 = this.aiController.credits < 5000.0d ? 0.98f : 0.58f;
+                                }
+                                if (i3 == 1) {
+                                    f2 = 0.55f;
+                                }
+                                if (i3 == 2) {
+                                    f2 = 0.4f;
+                                }
+                                if (i3 >= 3) {
+                                    f2 = 0.25f / i3;
+                                }
+                                if (iAssignTaskToUnitTypeOnCommand >= 3) {
+                                    f2 = f2 * 0.6f;
+                                }
+                            }
+                        } else if (customUnitConfig2.isFactory) {
+                            // 工厂：与 landFactory 分支同构；experimental 工厂取中间档，避免开局砸空家底
+                            if (customUnitConfig2.experimental) {
+                                if (iAssignTaskToUnitTypeOnCommand == 0 && this.aiController.credits > 8000.0d) {
+                                    f2 = 0.25f;
+                                }
+                            } else if (iAssignTaskToUnitTypeOnCommand < 5 || iCountEnemyUnitsInRange == 0) {
+                                if (iAssignTaskToUnitTypeOnCommand == 0) {
+                                    f2 = 0.8f;
+                                } else if (iCountUnitsOfType < 2) {
+                                    f2 = 0.46f / (iAssignTaskToUnitTypeOnCommand + (iCountUnitsOfType * 2));
+                                }
+                            }
+                        } else if (customUnitConfig2.canAttack) {
+                            // 攻击建筑：与 turret 分支同构
+                            if (iCountUnitsOfType == 0) {
+                                f2 = 0.47f;
+                            } else if (iCountUnitsOfType < 3) {
+                                f2 = 0.35f / iCountUnitsOfType;
+                            } else if (iCountUnitsOfType < 4) {
+                                f2 = 0.025f / iCountUnitsOfType;
+                            }
+                        } else if (customUnitConfig2.canRepairUnits || customUnitConfig2.canRepairBuildings) {
+                            // 维修建筑：与 repairbay 分支同构
+                            if (iCountUnitsOfType == 0) {
+                                f2 = 0.02f;
+                            }
+                        } else {
+                            f2 = customUnitConfig2.buildPriority;
+                            if (iCountUnitsOfType == 0) {
+                                f2 += customUnitConfig2.nonInBaseExtraPriority;
+                            }
+                            if (iAssignTaskToUnitTypeOnCommand == 0) {
+                                f2 += customUnitConfig2.nonGlobalExtraPriority;
+                            }
+                        }
+                    } else if ((iAssignTaskToUnitTypeOnCommand < customUnitConfig2.maxGlobal || customUnitConfig2.maxGlobal == -1) && (iCountUnitsOfType < customUnitConfig2.maxEachBase || customUnitConfig2.maxEachBase == -1)) {
+                        // 作者写过 [ai] 键：保持原行为，不破坏已有平衡
                         f2 = customUnitConfig2.buildPriority;
                         if (iCountUnitsOfType < customUnitConfig2.recommendedInEachBaseNum) {
                             f2 = customUnitConfig2.recommendedInEachBasePriorityIfUnmet;
@@ -443,7 +581,9 @@ public class BaseZone extends AIStrategyNode {
                             f2 += customUnitConfig2.nonGlobalExtraPriority;
                         }
                         if (unitType2.p() && findClosestResource() == null) {
-                            f2 = -2.0f;
+                            // RWX：不再永久排除。留一个极小权重，让建造流程还有机会换个位置放下去，
+                            // 而不是「附近没池子 = 这类建筑永远不建」（MC 矿场就是这样被锁死的）。
+                            f2 = 0.002f;
                         }
                     }
                 }
@@ -462,6 +602,22 @@ public class BaseZone extends AIStrategyNode {
             }
         }
         this.lastFoundBuildingPriority = f;
+        if (RWX_AI_STATS) {
+            String strKey;
+            if (unitType == null) {
+                strKey = "<none>";
+            } else if (unitType instanceof CustomUnitConfig) {
+                CustomUnitConfig customUnitConfig3 = (CustomUnitConfig) unitType;
+                strKey = unitType.getUnitTypeDescriptionShort() + (customUnitConfig3.rwAiBuildDefaultsUntouched && !RWX_AI_LEGACY ? "|mod-ladder" : "|mod-tuned");
+            } else {
+                strKey = unitType.getUnitTypeDescriptionShort() + "|core";
+            }
+            Integer num = (Integer) rwPickCounts.get(strKey);
+            rwPickCounts.put(strKey, num == null ? 1 : num.intValue() + 1);
+            if ((++rwPickTotal) % 150 == 0) {
+                GameEngine.log("RWX_AISTATS total=" + rwPickTotal + " " + rwPickCounts);
+            }
+        }
         return unitType;
     }
 
@@ -520,16 +676,22 @@ public class BaseZone extends AIStrategyNode {
 
     /* JADX INFO: renamed from: g */
     public BaseUnit getClosestEnemyUnit() {
+        // RWX：原实现每调用扫一遍全场 bE（约 1100 单位 × 重谓词），是大后期 aiStrat 尖峰主源之一。
+        // 改为空间索引局部查询：b(posX,posY,radius+120) 的通过集是原盒判定的超集（|dx|<=R+r_u ⊇ |dx|<R），
+        // 谓词链逐字保留，再在命中者里取真·最近（原名 closest，但旧实现返回的是 bE 序第一个，顺手修正）。
         float f = this.radius + 120.0f;
-        BaseUnit[] baseUnitArrA = BaseUnit.bE.a();
-        int size = BaseUnit.bE.size();
-        for (int i = 0; i < size; i++) {
-            BaseUnit baseUnit = baseUnitArrA[i];
+        BaseUnit best = null;
+        float bestDs = Float.MAX_VALUE;
+        for (BaseUnit baseUnit : GameEngine.getInstance().unitSpatialIndex.b(this.posX, this.posY, f)) {
             if (baseUnit.posX + f > this.posX && baseUnit.posX - f < this.posX && baseUnit.posY + f > this.posY && baseUnit.posY - f < this.posY && baseUnit.team != this.aiController && isUnitInRange(baseUnit, 120.0f) && baseUnit.team.c(this.aiController) && this.aiController.isUnitAllowedForSelection(baseUnit)) {
-                return baseUnit;
+                float ds = Utility.distanceSq(baseUnit.posX, baseUnit.posY, this.posX, this.posY);
+                if (ds < bestDs) {
+                    bestDs = ds;
+                    best = baseUnit;
+                }
             }
         }
-        return null;
+        return best;
     }
 
     /* JADX INFO: renamed from: h */
@@ -539,12 +701,10 @@ public class BaseZone extends AIStrategyNode {
 
     /* JADX INFO: renamed from: a */
     public int countEnemyUnitsInRange(float f) {
+        // RWX：同上——空间索引超集 + 原谓词链逐字保留（含 canAttack / 可见性判定）。
         int i = 0;
         float f2 = this.radius + f;
-        BaseUnit[] baseUnitArrA = BaseUnit.bE.a();
-        int size = BaseUnit.bE.size();
-        for (int i2 = 0; i2 < size; i2++) {
-            BaseUnit baseUnit = baseUnitArrA[i2];
+        for (BaseUnit baseUnit : GameEngine.getInstance().unitSpatialIndex.b(this.posX, this.posY, f2)) {
             if (baseUnit.posX + f2 > this.posX && baseUnit.posX - f2 < this.posX && baseUnit.posY + f2 > this.posY && baseUnit.posY - f2 < this.posY && baseUnit.team != this.aiController && isUnitInRange(baseUnit, f) && baseUnit.team.c(this.aiController) && baseUnit.canAttack() && this.aiController.isUnitAllowedForSelection(baseUnit)) {
                 i++;
             }
@@ -558,8 +718,9 @@ public class BaseZone extends AIStrategyNode {
         BaseUnit closestEnemyUnit = getClosestEnemyUnit();
         if (closestEnemyUnit != null) {
             Command commandNewCommandForTeam = gameEngine.commandController.newCommandForTeam(this.aiController);
-            BaseUnit[] baseUnitArrA = BaseUnit.bE.a();
-            int size = BaseUnit.bE.size();
+            // RWX：谓词要求 team == aiController，走本队快照
+            BaseUnit[] baseUnitArrA = this.aiController.rwxTeamUnits();
+            int size = Math.min(this.aiController.rwxSnapSize, baseUnitArrA.length);
             for (int i = 0; i < size; i++) {
                 BaseUnit baseUnit = baseUnitArrA[i];
                 if (baseUnit instanceof OrderableUnit) {
@@ -586,11 +747,19 @@ public class BaseZone extends AIStrategyNode {
 
     /* JADX INFO: renamed from: a */
     public boolean belongsToZone(BaseUnit baseUnit, boolean z) {
-        if ((baseUnit instanceof OrderableUnit) && ((OrderableUnit) baseUnit).aC == this) {
-            if (!z || isUnitInside(baseUnit)) {
+        if (baseUnit instanceof OrderableUnit) {
+            OrderableUnit rwxOrderable = (OrderableUnit) baseUnit;
+            if (rwxOrderable.aC == this) {
+                if (!z || isUnitInside(baseUnit)) {
+                    return true;
+                }
+                return false;
+            }
+            // RWX：aC 还没被分配时按位置归属。否则「单位明明站在 zone 里，
+            // 却因为这个引用没写上而被当成别家的」，建造者永远找不到。
+            if (rwxOrderable.aC == null && isUnitInside(baseUnit)) {
                 return true;
             }
-            return false;
         }
         return false;
     }
@@ -602,6 +771,10 @@ public class BaseZone extends AIStrategyNode {
                 return true;
             }
             return false;
+        }
+        // RWX：同上，aC 未分配时按位置归属。
+        if (orderableUnit.aC == null && isUnitInside(orderableUnit)) {
+            return true;
         }
         return false;
     }
@@ -628,10 +801,57 @@ public class BaseZone extends AIStrategyNode {
         return findBuilderForUnitType((UnitType) null, (PointF) null, true);
     }
 
+    /**
+     * RWX 通用判定：这个单位能不能承担建造任务。
+     * 不看阵营、不看单位名，只看引擎能力字段——所以任何模组的任何单位都适用。
+     */
+    private static boolean rwxIsBuilderCapable(BaseUnit baseUnit) {
+        // 克隆自官方 1.15：com.corrodinggames.rts.game.a.a$13.a(com.corrodinggames.rts.game.units.as)
+        // 官方字节码：
+        //   u.m()                                   -> useAsBuilder
+        //   u instanceof CustomUnitConfig && c.fw   -> disableUse，命中就排除
+        //   u.o() == ao.e                           -> 移动类型等于 WATER，命中就排除
+        // 结论：官方只问「是不是建造者」，建筑照样可以，唯一排除的是禁用项和水面单位。
+        UnitType unitType = baseUnit.r();
+        if (!unitType.m()) {
+            return false;
+        }
+        if (unitType instanceof CustomUnitConfig && ((CustomUnitConfig) unitType).disableUse) {
+            return false;
+        }
+        return unitType.o() != UnitMovementType.WATER;
+    }
+
+    public OrderableUnit findAvailableBuilderForDiag() {
+        return findAvailableBuilderForUnitType(null);
+    }
+
+    public int unitsInZoneSize() {
+        return this.unitsInZone.size();
+    }
+
+    public String zoneUnitNames() {
+        StringBuilder sb = new StringBuilder();
+        for (Object o : this.unitsInZone) {
+            if (!(o instanceof OrderableUnit)) {
+                continue;
+            }
+            OrderableUnit u = (OrderableUnit) o;
+            sb.append(u.r().getUnitTypeDescriptionShort());
+            sb.append(u.aC == this ? "(here)" : u.aC == null ? "(aC=null)" : "(otherZone)");
+            sb.append(u.r().m() ? "[B]" : "[-]");
+            sb.append(u.r() instanceof CustomUnitConfig ? (((CustomUnitConfig) u.r()).useAsBuilder ? "U" : "u") : "?");
+            sb.append(' ');
+        }
+        return sb.toString().trim();
+    }
+
     /* JADX INFO: renamed from: y */
     private OrderableUnit findAvailableBuilder() {
         return findAvailableBuilderForUnitType(null);
     }
+
+    private static int rwxDiagCounter = 0;
 
     /* JADX INFO: renamed from: f */
     private OrderableUnit findAvailableBuilderForUnitType(UnitType unitType) {
@@ -640,9 +860,10 @@ public class BaseZone extends AIStrategyNode {
 
     /* JADX INFO: renamed from: a */
     private OrderableUnit findBuilderForUnitType(UnitType unitType, PointF pointF, boolean z) {
-        if (this.numberOfCombatUnits == 0) {
-            return null;
-        }
+        // RWX：诊断实测 combat=0 就是最后一刀。
+        // 这一行要求「zone 里至少有一个 useAsBuilder 单位」，否则直接返回 null。
+        // 纯建筑型基地（如 MC 基地）在 aC 归属/统计口径上算不进来，于是永远找不到建造者。
+        // 能否建造由下面的 rwxIsBuilderCapable 判断，不再用这个计数做前置闸门。
         this.lastTimeBuilt = 0;
         float f = Float.MAX_VALUE;
         OrderableUnit orderableUnit = null;
@@ -650,13 +871,14 @@ public class BaseZone extends AIStrategyNode {
         if (unitType != null && ((gameEngine.isDemo && !unitType.isAvailableInDemo()) || unitType.w())) {
             return null;
         }
-        BaseUnit[] baseUnitArrA = BaseUnit.bE.a();
-        int size = BaseUnit.bE.size();
+        // RWX：findBuilderForUnitType：谓词要求 team == aiController，走本队快照
+        BaseUnit[] baseUnitArrA = this.aiController.rwxTeamUnits();
+        int size = Math.min(this.aiController.rwxSnapSize, baseUnitArrA.length);
         for (int i = 0; i < size; i++) {
             BaseUnit baseUnit = baseUnitArrA[i];
-            if (baseUnit.team == this.aiController && countUnitsForStrategy(baseUnit) && baseUnit.transportContainer == null && baseUnit.canUnitAttack() && (baseUnit instanceof OrderableUnit) && this.aiController.isEligibleUnitForRandomSelection(baseUnit)) {
+            if (baseUnit.team == this.aiController && (countUnitsForStrategy(baseUnit) || isUnitInside(baseUnit)) && baseUnit.transportContainer == null && rwxIsBuilderCapable(baseUnit) && (baseUnit instanceof OrderableUnit) && (this.aiController.isEligibleUnitForRandomSelection(baseUnit) || rwxIsBuilderCapable(baseUnit))) {
                 OrderableUnit orderableUnit2 = (OrderableUnit) baseUnit;
-                if (AIUnitActionUtils.isIdleOrReclaiming(orderableUnit2) && (!z || orderableUnit2.I())) {
+                if ((AIUnitActionUtils.isIdleOrReclaiming(orderableUnit2) || rwxIsBuilderCapable(baseUnit)) && (!z || orderableUnit2.I())) {
                     this.lastTimeBuilt++;
                     if (unitType == null || orderableUnit2.canUseActionForUnitType(unitType, true)) {
                         boolean z2 = false;
@@ -794,13 +1016,15 @@ public class BaseZone extends AIStrategyNode {
         Command commandNewCommandForTeam2 = gameEngine.commandController.newCommandForTeam(this.aiController);
         commandNewCommandForTeam2.addUnitToCommand(orderableUnitA);
         commandNewCommandForTeam2.setBuildTarget(pointFE.x, pointFE.y, unitType, queueSize);
+        io.github.rwx.probe.RwxProbe.buildingBuilt(this.aiController, unitType, gameEngine.currentTick);
         return true;
     }
 
     /* JADX INFO: renamed from: z */
     private boolean hasUnitWithHighPriorityAction() {
-        BaseUnit[] baseUnitArrA = BaseUnit.bE.a();
-        int size = BaseUnit.bE.size();
+        // RWX：hasUnitWithHighPriorityAction：谓词要求 team == aiController，走本队快照
+        BaseUnit[] baseUnitArrA = this.aiController.rwxTeamUnits();
+        int size = Math.min(this.aiController.rwxSnapSize, baseUnitArrA.length);
         for (int i = 0; i < size; i++) {
             BaseUnit baseUnit = baseUnitArrA[i];
             if (baseUnit.team == this.aiController && countUnitsForStrategy(baseUnit) && baseUnit.isAlive() && !baseUnit.u() && (baseUnit instanceof OrderableUnit) && ((OrderableUnit) baseUnit).hasHighPriorityAction()) {
@@ -879,6 +1103,7 @@ public class BaseZone extends AIStrategyNode {
         if (orderableUnitA == null) {
         }
         if (orderableUnitA == null) {
+            rwNoteUnit(unitType.getUnitTypeDescriptionShort() + (unitType instanceof CustomUnitConfig ? "|mod|nofactory" : "|core|nofactory"));
             return false;
         }
         GameEngine gameEngine = GameEngine.getInstance();
@@ -892,6 +1117,7 @@ public class BaseZone extends AIStrategyNode {
             return false;
         }
         if (!abstractUnitActionE.canAfford((BaseUnit) orderableUnitA, false)) {
+            rwNoteUnit(unitType.getUnitTypeDescriptionShort() + (unitType instanceof CustomUnitConfig ? "|mod|noafford" : "|core|noafford"));
             GameEngine.log("AI", "buildUnit: isActive==false");
             return false;
         }
@@ -906,6 +1132,7 @@ public class BaseZone extends AIStrategyNode {
             commandNewCommandForTeam.addUnitToCommand(orderableUnitA);
             commandNewCommandForTeam.setActionId(abstractUnitActionE.getQueueId());
         }
+        io.github.rwx.probe.RwxProbe.unitQueued(this.aiController, unitType, gameEngine.currentTick);
         return true;
     }
 
@@ -971,8 +1198,9 @@ public class BaseZone extends AIStrategyNode {
 
     /* JADX INFO: renamed from: A */
     private BaseUnit findRepairTarget() {
-        BaseUnit[] baseUnitArrA = BaseUnit.bE.a();
-        int size = BaseUnit.bE.size();
+        // RWX：findRepairTarget：谓词要求 team == aiController，走本队快照
+        BaseUnit[] baseUnitArrA = this.aiController.rwxTeamUnits();
+        int size = Math.min(this.aiController.rwxSnapSize, baseUnitArrA.length);
         for (int i = 0; i < size; i++) {
             BaseUnit baseUnit = baseUnitArrA[i];
             if (baseUnit.team == this.aiController && belongsToZone(baseUnit, true) && baseUnit.bI() && (baseUnit.currentHealth < baseUnit.maxHealth - 1.0f || baseUnit.buildProgress < 1.0f)) {
@@ -988,30 +1216,75 @@ public class BaseZone extends AIStrategyNode {
         if (this.buildingsInZone.size() == 0 || this.isUnderAttack) {
             return;
         }
+        rwxHarvesterCalls++;
         for (int i = 0; i < 8; i++) {
             UnitType randomUnitType = this.aiController.extractorUnitBuildStrategy.getRandomUnitType();
-            if (randomUnitType != null && hasBuilderFor(randomUnitType) && tryBuildRecommendedHarvester(randomUnitType)) {
+            if (randomUnitType == null) {
+                rwxHarvesterNoType++;
+                continue;
+            }
+            if (!hasBuilderFor(randomUnitType)) {
+                rwxHarvesterNoBuilder++;
+                continue;
+            }
+            if (tryBuildRecommendedHarvester(randomUnitType)) {
                 return;
             }
+        }
+        if (RWX_AI_STATS && rwxHarvesterCalls % 100 == 0) {
+            GameEngine.log("RWX_HARVESTERSTATS calls=" + rwxHarvesterCalls + " built=" + rwxHarvesterBuilt
+                + " noType=" + rwxHarvesterNoType + " noBuilder=" + rwxHarvesterNoBuilder
+                + " pool=" + this.aiController.extractorUnitBuildStrategy.unitPriorities.size()
+                + " tick=" + GameEngine.getInstance().currentTick);
         }
     }
 
 
+    // RWX：模组没声明 whenUsingAsHarvester_* 时不再一概拒绝。
+    // 实测整个整合包 0 处配置，原逻辑让「建资源采集者」这条路对所有单位都关着，
+    // 资源建筑只能靠常规队列碰运气。这里给未声明的类型一个每基地默认配额（RWX_HARVESTER_PER_BASE，默认 2）。
+    private static final int RWX_DEFAULT_HARVESTER_PER_BASE = rwxReadHarvesterPerBase();
+    private static int rwxHarvesterBuilt = 0;
+    private static int rwxHarvesterCalls = 0;
+    private static int rwxHarvesterNoType = 0;
+    private static int rwxHarvesterNoBuilder = 0;
+
+    private static int rwxReadHarvesterPerBase() {
+        try {
+            String s = System.getenv("RWX_HARVESTER_PER_BASE");
+            if (s != null) {
+                int v = Integer.parseInt(s.trim());
+                if (v >= 0) {
+                    return v;
+                }
+            }
+        } catch (Throwable th) {
+        }
+        return 2;
+    }
+
     public boolean tryBuildRecommendedHarvester(UnitType as) {
         if (!(as instanceof CustomUnitConfig)) {
-            return false;
+            // RWX：原版资源单位过去在这里被直接拒绝，等于原版提取器永远进不了采集者策略。
+            // 交给 buildUnit 自己判定资源与位置。
+            return this.buildUnit(as, true);
         } else {
             CustomUnitConfig var2 = (CustomUnitConfig) as;
-            if (var2.whenUsingAsHarvester_recommendedInEachBase == -1 && var2.whenUsingAsHarvester_recommendedGlobal == -1) {
+            int rwxPerBase = var2.whenUsingAsHarvester_recommendedInEachBase;
+            int rwxGlobal = var2.whenUsingAsHarvester_recommendedGlobal;
+            if (rwxPerBase == -1 && rwxGlobal == -1) {
+                rwxPerBase = RWX_DEFAULT_HARVESTER_PER_BASE;
+            }
+            if (rwxPerBase == -1 && rwxGlobal == -1) {
                 return false;
             } else {
                 int var3 = 0;
                 int var4 = 0;
                 boolean var5 = var2.whenUsingAsHarvester_includeOtherHarvesterCounts;
-                BaseUnit[] var6 = BaseUnit.bE.a();
+                // RWX：countUnitsForBuildStrategy：谓词要求 team == aiController，走本队快照
+                BaseUnit[] var6 = this.aiController.rwxTeamUnits();
                 int var7 = 0;
-
-                for (int var8 = BaseUnit.bE.size(); var7 < var8; var7++) {
+                for (int var8 = Math.min(this.aiController.rwxSnapSize, var6.length); var7 < var8; var7++) {
                     BaseUnit var9 = var6[var7];
                     if (var9.team == this.aiController && var9.transportContainer == null && var9 instanceof OrderableUnit && this.aiController.isEligibleUnitForRandomSelection(var9)) {
                         OrderableUnit var10 = (OrderableUnit) var9;
@@ -1025,10 +1298,15 @@ public class BaseZone extends AIStrategyNode {
                     }
                 }
 
-                if (var2.whenUsingAsHarvester_recommendedInEachBase != -1 && var3 >= var2.whenUsingAsHarvester_recommendedInEachBase) {
+                if (rwxPerBase != -1 && var3 >= rwxPerBase) {
                     return false;
                 } else {
-                    return var2.whenUsingAsHarvester_recommendedGlobal != -1 && var4 >= var2.whenUsingAsHarvester_recommendedGlobal ? false : this.buildUnit(var2, true);
+                    boolean rwxBuilt = rwxGlobal == -1 || var4 < rwxGlobal ? this.buildUnit(var2, true) : false;
+                    if (rwxBuilt && RWX_AI_STATS) {
+                        rwxHarvesterBuilt++;
+                        GameEngine.log("RWX_HARVESTERSTATS built=" + rwxHarvesterBuilt + " type=" + var2.v() + " perBase=" + rwxPerBase + " global=" + rwxGlobal + " tick=" + GameEngine.getInstance().currentTick);
+                    }
+                    return rwxBuilt;
                 }
             }
         }
@@ -1103,18 +1381,22 @@ public class BaseZone extends AIStrategyNode {
 
     /* JADX INFO: renamed from: b */
     public void updateZone(float f) {
-        refreshUnitCounts(f);
+        // RWX 诊断：直接打印 AI zone 里「有没有建造者」「有多少可动单位」，不再靠事后推断。
+        rwxDiagCounter++;
+        // RWX：refreshUnitCounts + updateUnitsInZone + hasUnitWithHighPriorityAction 原先各扫一遍
+        // BaseUnit.bE（每周期 3 次全场遍历），合并成一次 rwxZoneScan，判据逐一保留。
+        this.hasResources = rwxZoneScan();
         int i = this.numberOfFactories;
         int i2 = this.numberOfExtractors;
-        updateUnitsInZone();
-        this.hasResources = hasUnitWithHighPriorityAction();
         if (this.hasResources) {
             this.hasLandAccess = true;
         }
         if (i >= 1) {
             repairDamagedBuildings();
         }
-        if (this.isPrimary && this.numberOfExtractors > 0) {
+        // RWX：不再用「本区已有提取者」当门。全自定义资源的模组常常一座提取器都不标，
+        // 这个门会把经济建筑整条链锁死（T0 有 26 万 EMC 却 45000 tick 不动作）。
+        if (this.isPrimary) {
             buildRecommendedHarvesters();
             retargetHarvestersToBetterBuilding();
             sendHarvesterToReclaim();
@@ -1207,6 +1489,73 @@ public class BaseZone extends AIStrategyNode {
     	at jadx.core.dex.visitors.typeinference.FixTypesVisitor.applyFieldType(FixTypesVisitor.java:309)
     	at jadx.core.dex.visitors.typeinference.FixTypesVisitor.visit(FixTypesVisitor.java:94)
      */
+    /**
+     * RWX：一趟遍历同时完成 updateUnitsInZone、refreshUnitCounts 的计数循环和
+     * hasUnitWithHighPriorityAction 的判定。各谓词与原实现逐字一致：
+     *  m1 = countUnitsForStrategy（aC==this，或 aC==null 且在圈内）→ unitsInZone / 高优先动作
+     *  m2 = belongsToZoneUnit(false) || isUnitInside，再加 isAlive/!u()/资格 → 四个计数
+     */
+    private boolean rwxZoneScan() {
+        this.numberOfExtractors = 0;
+        this.numberOfFactories = 0;
+        this.numberOfIdleCombatUnits = 0;
+        this.numberOfCombatUnits = 0;
+        this.isPrimary = false;
+        this.buildingsInZone.clear();
+        for (Object o : getUnitsInZoneIterator()) {
+            BaseUnit baseUnit = (BaseUnit) o;
+            if ((baseUnit.getResourceRate() > 0.0f || rwxIsBuilderCapable(baseUnit)) && isUnitInside(baseUnit)) {
+                this.isPrimary = true;
+                this.buildingsInZone.add(baseUnit);
+            }
+        }
+        this.unitTypesInZone.clear();
+        this.unitsInZone.clear();
+        boolean highPriority = false;
+        // RWX：判据要求 team == aiController，直接走本队快照，不再全场遍历
+        BaseUnit[] baseUnitArrA = this.aiController.rwxTeamUnits();
+        int size = Math.min(this.aiController.rwxSnapSize, baseUnitArrA.length);
+        for (int i = 0; i < size; i++) {
+            BaseUnit baseUnit = baseUnitArrA[i];
+            if (baseUnit.team != this.aiController || !(baseUnit instanceof OrderableUnit)) {
+                continue;
+            }
+            OrderableUnit orderableUnit = (OrderableUnit) baseUnit;
+            boolean inside = isUnitInside(baseUnit);
+            boolean m1 = orderableUnit.aC == this || (orderableUnit.aC == null && inside);
+            boolean m2 = orderableUnit.aC == this || inside;
+            if (m1 && !baseUnit.isDead && !baseUnit.u()) {
+                this.unitsInZone.add(baseUnit);
+                UnitType unitType = baseUnit.unitType;
+                if (!this.unitTypesInZone.contains(unitType)) {
+                    this.unitTypesInZone.add(unitType);
+                }
+                if (!highPriority && baseUnit.isAlive() && orderableUnit.hasHighPriorityAction()) {
+                    highPriority = true;
+                }
+            }
+            if (m2 && baseUnit.isAlive() && !baseUnit.u() && (this.aiController.isEligibleUnitForRandomSelection(baseUnit) || rwxIsBuilderCapable(baseUnit))) {
+                UnitType unitTypeR = baseUnit.r();
+                if (unitTypeR.isBuildingUnit()) {
+                    this.numberOfExtractors++;
+                }
+                if (unitTypeR.m()) {
+                    this.numberOfFactories++;
+                }
+                if ((unitTypeR.m() || rwxIsBuilderCapable(baseUnit)) && (AIUnitActionUtils.isIdleOrReclaiming(orderableUnit) || rwxIsBuilderCapable(baseUnit))) {
+                    this.numberOfCombatUnits++;
+                }
+                if (unitTypeR.n()) {
+                    this.numberOfIdleCombatUnits++;
+                }
+                if (baseUnit instanceof FactoryQueueInterface) {
+                    this.numberOfFactories += ((FactoryQueueInterface) baseUnit).h(UnitTypeEnum.builder);
+                }
+            }
+        }
+        return highPriority;
+    }
+
     /* JADX INFO: renamed from: c */
     public void refreshUnitCounts(float f) {
         this.numberOfExtractors = 0;
@@ -1217,27 +1566,35 @@ public class BaseZone extends AIStrategyNode {
         this.buildingsInZone.clear();
         for (Object o : getUnitsInZoneIterator()) {
             BaseUnit baseUnit = (BaseUnit) o;
-            if (baseUnit.getResourceRate() > 0.0f && isUnitInside(baseUnit)) {
+            // RWX：primary 原来只认「产资源的单位」。纯建筑型基地（MC 这类）自己产 0 资源，
+            // 于是 isPrimary 永远 false，updateZone 里整块建造逻辑被跳过。
+            // 现在「能承担建造的单位」也算 primary——能源/建筑都不靠硬编码名字判断。
+            if ((baseUnit.getResourceRate() > 0.0f || rwxIsBuilderCapable(baseUnit)) && isUnitInside(baseUnit)) {
                 this.isPrimary = true;
                 this.buildingsInZone.add(baseUnit);
             }
         }
-        BaseUnit[] baseUnitArrA = BaseUnit.bE.a();
-        int size = BaseUnit.bE.size();
+        // RWX：refreshUnitCounts：谓词要求 team == aiController，走本队快照
+        BaseUnit[] baseUnitArrA = this.aiController.rwxTeamUnits();
+        int size = Math.min(this.aiController.rwxSnapSize, baseUnitArrA.length);
         for (int i = 0; i < size; i++) {
             BaseUnit fireUnit = baseUnitArrA[i];
             if (fireUnit.team == this.aiController && (fireUnit instanceof OrderableUnit)) {
                 OrderableUnit orderableUnit = (OrderableUnit) fireUnit;
-                if (belongsToZoneUnit(orderableUnit, false) && fireUnit.isAlive() && this.aiController.isEligibleUnitForRandomSelection(fireUnit) && !fireUnit.u()) {
+                if ((belongsToZoneUnit(orderableUnit, false) || isUnitInside(fireUnit)) && fireUnit.isAlive() && (this.aiController.isEligibleUnitForRandomSelection(fireUnit) || rwxIsBuilderCapable(fireUnit)) && !fireUnit.u()) {
                     UnitType unitTypeR = fireUnit.r();
                     if (unitTypeR.isBuildingUnit()) {
                         this.numberOfExtractors++;
                     }
                     if (unitTypeR.m()) {
                         this.numberOfFactories++;
-                        if (AIUnitActionUtils.isIdleOrReclaiming(orderableUnit)) {
-                            this.numberOfCombatUnits++;
-                        }
+                    }
+                    // RWX：空闲且「能承担建造」的单位都计入，不再只认 useAsBuilder。
+                    // 否则纯建筑基地会让 combat 恒为 0，建造流程整条被封。
+                    // RWX：建造者不要求「完全空闲」。基地这类 useAsBuilder 建筑常常一直在忙
+                    // （移动/旧命令），严格要求空闲会让它永远算不进，建造入口整条封死。
+                    if ((unitTypeR.m() || rwxIsBuilderCapable(fireUnit)) && (AIUnitActionUtils.isIdleOrReclaiming(orderableUnit) || rwxIsBuilderCapable(fireUnit))) {
+                        this.numberOfCombatUnits++;
                     }
                     if (unitTypeR.n()) {
                         this.numberOfIdleCombatUnits++;
@@ -1272,7 +1629,9 @@ public class BaseZone extends AIStrategyNode {
         if (this.isUnderAttack && this.airUnitsScore == 0.0f) {
             this.airUnitsScore = 100 + (this.strategyId % 15);
             if (!this.aiController.isAggressive) {
+                long rwxAtkT = io.github.rwx.probe.RwxPerf.now();
                 commandUnitsToAttackClosestEnemy();
+                io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.AI_ATK, rwxAtkT);
             }
         }
         if (this.defensiveScore <= 0.0f) {
@@ -1286,9 +1645,16 @@ public class BaseZone extends AIStrategyNode {
             if (this.lastFoundBuildingPriority < 0.08d) {
                 this.defensiveScore += 180.0f;
             }
-            if ((findAvailableBuilder() != null) && (bestBuildingToBuild = getBestBuildingToBuild()) != null && ((this.lastFoundBuildingPriority > 0.8d || this.aiController.hasCredits(1300.0d)) && ((this.lastFoundBuildingPriority > 0.4d || this.aiController.hasCredits(1700.0d)) && ((this.lastFoundBuildingPriority > 0.2d || this.aiController.hasCredits(2100.0d)) && ((this.lastFoundBuildingPriority > 0.1d || this.aiController.hasCredits(2800.0d)) && ((this.lastFoundBuildingPriority > 0.05d || this.aiController.hasCredits(3100.0d)) && (this.lastFoundBuildingPriority > 0.01d || this.aiController.hasCredits(4800.0d)))))))) {
+            OrderableUnit rwxBuilder = null;
+            { long t0 = io.github.rwx.probe.RwxPerf.now(); rwxBuilder = findAvailableBuilder(); io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.AI_FAB, t0); }
+            UnitType rwxBestB = null;
+            if (rwxBuilder != null) { long t0 = io.github.rwx.probe.RwxPerf.now(); rwxBestB = getBestBuildingToBuild(); io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.AI_GBB, t0); }
+            if (rwxBestB != null && ((this.lastFoundBuildingPriority > 0.8d || this.aiController.hasCredits(1300.0d)) && ((this.lastFoundBuildingPriority > 0.4d || this.aiController.hasCredits(1700.0d)) && ((this.lastFoundBuildingPriority > 0.2d || this.aiController.hasCredits(2100.0d)) && ((this.lastFoundBuildingPriority > 0.1d || this.aiController.hasCredits(2800.0d)) && ((this.lastFoundBuildingPriority > 0.05d || this.aiController.hasCredits(3100.0d)) && (this.lastFoundBuildingPriority > 0.01d || this.aiController.hasCredits(4800.0d)))))))) {
                 this.numberOfLandUnits++;
-                if (!tryBuildUnit(bestBuildingToBuild)) {
+                long tTbu = io.github.rwx.probe.RwxPerf.now();
+                boolean rwxBuiltOk = tryBuildUnit(rwxBestB);
+                io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.AI_TBU, tTbu);
+                if (!rwxBuiltOk) {
                     this.defensiveScore -= 120.0f;
                     this.numberOfAirUnits++;
                 }
@@ -1298,52 +1664,58 @@ public class BaseZone extends AIStrategyNode {
         if (fU < 1.0f) {
             fU = 1.0f;
         }
+        // RWX：生产节奏整体提速——所有积累速率翻倍，配合上限 15 与每单位扣 0.5。
+        // 这条分数陆/空/海三军共用，改一处四类兵种同时受益。
         if (this.isUnderAttack) {
-            this.reclaimScore = (float) (((double) this.reclaimScore) + (((double) f) * 0.015d));
+            this.reclaimScore = (float) (((double) this.reclaimScore) + (((double) f) * 0.03d));
         }
         if (this.lastFoundBuildingPriority < 0.6d) {
             if (this.aiController.unitCount < 2) {
-                this.reclaimScore = (float) (((double) this.reclaimScore) + (((double) f) * 7.0E-4d * ((double) fU)));
+                this.reclaimScore = (float) (((double) this.reclaimScore) + (((double) f) * 1.4E-3d * ((double) fU)));
             } else if (this.aiController.hasCredits(1200.0d)) {
-                this.reclaimScore = (float) (((double) this.reclaimScore) + (((double) f) * 1.0E-4d * ((double) fU)));
+                this.reclaimScore = (float) (((double) this.reclaimScore) + (((double) f) * 2.0E-4d * ((double) fU)));
             }
             if (this.aiController.hasCredits(1600.0d)) {
-                this.reclaimScore = (float) (((double) this.reclaimScore) + (((double) f) * 0.001d));
+                this.reclaimScore = (float) (((double) this.reclaimScore) + (((double) f) * 0.002d));
             }
             if (this.aiController.hasCredits(2200.0d)) {
-                this.reclaimScore = (float) (((double) this.reclaimScore) + (((double) f) * 0.001d));
+                this.reclaimScore = (float) (((double) this.reclaimScore) + (((double) f) * 0.002d));
             }
             if (this.aiController.hasCredits(2600.0d)) {
-                this.reclaimScore = (float) (((double) this.reclaimScore) + (((double) f) * 0.001d));
+                this.reclaimScore = (float) (((double) this.reclaimScore) + (((double) f) * 0.002d));
             }
             if (this.aiController.hasCredits(8000.0d)) {
-                this.reclaimScore = (float) (((double) this.reclaimScore) + (((double) f) * 0.005d));
+                this.reclaimScore = (float) (((double) this.reclaimScore) + (((double) f) * 0.01d));
             }
             if (this.aiController.hasCredits(9000.0d)) {
-                this.reclaimScore = (float) (((double) this.reclaimScore) + (((double) f) * 0.01d));
+                this.reclaimScore = (float) (((double) this.reclaimScore) + (((double) f) * 0.02d));
             }
             if (this.aiController.hasCredits(10100.0d)) {
-                this.reclaimScore = (float) (((double) this.reclaimScore) + (((double) f) * 0.01d));
+                this.reclaimScore = (float) (((double) this.reclaimScore) + (((double) f) * 0.02d));
             }
             if (this.aiController.hasCredits(30000.0d)) {
-                this.reclaimScore = (float) (((double) this.reclaimScore) + (((double) f) * 0.05d));
+                this.reclaimScore = (float) (((double) this.reclaimScore) + (((double) f) * 0.1d));
             }
         }
         if (this.aiController.hasCredits(5000.0d)) {
-            this.reclaimScore = (float) (((double) this.reclaimScore) + (((double) f) * 0.001d));
+            this.reclaimScore = (float) (((double) this.reclaimScore) + (((double) f) * 0.002d));
         }
-        if (!this.aiController.hasCredits(800.0d) && !this.isUnderAttack && this.reclaimScore > 1.2f) {
-            this.reclaimScore = 1.2f;
+        // RWX：上限抬到 15 后，穷困压制也要跟着抬，否则一没钱就被压回 1.2，攒不到 15。
+        if (!this.aiController.hasCredits(800.0d) && !this.isUnderAttack && this.reclaimScore > 5.0f) {
+            this.reclaimScore = 5.0f;
         }
-        if (this.reclaimScore > 3.5f) {
-            this.reclaimScore = 3.5f;
+        if (this.reclaimScore > 15.0f) {
+            this.reclaimScore = 15.0f;
         }
+        long rwxTbT = io.github.rwx.probe.RwxPerf.now(); // RWX：aiTryB=12 连发 tryBuildCombatUnits 合计
         for (int i = 0; i < 12; i++) {
             tryBuildCombatUnits();
             if (this.reclaimScore < 3.0f) {
+                io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.AI_TRYB, rwxTbT);
                 return;
             }
         }
+        io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.AI_TRYB, rwxTbT);
     }
 
     /* JADX INFO: renamed from: a */
@@ -1437,10 +1809,14 @@ public class BaseZone extends AIStrategyNode {
                 z = false;
             }
             if (z) {
-                if (buildUnit(unitType, false)) {
+                long rwxBdT = io.github.rwx.probe.RwxPerf.now();
+                boolean rwBuilt = buildUnit(unitType, false);
+                io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.AI_BLD, rwxBdT);
+                rwNoteUnit(unitType.getUnitTypeDescriptionShort() + (unitType instanceof CustomUnitConfig ? "|mod|" : "|core|") + (rwBuilt ? "ok" : "fail"));
+                if (rwBuilt) {
                     this.numberOfWaterUnits++;
                     this.aiController.buildPreferenceCache.invalidateUnitType(unitType);
-                    this.reclaimScore -= 1.0f;
+                    this.reclaimScore -= 0.5f;
                     if (this.aiController.isNonCombatCustomUnit(baseUnitFindAttackDamageSource)) {
                         this.lastTimeAttackedByEnemy = 1000.0f;
                         this.aiController.attackCooldownTimer++;

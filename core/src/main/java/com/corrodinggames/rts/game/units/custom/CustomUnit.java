@@ -752,6 +752,34 @@ public class CustomUnit extends MovableUnit implements TransportUnitInterface, U
                 fFastSin2 -= 20.0f;
             }
         }
+            // RWX：±10px 盲推只保证「不被别的单位占着」，保证不了这格地形站得住。
+            // 海军装了陆军再卸车时落点常在水面/岸边，陆军一落地就朝最近陆地全图重寻路，
+            // 表现就是「寻路直接奔地图边界，到了停住」。按载员自己的 movementType 逐环找一格能站的。
+            if (!z && !bI()) {
+                com.corrodinggames.rts.gameFramework.path.PathEngine rwxPe = GameEngine.getInstance().pathfindingEngine;
+                com.corrodinggames.rts.game.map.TileMap rwxTm = GameEngine.getInstance().tileMap;
+                rwxTm.setCursorTileIndexFromWorldPoint(fFastCos2, fFastSin2);
+                int rwxCx = rwxTm.cursorTileX;
+                int rwxCy = rwxTm.cursorTileY;
+                if (rwxPe.isTileBlockedForMovement(baseUnit.getMovementType(), rwxCx, rwxCy)) {
+                    boolean rwxFound = false;
+                    for (int rwxR = 1; rwxR <= 6 && !rwxFound; rwxR++) {
+                        for (int rwxDx = -rwxR; rwxDx <= rwxR && !rwxFound; rwxDx++) {
+                            for (int rwxDy = -rwxR; rwxDy <= rwxR; rwxDy++) {
+                                if (Math.max(Math.abs(rwxDx), Math.abs(rwxDy)) != rwxR) continue;
+                                int rwxX = rwxCx + rwxDx;
+                                int rwxY = rwxCy + rwxDy;
+                                if (rwxPe.isTileBlockedForMovement(baseUnit.getMovementType(), rwxX, rwxY)) continue;
+                                rwxTm.setCursorTileIndexFromTileIndex(rwxX, rwxY);
+                                fFastCos2 = rwxTm.cursorTileX + rwxTm.halfTileWorldSizeX;
+                                fFastSin2 = rwxTm.cursorTileY + rwxTm.halfTileWorldSizeY;
+                                rwxFound = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
         if (!z && !GameViewUtils.a(baseUnit, fFastCos2, fFastSin2) && !bI()) {
             z3 = false;
         } else {
@@ -4355,10 +4383,20 @@ public class CustomUnit extends MovableUnit implements TransportUnitInterface, U
     public static void dE() {
     }
 
+    // RWX：RWX_TRIGGER_STATS=1 时统计自动触发条件的求值次数，默认零开销（静态字段在无触发器单位上也不访问）
+    static final boolean RWX_TRIGGER_STATS = System.getenv("RWX_TRIGGER_STATS") != null;
+    static long rwConditionsEvaluated = 0;
+    static long rwTriggerFrames = 0;
+
     public void b(float f, boolean z) {
         CustomUnitConfig customUnitConfig = this.unitConfig;
         if (!customUnitConfig.hasAutoTriggerConditions) {
             return;
+        }
+        long rwxTrigT = io.github.rwx.probe.RwxPerf.now();
+        try {
+        if (RWX_TRIGGER_STATS) {
+            rwTriggerFrames++;
         }
         if (this.w != 0.0f) {
             this.w = Utility.moveTowardsZero(this.w, f);
@@ -4390,11 +4428,21 @@ public class CustomUnit extends MovableUnit implements TransportUnitInterface, U
                 }
             }
         }
+        } finally {
+            // RWX：自动触发求值总耗时（含动作执行），RWX_PROF=1 时记录
+            io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.TRIGGERS, rwxTrigT);
+        }
     }
 
     public void a(float f, CustomUnitCondition[] customUnitConditionArr) {
         CustomUnitConfig customUnitConfig = this.unitConfig;
         GameEngine gameEngine = GameEngine.getInstance();
+        if (RWX_TRIGGER_STATS) {
+            rwConditionsEvaluated += customUnitConditionArr.length;
+            if (rwConditionsEvaluated % 2097152L == 0L && customUnitConditionArr.length > 0) {
+                GameEngine.log("RWX_TRIGGERSTATS conditionEvals=" + rwConditionsEvaluated + " evalFrames=" + rwTriggerFrames);
+            }
+        }
         for (CustomUnitCondition customUnitCondition : customUnitConditionArr) {
             if (customUnitCondition.logicBoolean.read(this)) {
                 if (gameEngine.isDebugTempMode && gameEngine.isTriggerDebugMode && this.isSelected) {

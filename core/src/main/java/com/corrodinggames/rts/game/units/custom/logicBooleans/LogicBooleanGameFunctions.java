@@ -1492,9 +1492,7 @@ public class LogicBooleanGameFunctions {
         // com.corrodinggames.rts.game.units.custom.logicBooleans.LogicBoolean.AbstractNumberBoolean, com.corrodinggames.rts.game.units.custom.logicBooleans.LogicBoolean
         public void validate(String str, String str2, String str3, LogicBooleanLoader.LogicBooleanContext logicBooleanContext, boolean z) {
             super.validate(str, str2, str3, logicBooleanContext, z);
-            if (this.withinRange > 1000.0f) {
-                throw new BooleanParseException("For CPU reasons withinRange argument cannot be over 1000 (but unlimited range is fine) in function:" + str);
-            }
+// RWX：老师要求：去掉 withinRange>1000 的 CPU 限制（空间索引本身按范围查询，代价可控）
             if (this.withinRange > 0.0f) {
                 this.withinRangeSq = this.withinRange * this.withinRange;
                 if (this.factoryQueue) {
@@ -1628,9 +1626,7 @@ public class LogicBooleanGameFunctions {
         // com.corrodinggames.rts.game.units.custom.logicBooleans.LogicBoolean.AbstractNumberBoolean, com.corrodinggames.rts.game.units.custom.logicBooleans.LogicBoolean
         public void validate(String str, String str2, String str3, LogicBooleanLoader.LogicBooleanContext logicBooleanContext, boolean z) {
             super.validate(str, str2, str3, logicBooleanContext, z);
-            if (this.withinRange > 1000.0f) {
-                throw new BooleanParseException("For CPU reasons withinRange argument cannot be over 1000 (but unlimited range is fine) in function:" + str);
-            }
+// RWX：老师要求：去掉 withinRange>1000 的 CPU 限制（空间索引本身按范围查询，代价可控）
             if (this.withinRange > 0.0f) {
                 this.withinRangeSq = this.withinRange * this.withinRange;
                 if (this.factoryQueue) {

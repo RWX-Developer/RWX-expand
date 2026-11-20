@@ -1,0 +1,7 @@
+id = "bench:ramp"
+name = "Bench Ramp"
+author = "dsh"
+version = "0.1"
+description = "可控刷兵性能台架（不进游戏内容，只用于基准测量）"
+entrypoint = "bench.mod.BenchRampMod"
+minGameVersion = "1.0.4"

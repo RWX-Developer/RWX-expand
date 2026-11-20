@@ -614,6 +614,9 @@ public final class CustomUnitConfig implements UnitType {
     public int recommendedInEachBaseNum;
     /* JADX INFO: renamed from: fB */
     public float recommendedInEachBasePriorityIfUnmet;
+    /* RWX: 作者没写 [ai]buildPriority 和 [ai]recommendedInEachBaseNum 时为 true，
+       BaseZone 按原版同角色阶梯给该建筑打分，而不是 0.05 平权重 */
+    public boolean rwAiBuildDefaultsUntouched;
     /* JADX INFO: renamed from: fC */
     public float nonInBaseExtraPriority;
     /* JADX INFO: renamed from: fD */
@@ -1926,6 +1929,18 @@ public final class CustomUnitConfig implements UnitType {
     }
 
     public Texture[] a(Texture texture, ColorMode colorMode) {
+        // 队伍色贴图会创建/读取 GL 纹理，单位配置并行解析时必须转回 GL 线程。
+        final Texture colorSource = texture;
+        final ColorMode colorModeFinal = colorMode;
+        return CustomUnitConfigParser.runOnGlThreadGet(new java.util.concurrent.Callable<Texture[]>() {
+            @Override
+            public Texture[] call() {
+                return a0(colorSource, colorModeFinal);
+            }
+        });
+    }
+
+    private Texture[] a0(Texture texture, ColorMode colorMode) {
         boolean z = false;
         if ((this.modInfo != null || this.isBug) && !GameEngine.getInstance().settingsEngine.disableModLazyLoad) {
             z = true;

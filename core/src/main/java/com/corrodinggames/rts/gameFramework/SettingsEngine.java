@@ -80,6 +80,9 @@ public class SettingsEngine {
 
     public boolean newRender;
 
+    /** RWX 性能模式：拥挤军团时降低软碰撞的重复空间查询与宽边距扫描。默认开；写 false 回原版演算。 */
+    public boolean perfCollisions;
+
     public boolean shaderEffects;
 
     public boolean teamShaders;
@@ -315,6 +318,7 @@ public class SettingsEngine {
         this.showZoomButton = getBooleanPref("showZoomButton", true);
         this.showFps = getBooleanPref("showFps", false);
         this.newRender = getBooleanPref("newRender", false);
+        this.perfCollisions = getBooleanPref("perfCollisions", true);
         this.shaderEffects = getBooleanPref("shaderEffects", false);
         this.teamShaders = getBooleanPref("teamShaders", false);
         this.sendReports = getBooleanPref("sendReports", true);
@@ -490,6 +494,7 @@ public class SettingsEngine {
         editorEdit.putBoolean("showZoomButton", this.showZoomButton);
         editorEdit.putBoolean("showFps", this.showFps);
         editorEdit.putBoolean("newRender", this.newRender);
+        editorEdit.putBoolean("perfCollisions", this.perfCollisions);
         editorEdit.putBoolean("shaderEffects", this.shaderEffects);
         editorEdit.putBoolean("teamShaders", this.teamShaders);
         editorEdit.putBoolean("sendReports", this.sendReports);

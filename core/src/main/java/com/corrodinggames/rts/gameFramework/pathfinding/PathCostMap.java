@@ -323,13 +323,16 @@ public final class PathCostMap {
         boolean z = unitMovementType.equals(UnitMovementType.WATER) || unitMovementType.equals(UnitMovementType.HOVER) || unitMovementType.equals(UnitMovementType.OVER_CLIFF_WATER);
         boolean z2 = unitMovementType.equals(UnitMovementType.HOVER) || unitMovementType.equals(UnitMovementType.OVER_CLIFF) || unitMovementType.equals(UnitMovementType.OVER_CLIFF_WATER);
         boolean z3 = unitMovementType.equals(UnitMovementType.OVER_CLIFF) || unitMovementType.equals(UnitMovementType.OVER_CLIFF_WATER);
+        // RWX：老师的规则 —— 只有带 water-bridge 词条的地块能过陆军、能盖地面建筑；
+        // 其余水面（含浅水）一律挡住。之前「浅水让陆军蹚」是我误诊加的，整体撤掉。
+        // 海军过桥不用管：本方法末尾 WATER 分支 !isWater && !isWaterBridge 才挡，桥本来就放行。
         for (int i3 = 0; i3 < i; i3++) {
             for (int i4 = 0; i4 < i2; i4++) {
                 int i5 = (i3 * i2) + i4;
                 bArr[i5] = 0;
                 MapTile mapTile = mapTileArr[tileIds[i5]];
                 if (mapTile != null) {
-                    if (mapTile.isWater && !z) {
+                    if (mapTile.isWater && !z && !mapTile.isWaterBridge) {
                         bArr[i5] = -1;
                     }
                     if (mapTile.isCliff && !z2) {
@@ -368,7 +371,7 @@ public final class PathCostMap {
                     MapTile tileAt = tileMap.groundOverlayLayer.getTileAt(i6, i7);
                     if (tileAt != null) {
                         bArr[(i6 * i2) + i7] = 0;
-                        if (tileAt.isWater && !z) {
+                        if (tileAt.isWater && !z && !tileAt.isWaterBridge) {
                             bArr[(i6 * i2) + i7] = -1;
                         }
                         if (tileAt.isCliff && !z2) {
@@ -450,8 +453,9 @@ public final class PathCostMap {
                 q.setCursorTileIndexFromWorldPoint(baseUnit.posX, baseUnit.posY);
                 final int cursorTileX = q.cursorTileX;
                 final int cursorTileY = q.cursorTileY;
-                final float n2 = baseUnit.radius + 5.0f;
-                final float n3 = baseUnit.radius + 10.0f;
+                // RWX：避让半径一起放大（近区 +8px、外圈 +16px），碰撞与绕行都更保守
+                final float n2 = baseUnit.radius + 8.0f;
+                final float n3 = baseUnit.radius + 16.0f;
                 if (n3 < 10.0f) {
                     n = 0;
                 } else if (n3 < 20.0f) {
@@ -462,7 +466,9 @@ public final class PathCostMap {
                         if (q.isInBounds(j, k)) {
                             q.setCursorTileIndexFromTileIndex(j, k);
                             final float distanceSq = Utility.distanceSq((float) (q.cursorTileX + halfTileWorldSizeX), (float) (q.cursorTileY + halfTileWorldSizeY), baseUnit.posX, baseUnit.posY);
-                            final byte b = 6;
+                            // RWX：老师要求「寻路过程中避免碰撞」——单位占位代价 6 → 24，
+                            // A* 会明显绕开己方/中立单位堆，而不是硬挤过去。
+                            final byte b = 24;
                             final int n4 = j * c + k;
                             if (distanceSq < n2 * n2) {
                                 final byte[] f = this.f;

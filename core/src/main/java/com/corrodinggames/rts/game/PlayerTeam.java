@@ -1705,6 +1705,97 @@ public abstract class PlayerTeam extends Serializable implements Comparable<Play
     }
 
     /* JADX INFO: renamed from: f */
+    // RWX 每队单位快照：bE 结构或队伍归属变化后，首次访问时重建；
+    // 「只扫本队」的 AI 循环走快照，O(全场) 降 O(本队)。数组换引用不清空，
+    // 持有旧数组的遍历最多晚一拍看到新单位，不会越界也不会读到 null。
+    public BaseUnit[] rwxSnap = new BaseUnit[0];
+    public int rwxSnapSize;
+    private static int rwxStructureStamp = 1;
+    private static int rwxSnapBuilt = 0;
+    private static int rwxSnapTick = -1;
+    private static int[] rwxTeamCursors = new int[64];
+    public static long RWX_SNAP_BUILDS = 0;
+    public static long RWX_SNAP_UNITS = 0;
+    private static int[] rwxTeamCounts = new int[64];
+
+    /** 单位增删/换队后调用（逻辑线程） */
+    public static void rwxStructureChanged() {
+        rwxStructureStamp++;
+    }
+
+    public static void rwxEnsureSnapshots() {
+        if (rwxSnapBuilt == rwxStructureStamp) {
+            return;
+        }
+        // RWX：重建限频——同一 tick 内单位疯狂死亡会反复标脏，
+        // 每 tick 只重建一次；本 tick 后段新增的单位晚一拍可见（AI 语义可接受）
+        int tick = com.corrodinggames.rts.gameFramework.GameEngine.getInstance().currentTick;
+        if (rwxSnapTick == tick) {
+            return;
+        }
+        rwxSnapTick = tick;
+        rwxSnapBuilt = rwxStructureStamp;
+        RWX_SNAP_BUILDS++;
+        BaseUnit[] baseUnitArrA = BaseUnit.bE.a();
+        int size = BaseUnit.bE.size();
+        RWX_SNAP_UNITS += size;
+        if (rwxTeamCounts.length < TEAM_ENEMIES) {
+            rwxTeamCounts = new int[TEAM_ENEMIES];
+            rwxTeamCursors = new int[TEAM_ENEMIES];
+        }
+        // 两趟分配：pass1 计数（O(size)），pass2 游标写入（O(size)），不再 O(队数×size)
+        java.util.Arrays.fill(rwxTeamCounts, 0, TEAM_ENEMIES, 0);
+        for (int i2 = 0; i2 < size; i2++) {
+            PlayerTeam playerTeam = baseUnitArrA[i2].team;
+            if (playerTeam != null && playerTeam.teamId >= 0 && playerTeam.teamId < TEAM_ENEMIES) {
+                rwxTeamCounts[playerTeam.teamId]++;
+            }
+        }
+        for (int t = 0; t < TEAM_ENEMIES; t++) {
+            PlayerTeam playerTeam2 = k(t);
+            if (playerTeam2 == null) {
+                continue;
+            }
+            int count = rwxTeamCounts[t];
+            rwxTeamCursors[t] = 0;
+            if (count == 0) {
+                playerTeam2.rwxSnapSize = 0;
+                continue;
+            }
+            if (playerTeam2.rwxSnap.length < count) {
+                // RWX：容量不够才换更大的数组；够用时就地重写前 count 个槽位
+
+                playerTeam2.rwxSnap = new BaseUnit[count];
+            }
+
+        }
+        for (int i3 = 0; i3 < size; i3++) {
+            BaseUnit baseUnit = baseUnitArrA[i3];
+            PlayerTeam playerTeam3 = baseUnit.team;
+            if (playerTeam3 == null || playerTeam3.teamId < 0 || playerTeam3.teamId >= TEAM_ENEMIES || rwxTeamCounts[playerTeam3.teamId] == 0) {
+                continue;
+            }
+            int t2 = playerTeam3.teamId;
+            // RWX：就地填充是刻意的：数组长度只增不减、填完才更新 rwxSnapSize，
+            // 同线程中途持有旧引用的循环最多读到残留旧条目（谓词 team==this 过滤掉）或漏新条目（晚一拍）；
+            // 所有读方都按 rwxSnapSize 截断，不会读到 null 或越界。
+            playerTeam3.rwxSnap[rwxTeamCursors[t2]] = baseUnit;
+            rwxTeamCursors[t2]++;
+        }
+        for (int t3 = 0; t3 < TEAM_ENEMIES; t3++) {
+            PlayerTeam playerTeam4 = k(t3);
+            if (playerTeam4 != null) {
+                playerTeam4.rwxSnapSize = rwxTeamCursors[t3];
+            }
+        }
+    }
+
+    /** 取本队快照数组；须与 rwxSnapSize 配对使用 */
+    public BaseUnit[] rwxTeamUnits() {
+        rwxEnsureSnapshots();
+        return this.rwxSnap;
+    }
+
     public static void updateAllTeams(float f) {
         int surrenderVoteCount;
         GameEngine gameEngine = GameEngine.getInstance();
@@ -1713,8 +1804,11 @@ public abstract class PlayerTeam extends Serializable implements Comparable<Play
         for (int i = 0; i < TEAM_NEUTRAL; i++) {
             PlayerTeam playerTeam = teamColorArray[i];
             if (playerTeam != null) {
+                long rwxTA = io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.TEAM_AI, io.github.rwx.probe.RwxPerf.now());
                 playerTeam.updateTeam(f);
+                rwxTA = io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.TEAM_AI, rwxTA);
                 playerTeam.e(f);
+                io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.TEAM_DEFECT, rwxTA);
                 if (!playerTeam.teamSurrenderTriggered && (surrenderVoteCount = getSurrenderVoteCount(playerTeam.teamColorId)) > 0) {
                     if (surrenderVoteCount >= getSurrenderEligibleCount(playerTeam.teamColorId)) {
                         d(playerTeam.teamColorId);

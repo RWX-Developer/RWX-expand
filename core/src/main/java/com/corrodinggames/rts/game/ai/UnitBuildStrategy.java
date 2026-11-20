@@ -26,6 +26,19 @@ public abstract class UnitBuildStrategy {
     /* JADX INFO: renamed from: d */
     final /* synthetic */ AIController aiController;
 
+    // RWX：RWX_AI_ECONOMY=1 时把「现在造不造得起」「是不是该补资源建筑」纳入权重。
+    // 默认关闭，保持旧行为，方便 A/B 对比。
+    static final boolean RWX_AI_ECONOMY = System.getenv("RWX_AI_ECONOMY") != null;
+
+    /** 单个候选单位的实际抽取权重。 */
+    private float rwxWeight(UnitBuildPriority unitBuildPriority) {
+        if (!RWX_AI_ECONOMY) {
+            return unitBuildPriority.priority;
+        }
+        return unitBuildPriority.priority
+            * AiEconomy.rwxPriorityMultiplier(this.aiController, unitBuildPriority.unitType, 1, GameEngine.getInstance().currentTick);
+    }
+
     /* JADX INFO: renamed from: a */
     public abstract boolean canBuildUnit(UnitType unitType);
 
@@ -112,7 +125,7 @@ public abstract class UnitBuildStrategy {
         int i2 = 0;
         for (UnitBuildPriority unitBuildPriority : this.unitPriorities) {
             if (matchesMovementType(unitBuildPriority.unitType, unitMovementType) && (i == -1 || unitBuildPriority.unitType.c() <= i)) {
-                f += unitBuildPriority.priority;
+                f += rwxWeight(unitBuildPriority);
                 i2++;
             }
         }
@@ -123,7 +136,7 @@ public abstract class UnitBuildStrategy {
         float f2 = 0.0f;
         for (UnitBuildPriority unitBuildPriority2 : this.unitPriorities) {
             if (matchesMovementType(unitBuildPriority2.unitType, unitMovementType) && (i == -1 || unitBuildPriority2.unitType.c() <= i)) {
-                f2 += unitBuildPriority2.priority;
+                f2 += rwxWeight(unitBuildPriority2);
                 if (f2 > fRandomFloatInRange) {
                     return unitBuildPriority2.unitType;
                 }

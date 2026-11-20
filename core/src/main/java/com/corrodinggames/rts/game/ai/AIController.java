@@ -447,7 +447,12 @@ public final class AIController extends PlayerTeam {
             /* JADX INFO: renamed from: a */
             public boolean canBuildUnit(UnitType unitType) {
                 BaseUnit.findAttackDamageSource(unitType);
-                if (unitType.n()) {
+                // RWX：资源建筑不只有 useAsHarvester 一个标记。全自定义资源的模组常常不标它，
+                // 而是用 resourceRate > 0 表示「这建筑产资源」。两者任一成立就纳入采集者候选池，
+                // 否则这类模组的资源建筑永远进不了 AI 的采集者策略。
+                boolean rwxProducesResource = unitType.n()
+                    || (unitType instanceof CustomUnitConfig && ((CustomUnitConfig) unitType).resourceRate > 0.0f);
+                if (rwxProducesResource) {
                     if ((!(unitType instanceof CustomUnitConfig) || !((CustomUnitConfig) unitType).disableUse) && unitType.o() != UnitMovementType.WATER) {
                         return true;
                     }
@@ -1009,8 +1014,8 @@ public final class AIController extends PlayerTeam {
         if (zJ) {
             z = false;
         }
-        BaseUnit[] baseUnitArrA = BaseUnit.bE.a();
-        int size = BaseUnit.bE.size();
+        BaseUnit[] baseUnitArrA = rwxTeamUnits(); // RWX：本队快照
+        int size = Math.min(this.rwxSnapSize, baseUnitArrA.length);
         for (int i = 0; i < size; i++) {
             BaseUnit baseUnit = baseUnitArrA[i];
             if (baseUnit.team == this && (unitFilterMode == UnitFilterMode.include || !baseUnit.isActive)) {
@@ -1093,8 +1098,8 @@ public final class AIController extends PlayerTeam {
             return;
         }
         GameEngine gameEngine = GameEngine.getInstance();
-        BaseUnit[] baseUnitArrA = BaseUnit.bE.a();
-        int size = BaseUnit.bE.size();
+        BaseUnit[] baseUnitArrA = rwxTeamUnits(); // RWX：本队快照
+        int size = Math.min(this.rwxSnapSize, baseUnitArrA.length);
         for (int i = 0; i < size; i++) {
             BaseUnit baseUnit = baseUnitArrA[i];
             if (baseUnit.team == this && gameEngine.bufferedVisibleWorldRect.b((int) (baseUnit.posX - 200.0f), (int) (baseUnit.posY - 200.0f), (int) (baseUnit.posX + 200.0f), (int) (baseUnit.posY + 200.0f))) {
@@ -1224,12 +1229,20 @@ public final class AIController extends PlayerTeam {
 
     /* JADX INFO: renamed from: e */
     public BaseUnit getAnySelectableUnitForTeam(PlayerTeam playerTeam) {
-        for (BaseUnit baseUnit : BaseUnit.bE) {
+        // RWX：按参数队过滤，走该队快照（rwxTeamUnits 在 PlayerTeam 基类上）
+        BaseUnit[] rwxArG = playerTeam.rwxTeamUnits();
+        int rwxSzG = Math.min(playerTeam.rwxSnapSize, rwxArG.length);
+        for (int rwxIxG = 0; rwxIxG < rwxSzG; rwxIxG++) {
+            BaseUnit baseUnit = rwxArG[rwxIxG];
             if (baseUnit.team == playerTeam && ((baseUnit instanceof CommandCenter) || baseUnit.isTargetable)) {
                 return baseUnit;
             }
         }
-        for (BaseUnit baseUnit2 : BaseUnit.bE) {
+        // RWX：按参数队过滤，走该队快照（rwxTeamUnits 在 PlayerTeam 基类上）
+        BaseUnit[] rwxArG2 = playerTeam.rwxTeamUnits();
+        int rwxSzG2 = Math.min(playerTeam.rwxSnapSize, rwxArG2.length);
+        for (int rwxIxG2 = 0; rwxIxG2 < rwxSzG2; rwxIxG2++) {
+            BaseUnit baseUnit2 = rwxArG2[rwxIxG2];
             if (baseUnit2.team == playerTeam && baseUnit2.isBuilder) {
                 return baseUnit2;
             }
@@ -1320,6 +1333,8 @@ public final class AIController extends PlayerTeam {
                         ((BaseZone) aIStrategyNode).resourceScore += this.resourceMultiplierNormal;
                     }
                 }
+                long rwxZoneT = io.github.rwx.probe.RwxPerf.now();
+        long rwxZT2 = io.github.rwx.probe.RwxPerf.now(); // RWX：aiZones 内部细分链（aiScan=updateZone, aiStrat=updateZoneStrategy）
                 for (int i3 = 0; i3 < 2; i3++) {
                     BaseZone baseZone = null;
                     for (AIStrategyNode aIStrategyNode2 : this.strategyNodes) {
@@ -1335,15 +1350,29 @@ public final class AIController extends PlayerTeam {
                     }
                     BaseZone baseZone3 = baseZone;
                     baseZone3.updateZone(baseZone3.resourceScore);
+                    rwxZT2 = io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.AI_SCAN, rwxZT2);
                     baseZone3.updateZoneStrategy(baseZone3.resourceScore);
+                    rwxZT2 = io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.AI_STRAT, rwxZT2);
+                    if (System.getenv("RWX_AI_DIAG") != null) {
+                        OrderableUnit rwxDiagBuilder = baseZone3.findAvailableBuilderForDiag();
+                        UnitType rwxDiagWant = baseZone3.getBestBuildingToBuild();
+                        String rwxDiagLine = "RWX_ZONE primary=" + baseZone3.isPrimary + " combat=" + baseZone3.numberOfCombatUnits + " inZone=" + baseZone3.unitsInZoneSize() + " who=[" + baseZone3.zoneUnitNames() + "] builder=" + (rwxDiagBuilder == null ? "null" : rwxDiagBuilder.r().getUnitTypeDescriptionShort()) + " want=" + (rwxDiagWant == null ? "null" : rwxDiagWant.getUnitTypeDescriptionShort()) + " prio=" + baseZone3.lastFoundBuildingPriority;
+                        try {
+                            java.nio.file.Files.writeString(java.nio.file.Path.of("logs", "rwx-ai-diag.log"), rwxDiagLine + System.lineSeparator(), java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND);
+                        } catch (Exception ignored) {
+                        }
+                    }
                     baseZone3.resourceScore = 0.0f;
                 }
+                io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.AI_ZONES, rwxZoneT);
                 this.resourceMultiplierNormal = 0.0f;
             }
             this.attackTimerEasy += f;
             this.attackTimerNormal += f;
             if (this.attackTimerEasy > 80.0f) {
+                long rwxLogicT = io.github.rwx.probe.RwxPerf.now();
                 updateAILogic(this.attackTimerNormal);
+                io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.AI_LOGIC, rwxLogicT);
                 this.attackTimerEasy -= 80.0f;
                 if (this.attackTimerEasy > 80.0f) {
                     this.attackTimerEasy = 80.0f;
@@ -1356,7 +1385,9 @@ public final class AIController extends PlayerTeam {
             this.attackTimerHard += f;
             this.attackTimerInsane += f;
             if (this.attackTimerHard > 250.0f) {
+                long rwxCoreT = io.github.rwx.probe.RwxPerf.now();
                 updateCoreLogic(this.attackTimerInsane);
+                io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.AI_CORE, rwxCoreT);
                 this.attackTimerHard -= 250.0f;
                 if (this.attackTimerHard > 250.0f) {
                     this.attackTimerHard = 250.0f;
@@ -1388,7 +1419,11 @@ public final class AIController extends PlayerTeam {
 
     /* JADX INFO: renamed from: l */
     public void updateSpecialUnits(float f) {
-        for (BaseUnit baseUnit : BaseUnit.bE) {
+        // RWX：1411：本队快照替代全场遍历（谓词保留作保险）
+        BaseUnit[] rwxAr1411 = rwxTeamUnits();
+        int rwxSz1411 = Math.min(this.rwxSnapSize, rwxAr1411.length);
+        for (int rwxIx1411 = 0; rwxIx1411 < rwxSz1411; rwxIx1411++) {
+            BaseUnit baseUnit = rwxAr1411[rwxIx1411];
             if (baseUnit.team == this && (baseUnit instanceof OrderableUnit) && isEligibleUnitForRandomSelection(baseUnit)) {
                 OrderableUnit orderableUnit = (OrderableUnit) baseUnit;
                 if (orderableUnit instanceof AttackSubmarine) {
@@ -1481,8 +1516,8 @@ public final class AIController extends PlayerTeam {
             ((AIBehavior) it.next()).updateCore(secondsToMilliseconds(f), this);
         }
         int i = 0;
-        BaseUnit[] baseUnitArrA = BaseUnit.bE.a();
-        int size = BaseUnit.bE.size();
+        BaseUnit[] baseUnitArrA = rwxTeamUnits(); // RWX：本队快照
+        int size = Math.min(this.rwxSnapSize, baseUnitArrA.length);
         for (int i2 = 0; i2 < size; i2++) {
             BaseUnit baseUnit = baseUnitArrA[i2];
             if (baseUnit.team == this && !baseUnit.u()) {
@@ -1510,8 +1545,14 @@ public final class AIController extends PlayerTeam {
                 }
             }
         }
+        long rwxSpT = io.github.rwx.probe.RwxPerf.now();
         updateSpecialUnits(f);
-        for (BaseUnit baseUnit2 : BaseUnit.bE) {
+        long rwxModeT = io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.AI_SPECIAL, rwxSpT);
+        // RWX：1536：本队快照替代全场遍历（谓词保留作保险）
+        BaseUnit[] rwxAr1536 = rwxTeamUnits();
+        int rwxSz1536 = Math.min(this.rwxSnapSize, rwxAr1536.length);
+        for (int rwxIx1536 = 0; rwxIx1536 < rwxSz1536; rwxIx1536++) {
+            BaseUnit baseUnit2 = rwxAr1536[rwxIx1536];
             if (baseUnit2.team == this && (baseUnit2 instanceof OrderableUnit)) {
                 OrderableUnit orderableUnit2 = (OrderableUnit) baseUnit2;
                 AttackMode attackModeForUnit = getAttackModeForUnit(orderableUnit2);
@@ -1525,6 +1566,7 @@ public final class AIController extends PlayerTeam {
                 }
             }
         }
+        io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.AI_MODE, rwxModeT);
         if (i == 0 && !this.isTeamObserver) {
             this.enableScouting = true;
         }
@@ -1586,8 +1628,8 @@ public final class AIController extends PlayerTeam {
         this.buildingCount = 0;
         this.unitProductionTimer = 0;
         this.unitCount = 0;
-        BaseUnit[] baseUnitArrA2 = BaseUnit.bE.a();
-        int size2 = BaseUnit.bE.size();
+        BaseUnit[] baseUnitArrA2 = rwxTeamUnits(); // RWX：本队快照
+        int size2 = Math.min(this.rwxSnapSize, baseUnitArrA2.length);
         for (int i5 = 0; i5 < size2; i5++) {
             BaseUnit baseUnit3 = baseUnitArrA2[i5];
             if (baseUnit3.team == this && (baseUnit3 instanceof OrderableUnit)) {
@@ -1612,7 +1654,11 @@ public final class AIController extends PlayerTeam {
             int i7 = 0;
             int i8 = 0;
             int i9 = 0;
-            for (BaseUnit baseUnit4 : BaseUnit.bE) {
+            // RWX：1638：本队快照替代全场遍历（谓词保留作保险）
+            BaseUnit[] rwxAr1638 = rwxTeamUnits();
+            int rwxSz1638 = Math.min(this.rwxSnapSize, rwxAr1638.length);
+            for (int rwxIx1638 = 0; rwxIx1638 < rwxSz1638; rwxIx1638++) {
+                BaseUnit baseUnit4 = rwxAr1638[rwxIx1638];
                 if (baseUnit4.team == this && baseUnit4.isAlive()) {
                     if (((baseUnit4 instanceof LandFactory) || (baseUnit4 instanceof AirFactory) || (baseUnit4 instanceof SeaFactory)) && (baseUnit4 instanceof AirFactory)) {
                         i7++;
@@ -1629,7 +1675,11 @@ public final class AIController extends PlayerTeam {
                 }
             }
             if (hasCredits(4100.0d) || this.resourceMultiplierInsane > 2400.0f || this.constructingBaseCount == 0) {
-                for (BaseUnit baseUnit5 : BaseUnit.bE) {
+                // RWX：1655：本队快照替代全场遍历（谓词保留作保险）
+                BaseUnit[] rwxAr1655 = rwxTeamUnits();
+                int rwxSz1655 = Math.min(this.rwxSnapSize, rwxAr1655.length);
+                for (int rwxIx1655 = 0; rwxIx1655 < rwxSz1655; rwxIx1655++) {
+                    BaseUnit baseUnit5 = rwxAr1655[rwxIx1655];
                     if (baseUnit5.team == this && (baseUnit5 instanceof OrderableUnit)) {
                         OrderableUnit orderableUnit4 = (OrderableUnit) baseUnit5;
                         if (orderableUnit4.hasAiHighPriorityAction()) {
@@ -1650,7 +1700,11 @@ public final class AIController extends PlayerTeam {
                 if (hasCredits(30000.0d)) {
                     z3 = true;
                 }
-                for (BaseUnit baseUnit6 : BaseUnit.bE) {
+                // RWX：1676：本队快照替代全场遍历（谓词保留作保险）
+                BaseUnit[] rwxAr1676 = rwxTeamUnits();
+                int rwxSz1676 = Math.min(this.rwxSnapSize, rwxAr1676.length);
+                for (int rwxIx1676 = 0; rwxIx1676 < rwxSz1676; rwxIx1676++) {
+                    BaseUnit baseUnit6 = rwxAr1676[rwxIx1676];
                     if (baseUnit6.team == this && (baseUnit6 instanceof OrderableUnit)) {
                         OrderableUnit orderableUnit5 = (OrderableUnit) baseUnit6;
                         ActionId actionIdCm = orderableUnit5.cm();
@@ -1963,8 +2017,8 @@ public final class AIController extends PlayerTeam {
                 }
             }
         }
-        BaseUnit[] baseUnitArrA = BaseUnit.bE.a();
-        int size = BaseUnit.bE.size();
+        BaseUnit[] baseUnitArrA = rwxTeamUnits(); // RWX：本队快照
+        int size = Math.min(this.rwxSnapSize, baseUnitArrA.length);
         for (int i5 = 0; i5 < size; i5++) {
             BaseUnit baseUnit5 = baseUnitArrA[i5];
             if (baseUnit5.team == this && baseUnit5.transportContainer == null && (baseUnit5 instanceof OrderableUnit) && baseUnit5.canUnitAttack() && isEligibleUnitForRandomSelection(baseUnit5)) {
@@ -1980,7 +2034,7 @@ public final class AIController extends PlayerTeam {
                 }
             }
         }
-        int size2 = BaseUnit.bE.size();
+        int size2 = size; // RWX：沿用 1989 处捕获的本队快照长度，语义等价且不再读全场
         for (int i6 = 0; i6 < size2; i6++) {
             BaseUnit baseUnit6 = baseUnitArrA[i6];
             if (baseUnit6.team == this && (baseUnit6 instanceof OrderableUnit)) {
@@ -2016,26 +2070,28 @@ public final class AIController extends PlayerTeam {
             }
             if (this.builderGroupCount < i7) {
                 UnitGroup unitGroup = new UnitGroup(this, false);
-                unitGroup.maxUnits = 8;
+                // RWX：建造组放大到 20/30，让一次投入的工程力能撑起整条扩张链。
+                unitGroup.maxUnits = 20;
                 if (isInsaneDifficulty()) {
-                    unitGroup.maxUnits = 10;
+                    unitGroup.maxUnits = 30;
                 }
                 unitGroup.selectNewPosition();
                 this.mapHeight++;
             }
             if ((this.waterBuilderGroupCount >= i7 || this.totalBuilderUnits > 6) && this.landAttackGroupCount < 1 && z2) {
                 UnitGroup unitGroup2 = new UnitGroup(this, true);
+                // RWX：进攻队列放大到一次 20-30 个单位（原来 3/5/7，疯狂 14/18）。
                 if (this.mapWidth < 2) {
-                    unitGroup2.maxUnits = 3;
+                    unitGroup2.maxUnits = 8;
                 } else if (this.mapWidth < 5) {
-                    unitGroup2.maxUnits = 5;
+                    unitGroup2.maxUnits = 14;
                 } else {
-                    unitGroup2.maxUnits = 7;
+                    unitGroup2.maxUnits = 20;
                     if (isInsaneDifficulty()) {
                         if (this.mapWidth < 25) {
-                            unitGroup2.maxUnits = 14;
+                            unitGroup2.maxUnits = 24;
                         } else {
-                            unitGroup2.maxUnits = 18;
+                            unitGroup2.maxUnits = 30;
                         }
                     }
                 }
@@ -2045,9 +2101,9 @@ public final class AIController extends PlayerTeam {
             if (isPathfindingOverloaded() && this.airAttackGroupCount < 1 && z2) {
                 UnitGroup unitGroup3 = new UnitGroup(this, true);
                 unitGroup3.isSeaGroup = true;
-                unitGroup3.maxUnits = 5;
+                unitGroup3.maxUnits = 10;
                 if (isInsaneDifficulty()) {
-                    unitGroup3.maxUnits = 10;
+                    unitGroup3.maxUnits = 20;
                 }
                 unitGroup3.selectNewPosition();
             }
@@ -2080,7 +2136,7 @@ public final class AIController extends PlayerTeam {
                             }
                         }
                         Command commandNewCommandForTeam4 = gameEngine.commandController.newCommandForTeam(this);
-                        int size3 = BaseUnit.bE.size();
+                        int size3 = size; // RWX：同上
                         for (int i8 = 0; i8 < size3; i8++) {
                             BaseUnit baseUnit7 = baseUnitArrA[i8];
                             if (baseUnit7.team == this && (baseUnit7 instanceof OrderableUnit)) {
@@ -2115,9 +2171,11 @@ public final class AIController extends PlayerTeam {
     /* JADX INFO: renamed from: ar */
     public BaseUnit getRandomIdleUnit() {
         BaseUnit baseUnit = null;
+        // RWX：两遍扫描都走本队快照，且同一个数组同一长度，
+        // 计数与选中遍历之间不会再看到不同的成员集合
+        BaseUnit[] baseUnitArrA = rwxTeamUnits();
+        int size = Math.min(this.rwxSnapSize, baseUnitArrA.length);
         int i = 0;
-        BaseUnit[] baseUnitArrA = BaseUnit.bE.a();
-        int size = BaseUnit.bE.size();
         for (int i2 = 0; i2 < size; i2++) {
             BaseUnit baseUnit2 = baseUnitArrA[i2];
             if (!baseUnit2.isDead && baseUnit2.transportContainer == null && this == baseUnit2.team && isCombatCustomUnit(baseUnit2)) {
@@ -2126,12 +2184,8 @@ public final class AIController extends PlayerTeam {
         }
         int iRandom = (int) (Math.random() * ((double) i));
         int i3 = 0;
-        Iterator it = BaseUnit.bE.iterator();
-        while (true) {
-            if (!it.hasNext()) {
-                break;
-            }
-            BaseUnit baseUnit3 = (BaseUnit) it.next();
+        for (int i4 = 0; i4 < size; i4++) {
+            BaseUnit baseUnit3 = baseUnitArrA[i4];
             if (!baseUnit3.isDead && baseUnit3.transportContainer == null && this == baseUnit3.team && isCombatCustomUnit(baseUnit3)) {
                 if (i3 == iRandom) {
                     baseUnit = baseUnit3;

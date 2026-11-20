@@ -298,14 +298,18 @@ public class UnitGroup extends AIUnitGroupBase {
     }
 
     /* JADX INFO: renamed from: a */
-    public void issueCommandToUnits(Command command, boolean z, BaseUnit baseUnit) {
+    // RWX：改为返回实际加入的单位数，调用方据此决定还要不要保留这条命令
+    public int issueCommandToUnits(Command command, boolean z, BaseUnit baseUnit) {
+        int rwxAdded = 0;
         for (OrderableUnit orderableUnit : this.units) {
             if (!z || orderableUnit.hasNoCurrentWaypoint()) {
                 if (baseUnit == null || this.aiController.canUnitReachUnit(orderableUnit, baseUnit)) {
                     command.addUnitToCommand(orderableUnit);
+                    rwxAdded++;
                 }
             }
         }
+        return rwxAdded;
     }
 
     /* JADX INFO: renamed from: a */
@@ -341,10 +345,13 @@ public class UnitGroup extends AIUnitGroupBase {
         if (!this.isRetreating && (baseUnitE = getRecentAttacker()) != null && getGroupCommandTarget() == null) {
             if (canAnyUnitAttackTarget(baseUnitE, false)) {
                 setGroupName("fighting attacker");
+                // RWX：先看有没有单位真正能接这条命令；一个都没有就别把它留在队列里（空命令白占队列和 replay）
                 Command commandNewCommandForTeam = GameEngine.getInstance().commandController.newCommandForTeam(this.aiController);
-                issueCommandToUnits(commandNewCommandForTeam, true, baseUnitE);
-                commandNewCommandForTeam.setAttackMoveTarget(baseUnitE.posX, baseUnitE.posY, false);
-                return;
+                if (issueCommandToUnits(commandNewCommandForTeam, true, baseUnitE) == 0) {
+                    setGroupName("fighting attacker: no unit took order");
+                } else {
+                    commandNewCommandForTeam.setAttackMoveTarget(baseUnitE.posX, baseUnitE.posY, false);
+                }
             }
             setGroupName("flight from attacker");
             PointF pointFA = getRallyPointAwayFrom(baseUnitE);
@@ -404,7 +411,10 @@ public class UnitGroup extends AIUnitGroupBase {
             }
             if (this.commandTimer == 0.0f) {
                 this.commandTimer = 800.0f;
-                Command commandNewCommandForTeam = gameEngine.commandController.newCommandForTeam(this.aiController);
+                // RWX：老师指正「AI 指挥的算法要优化」——原版不管有没有单位可派，
+                // 都先建命令再设目标；过滤后一个单位都没加，就是一条空命令，
+                // 仍然会进命令队列、被执行、写进 replay。改成先收集、非空才建命令。
+                java.util.ArrayList<OrderableUnit> rwxBatch = new java.util.ArrayList<OrderableUnit>();
                 for (OrderableUnit orderableUnit2 : this.units) {
                     boolean z = true;
                     if (getDistanceSqToUnit(orderableUnit2) < 28900.0f) {
@@ -414,13 +424,19 @@ public class UnitGroup extends AIUnitGroupBase {
                         z = false;
                     }
                     if (z) {
-                        commandNewCommandForTeam.addUnitToCommand(orderableUnit2);
+                        rwxBatch.add(orderableUnit2);
                     }
                 }
-                if (this.isRetreating) {
-                    commandNewCommandForTeam.setMoveTarget(this.posX, this.posY);
-                } else {
-                    commandNewCommandForTeam.setAttackMoveTarget(this.posX, this.posY);
+                if (!rwxBatch.isEmpty()) {
+                    Command commandNewCommandForTeam = gameEngine.commandController.newCommandForTeam(this.aiController);
+                    for (OrderableUnit orderableUnit3 : rwxBatch) {
+                        commandNewCommandForTeam.addUnitToCommand(orderableUnit3);
+                    }
+                    if (this.isRetreating) {
+                        commandNewCommandForTeam.setMoveTarget(this.posX, this.posY);
+                    } else {
+                        commandNewCommandForTeam.setAttackMoveTarget(this.posX, this.posY);
+                    }
                 }
             }
         }

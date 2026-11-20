@@ -44,6 +44,20 @@ public final class PathEngine {
     /* JADX INFO: renamed from: t */
     public short heightTiles;
     /* JADX INFO: renamed from: x */
+    // RWX：寻路时间预算下限（毫秒），由环境变量 RWX_PATH_BUDGET_MS 控制，0 = 不启用
+    static final float RWX_PATH_BUDGET_MS;
+    static {
+        float rwxBudget = 0.0f;
+        try {
+            String rwxEnv = System.getenv("RWX_PATH_BUDGET_MS");
+            if (rwxEnv != null) {
+                rwxBudget = Float.parseFloat(rwxEnv.trim());
+            }
+        } catch (Exception ignored) {
+        }
+        RWX_PATH_BUDGET_MS = rwxBudget;
+    }
+
     public PathCostMap noneCostMap;
     /* JADX INFO: renamed from: y */
     public PathCostMap landCostMap;
@@ -351,6 +365,54 @@ public final class PathEngine {
         pathCostMap.a(z);
     }
 
+    // RWX：O(1) 地形可达性预判。与 PathSolver.e() 里「end is blocked on isolated groups」的判定读同一份
+    // 静态分组表 PathCostMap.g（纯地形+建筑洪水分组，锁步各端一致），判定语义完全一致：
+    // 起点组有效（!= -1）且终点半径窗口内没有任何同组格 → 求解器一定会走「假节点/最近可达点」退化分支，
+    // 也就是老师说的「没有任何可以通行的地形抵达目的地」。窗口用请求给的半径（可能大于求解器实际用的），
+    // 大窗口找不到同组格 ⇒ 小窗口同样找不到，方向保守，不会误判可达为不可达。
+    // 没有分组表（如 AIR 图没调 b()）时返回 false，等于不做预判，行为不变。
+    public boolean isEndOnSeparateIsland(UnitMovementType unitMovementType, int i, int i2, int i3, int i4, int i5) {
+        PathCostMap pathCostMap = a(unitMovementType);
+        if (pathCostMap == null || pathCostMap.g == null) {
+            return false;
+        }
+        short[] sArr = pathCostMap.g;
+        int n = pathCostMap.width;
+        int n2 = pathCostMap.height;
+        if (i < 0 || i2 < 0 || i >= n || i2 >= n2) {
+            return false;
+        }
+        // 终点钳边与 Path.a(short,short,short) 一致
+        if (i3 < 0) {
+            i3 = 0;
+        }
+        if (i4 < 0) {
+            i4 = 0;
+        }
+        if (i3 > n - 1) {
+            i3 = n - 1;
+        }
+        if (i4 > n2 - 1) {
+            i4 = n2 - 1;
+        }
+        short s = sArr[(i * n2) + i2];
+        if (s == -1) {
+            return false;
+        }
+        int i6 = i5 < 0 ? 0 : i5;
+        for (int i7 = i3 - i6; i7 <= i3 + i6; i7++) {
+            for (int i8 = i4 - i6; i8 <= i4 + i6; i8++) {
+                if (i7 < 0 || i8 < 0 || i7 >= n || i8 >= n2) {
+                    continue;
+                }
+                if (sArr[(i7 * n2) + i8] == s) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
     public Path a(boolean z) {
         Path path;
         if (OrderableUnit.L) {
@@ -394,6 +456,12 @@ public final class PathEngine {
                 path.remainingTimeMs = 180.0f;
             } else {
                 path.remainingTimeMs = 360.0f;
+            }
+            // RWX：大图长距离寻路默认只给 360ms，绕远路时经常算不完，
+            // 失败后单位会退化成「走到最近可达点」看起来像卡在岸边。
+            // 设 RWX_PATH_BUDGET_MS 可抬高下限做验证，默认 0 = 保持原行为。
+            if (RWX_PATH_BUDGET_MS > 0.0f && path.remainingTimeMs < RWX_PATH_BUDGET_MS) {
+                path.remainingTimeMs = RWX_PATH_BUDGET_MS;
             }
         }
         if (path.isLowPriority) {

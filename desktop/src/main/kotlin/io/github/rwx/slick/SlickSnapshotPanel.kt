@@ -15,7 +15,10 @@ internal class SlickSnapshotPanel : JPanel() {
 
     fun present(frame: SlickFrameSnapshot?) {
         check(SwingUtilities.isEventDispatchThread())
-        if (frame === snapshot) return
+        // 同一帧会被重新读回并带上新的 sequence；身份相同不代表像素相同。
+        val previous = snapshot
+        if (frame != null && previous != null && frame.sequence == previous.sequence &&
+                frame.width == previous.width && frame.height == previous.height) return
         snapshot = frame
         image = frame?.let {
             require(it.width > 0 && it.height > 0 && it.pixels.size >= it.width.toLong() * it.height)

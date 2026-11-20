@@ -17,6 +17,8 @@ import java.util.LinkedList;
 /* JADX INFO: renamed from: com.corrodinggames.rts.gameFramework.k.k */
 /* JADX INFO: loaded from: game-lib.jar:com/corrodinggames/rts/gameFramework/k/k.class */
 public class Path {
+    // RWX：越界目标取证计数（只打前 20 条，避免刷屏）
+    private static int RWX_BOUNDS_LOG_N = 0;
     private PathEngine a;
     /* JADX INFO: renamed from: e */
     public int pathId;
@@ -50,6 +52,11 @@ public class Path {
     /* JADX INFO: renamed from: v */
     public boolean isSolved;
     public boolean w;
+    // RWX：寻路器穷尽整个可达区仍到不了真目标时置位（PathSolver.e 的 "could not find end node" 分支）。
+    // 背景：原来单位会退化成「走向全图最近点」，到了以后发现还差得远，冷却归零再请求，
+    // 永远循环——12000 兵时每轮都是全图扫描 + 穷尽 A*，是卡顿的大头之一。
+    // 现成的放弃计数 pathRetryCount>3 只在 activePathCount==1 时 +1，对不可达路径永远不触发。
+    public boolean endUnreachable;
     /* JADX INFO: renamed from: x */
     protected LinkedList pathPoints;
     public byte[] y;
@@ -194,6 +201,11 @@ public class Path {
     }
 
     public void a(short s, short s2, short s3) {
+        // RWX：目标落在图外会被静默钳到边缘列，单位就一路开到游戏边界停住。这里留证据。
+        if ((s < 0 || s2 < 0 || s > this.a.widthTiles - 1 || s2 > this.a.heightTiles - 1) && RWX_BOUNDS_LOG_N < 20) {
+            RWX_BOUNDS_LOG_N++;
+            io.github.rwx.probe.RwxPerf.out("RWX_BOUNDS target out of map -> clamped:" + s + "," + s2 + " map=" + this.a.widthTiles + "x" + this.a.heightTiles);
+        }
         if (s < 0) {
             s = 0;
         }

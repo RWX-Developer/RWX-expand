@@ -123,7 +123,26 @@ public abstract class AIStrategyNode extends Serializable {
         PointF pointF = new PointF();
         float fRandom = (float) (Math.random() * 360.0d);
         float fRandom2 = (float) (Math.random() * ((double) this.radius));
-        pointF.a(this.posX + (Utility.fastCos(fRandom) * fRandom2), this.posY + (Utility.fastSin(fRandom) * fRandom2));
+        float rwxX = this.posX + (Utility.fastCos(fRandom) * fRandom2);
+        float rwxY = this.posY + (Utility.fastSin(fRandom) * fRandom2);
+        // RWX：zone 贴着地图边缘时，这个圆会伸出图外。目标点越界 → 引擎把它钳到边缘列 →
+        // 单位一路开到地图边界停住（老师报的「寻路寻到地图边缘」）。AI 的移动目标都从这里出，
+        // 所以在源头夹进图内，而不是等 Path 去钳。
+        com.corrodinggames.rts.gameFramework.GameEngine rwxGe = com.corrodinggames.rts.gameFramework.GameEngine.getInstance();
+        if (rwxGe != null && rwxGe.tileMap != null) {
+            com.corrodinggames.rts.game.map.TileMap rwxTm = rwxGe.tileMap;
+            float rwxLimX = (rwxTm.tileCountX - 1) * rwxTm.tileWorldSizeX;
+            float rwxLimY = (rwxTm.tileCountY - 1) * rwxTm.tileWorldSizeY;
+            if (rwxLimX > 0.0f) {
+                if (rwxX < 0.0f) { rwxX = 0.0f; }
+                if (rwxX > rwxLimX) { rwxX = rwxLimX; }
+            }
+            if (rwxLimY > 0.0f) {
+                if (rwxY < 0.0f) { rwxY = 0.0f; }
+                if (rwxY > rwxLimY) { rwxY = rwxLimY; }
+            }
+        }
+        pointF.a(rwxX, rwxY);
         return pointF;
     }
 

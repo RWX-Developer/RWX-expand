@@ -212,7 +212,7 @@ private class EngineUnitWorldBackend : UnitWorldBackend {
             isFactory = availableActions.any { it.unitTypeId != null && !it.unitTypeIsBuilding },
             currentTargetId = attackTargetUnit?.let { UnitInstanceId(it.objectId) },
             tags = getTags()?.a
-                ?.mapNotNull { nativeTag -> runCatching { Tag(nativeTag.toString()) }.getOrNull() }
+                ?.mapNotNull { nativeTag -> Tag.ofOrNull(nativeTag.toString()) }
                 ?.toSet()
                 .orEmpty(),
             availableActions = availableActions,

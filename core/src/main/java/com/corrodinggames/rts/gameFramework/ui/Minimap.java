@@ -19,6 +19,7 @@ import io.github.rwx.render.canvas.ArgbColor;
 import io.github.rwx.render.canvas.Paint;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Iterator;
 
 /* JADX INFO: renamed from: com.corrodinggames.rts.gameFramework.f.o */
@@ -101,6 +102,14 @@ public class Minimap {
 
     /* JADX INFO: renamed from: ac */
     static ArrayList<LineDrawer> lineDrawerPool = new ArrayList();
+
+    // RWX：小地图合并遍历用的按队分桶暂存（下标 = teamColorId+1）。
+    private float[][] teamUnitXy;
+    private int[] teamUnitCounts;
+    private float[][] teamPreviewXy;
+    private int[] teamPreviewCounts;
+    private PlayerTeam[] slotTeamCache;
+    private int slotCacheTeams = -1;
 
     /* JADX INFO: renamed from: c */
     public float width = 120.0f;
@@ -574,6 +583,75 @@ public class Minimap {
         if (gameEngine.playerTeam.isSpectatorTeamColor() || gameEngine.replayEngine.j()) {
             z = true;
         }
+        // RWX：原来每支队伍的点都要对全表扫两趟（先数个数、再填顶点），
+        // 队伍槽位 * 12000 单位 = 每帧几十万次表遍历，小地图自己就吃掉 78/2023 的样本。
+        // 现在改成一次扫描按 teamColorId 分桶，下面每队只从自己桶里取点，行为完全一致。
+        int bucketCount = PlayerTeam.TEAM_NEUTRAL + 1; // 桶下标 = teamColorId + 1（-1 = TEAM_ALL）
+        if (teamUnitXy == null || teamUnitXy.length < bucketCount) {
+            teamUnitXy = new float[bucketCount][];
+            teamUnitCounts = new int[bucketCount];
+            teamPreviewXy = new float[bucketCount][];
+            teamPreviewCounts = new int[bucketCount];
+        }
+        if (slotTeamCache == null || slotTeamCache.length < bucketCount || slotCacheTeams != PlayerTeam.TEAM_NEUTRAL) {
+            slotTeamCache = new PlayerTeam[bucketCount];
+            slotCacheTeams = PlayerTeam.TEAM_NEUTRAL;
+        }
+        for (int b0 = 0; b0 < bucketCount; b0++) {
+            teamUnitCounts[b0] = 0;
+            teamPreviewCounts[b0] = 0;
+            slotTeamCache[b0] = PlayerTeam.k(b0 - 1);
+        }
+        BaseUnit[] unitsArr = BaseUnit.bE.a();
+        int unitsLen = BaseUnit.bE.size();
+        for (int i14 = 0; i14 < unitsLen; i14++) {
+            BaseUnit baseUnit = unitsArr[i14];
+            if (!baseUnit.hasMinimapPosition) {
+                continue;
+            }
+            PlayerTeam unitTeam = baseUnit.team;
+            int bucket = unitTeam == null ? -1 : unitTeam.teamColorId + 1;
+            if (bucket < 1 || bucket >= bucketCount || slotTeamCache[bucket] != unitTeam) {
+                continue;
+            }
+            float[] xy = teamUnitXy[bucket];
+            int n = teamUnitCounts[bucket];
+            if (xy == null) {
+                xy = new float[64];
+                teamUnitXy[bucket] = xy;
+            } else if (n * 2 >= xy.length) {
+                xy = Arrays.copyOf(xy, xy.length * 2);
+                teamUnitXy[bucket] = xy;
+            }
+            xy[n * 2] = baseUnit.minimapScreenX;
+            xy[n * 2 + 1] = baseUnit.minimapScreenY;
+            teamUnitCounts[bucket] = n + 1;
+        }
+        Object[] previewsArr = BuildPreview.activePreviews.b();
+        int previewsLen = BuildPreview.activePreviews.size();
+        for (int i17 = 0; i17 < previewsLen; i17++) {
+            BuildPreview buildPreview = (BuildPreview) previewsArr[i17];
+            if (!buildPreview.hasMinimapPosition) {
+                continue;
+            }
+            PlayerTeam previewTeam = buildPreview.team;
+            int bucket2 = previewTeam == null ? -1 : previewTeam.teamColorId + 1;
+            if (bucket2 < 1 || bucket2 >= bucketCount || slotTeamCache[bucket2] != previewTeam) {
+                continue;
+            }
+            float[] xy2 = teamPreviewXy[bucket2];
+            int n2 = teamPreviewCounts[bucket2];
+            if (xy2 == null) {
+                xy2 = new float[64];
+                teamPreviewXy[bucket2] = xy2;
+            } else if (n2 * 2 >= xy2.length) {
+                xy2 = Arrays.copyOf(xy2, xy2.length * 2);
+                teamPreviewXy[bucket2] = xy2;
+            }
+            xy2[n2 * 2] = buildPreview.gridX;
+            xy2[n2 * 2 + 1] = buildPreview.gridY;
+            teamPreviewCounts[bucket2] = n2 + 1;
+        }
         for (int i12 = -1; i12 < PlayerTeam.TEAM_NEUTRAL; i12++) {
             PlayerTeam playerTeamK = PlayerTeam.k(i12);
             if (playerTeamK != null) {
@@ -590,8 +668,14 @@ public class Minimap {
                         paint = this.enemyUnitPaint;
                     }
                 }
-                int i13 = 0;
-                if (playerTeamK.getUnitCount(true, false) > 0) {
+                int i13;
+                // 只有「这个队对象真的坐在 teamColorId 对应的槽位上」才能走分桶：
+                // 观察者队（teamColorId=-3）、TEAM_ALL、TEAM_UNKNOWN 都不满足，走原来的两趟扫描。
+                int unitBucket = playerTeamK.teamColorId + 1;
+                boolean useBuckets = unitBucket >= 1 && unitBucket < bucketCount && slotTeamCache[unitBucket] == playerTeamK;
+                if (!useBuckets) {
+                    // TEAM_UNKNOWN 不在颜色数组里，按原样数一遍（这队几乎没有带小地图坐标的单位）
+                    i13 = 0;
                     BaseUnit[] baseUnitArrA = BaseUnit.bE.a();
                     int size = BaseUnit.bE.size();
                     for (int i14 = 0; i14 < size; i14++) {
@@ -600,21 +684,35 @@ public class Minimap {
                             i13++;
                         }
                     }
-                }
-                if (i13 > 0) {
-                    paint.a((float) i7);
-                    LineDrawer lineDrawer = getLineDrawer(i13, paint);
-                    lineDrawer.drawAsPoints = !gameEngine.settingsEngine.renderWithLineWidth;
-                    BaseUnit[] baseUnitArrA2 = BaseUnit.bE.a();
-                    int size2 = BaseUnit.bE.size();
-                    for (int i15 = 0; i15 < size2; i15++) {
-                        BaseUnit baseUnit2 = baseUnitArrA2[i15];
-                        if (baseUnit2.team == playerTeamK && baseUnit2.hasMinimapPosition) {
-                            lineDrawer.addPoint(baseUnit2.minimapScreenX, baseUnit2.minimapScreenY);
+                    if (i13 > 0) {
+                        paint.a((float) i7);
+                        LineDrawer lineDrawer = getLineDrawer(i13, paint);
+                        lineDrawer.drawAsPoints = !gameEngine.settingsEngine.renderWithLineWidth;
+                        BaseUnit[] baseUnitArrA2 = BaseUnit.bE.a();
+                        int size2 = BaseUnit.bE.size();
+                        for (int i15 = 0; i15 < size2; i15++) {
+                            BaseUnit baseUnit2 = baseUnitArrA2[i15];
+                            if (baseUnit2.team == playerTeamK && baseUnit2.hasMinimapPosition) {
+                                lineDrawer.addPoint(baseUnit2.minimapScreenX, baseUnit2.minimapScreenY);
+                            }
+                        }
+                        if (lineDrawer.vertexIndex != 0) {
+                            gameEngine.renderGraphicsEngine.a(lineDrawer);
                         }
                     }
-                    if (lineDrawer.vertexIndex != 0) {
-                        gameEngine.renderGraphicsEngine.a(lineDrawer);
+                } else {
+                    i13 = teamUnitCounts[unitBucket];
+                    if (i13 > 0) {
+                        paint.a((float) i7);
+                        LineDrawer lineDrawer = getLineDrawer(i13, paint);
+                        lineDrawer.drawAsPoints = !gameEngine.settingsEngine.renderWithLineWidth;
+                        float[] unitXy = teamUnitXy[unitBucket];
+                        for (int i15 = 0; i15 < i13; i15++) {
+                            lineDrawer.addPoint(unitXy[i15 * 2], unitXy[i15 * 2 + 1]);
+                        }
+                        if (lineDrawer.vertexIndex != 0) {
+                            gameEngine.renderGraphicsEngine.a(lineDrawer);
+                        }
                     }
                 }
                 Paint paint2 = playerTeamK.teamTextPaint;
@@ -630,28 +728,44 @@ public class Minimap {
                         paint2 = this.enemyBuildPreviewPaint;
                     }
                 }
-                int i16 = 0;
-                Object[] objArrB = BuildPreview.activePreviews.b();
-                int size3 = BuildPreview.activePreviews.size();
-                for (int i17 = 0; i17 < size3; i17++) {
-                    BuildPreview buildPreview = (BuildPreview) objArrB[i17];
-                    if (buildPreview.team == playerTeamK && buildPreview.hasMinimapPosition) {
-                        i16++;
-                    }
-                }
-                if (i16 > 0) {
-                    paint2.a((float) i7);
-                    LineDrawer lineDrawer2 = getLineDrawer(i16, paint2);
-                    Object[] objArrB2 = BuildPreview.activePreviews.b();
-                    int size4 = BuildPreview.activePreviews.size();
-                    for (int i18 = 0; i18 < size4; i18++) {
-                        BuildPreview buildPreview2 = (BuildPreview) objArrB2[i18];
-                        if (buildPreview2.team == playerTeamK && buildPreview2.hasMinimapPosition) {
-                            lineDrawer2.addPoint(buildPreview2.gridX, buildPreview2.gridY);
+                int i16;
+                if (!useBuckets) {
+                    i16 = 0;
+                    Object[] objArrB = BuildPreview.activePreviews.b();
+                    int size3 = BuildPreview.activePreviews.size();
+                    for (int i17 = 0; i17 < size3; i17++) {
+                        BuildPreview buildPreview = (BuildPreview) objArrB[i17];
+                        if (buildPreview.team == playerTeamK && buildPreview.hasMinimapPosition) {
+                            i16++;
                         }
                     }
-                    if (lineDrawer2.vertexIndex != 0) {
-                        gameEngine.renderGraphicsEngine.a(lineDrawer2);
+                    if (i16 > 0) {
+                        paint2.a((float) i7);
+                        LineDrawer lineDrawer2 = getLineDrawer(i16, paint2);
+                        Object[] objArrB2 = BuildPreview.activePreviews.b();
+                        int size4 = BuildPreview.activePreviews.size();
+                        for (int i18 = 0; i18 < size4; i18++) {
+                            BuildPreview buildPreview2 = (BuildPreview) objArrB2[i18];
+                            if (buildPreview2.team == playerTeamK && buildPreview2.hasMinimapPosition) {
+                                lineDrawer2.addPoint(buildPreview2.gridX, buildPreview2.gridY);
+                            }
+                        }
+                        if (lineDrawer2.vertexIndex != 0) {
+                            gameEngine.renderGraphicsEngine.a(lineDrawer2);
+                        }
+                    }
+                } else {
+                    i16 = teamPreviewCounts[unitBucket];
+                    if (i16 > 0) {
+                        paint2.a((float) i7);
+                        LineDrawer lineDrawer2 = getLineDrawer(i16, paint2);
+                        float[] prevXy = teamPreviewXy[unitBucket];
+                        for (int i18 = 0; i18 < i16; i18++) {
+                            lineDrawer2.addPoint(prevXy[i18 * 2], prevXy[i18 * 2 + 1]);
+                        }
+                        if (lineDrawer2.vertexIndex != 0) {
+                            gameEngine.renderGraphicsEngine.a(lineDrawer2);
+                        }
                     }
                 }
             }

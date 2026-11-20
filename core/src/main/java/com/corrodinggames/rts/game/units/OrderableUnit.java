@@ -46,6 +46,9 @@ import java.util.LinkedList;
 /* JADX INFO: renamed from: com.corrodinggames.rts.game.units.y */
 /* JADX INFO: loaded from: game-lib.jar:com/corrodinggames/rts/game/units/y.class */
 public abstract class OrderableUnit extends UnitBase {
+    // RWX：越界寻路目标取证（只打前 20 条）
+    private static int RWX_TARGET_CLAMP_N = 0;
+    private static int RWX_EDGE_PATH_N = 0;
 
     /* JADX INFO: renamed from: M */
     protected Texture baseTexture;
@@ -199,6 +202,29 @@ public abstract class OrderableUnit extends UnitBase {
 
     /* JADX INFO: renamed from: u */
     public boolean isPathIncomplete;
+
+    // RWX：RWX_PATH_STATS=1 时统计「确认不可达后取消路径点」次数，默认零开销
+    private static final boolean RW_PATH_STATS = System.getenv("RWX_PATH_STATS") != null;
+    private static int rwUnreachableCancels = 0;
+    // RWX 路径点停滞自愈：有移动意图却长时间没挪窝（无路可走 / 只拿到部分路径 / 被单位堵住），
+    // 就作废这条路径点以及后面指向同一片区域的移动行动，让单位与 AI 重新决策。
+    // 阈值可用环境变量 RWX_STUCK_LIMIT 覆盖，默认 600（与 repathCooldown 700 同量级）。
+    private static final float RWX_STUCK_LIMIT = rwxReadStuckLimit();
+    public float rwxStuckTimer = 0.0f;
+    private float rwxStuckX;
+    private float rwxStuckY;
+    private boolean rwxStuckSampled = false;
+
+    private static float rwxReadStuckLimit() {
+        try {
+            String s = System.getenv("RWX_STUCK_LIMIT");
+            if (s != null) {
+                return Float.parseFloat(s.trim());
+            }
+        } catch (Throwable th) {
+        }
+        return 600.0f;
+    }
     /* JADX INFO: renamed from: v */
     private int totalPathPositions;
     /* JADX INFO: renamed from: w */
@@ -363,7 +389,7 @@ public abstract class OrderableUnit extends UnitBase {
                 orderableUnit.resolveSoftCollisionWithUnit(baseUnit, f, true);
             }
         };
-        aM = new UnitList();
+        aM = new UnitList(64);
         aP = new UnitStateTracker();
         aQ = new SingleTargetPassiveCallback(true);
         aR = new SingleTargetPassiveCallback(false);
@@ -471,6 +497,7 @@ public abstract class OrderableUnit extends UnitBase {
         GameEngine gameEngine = GameEngine.getInstance();
         gameEngine.performanceProfiler.a(ProfilerSection.update_do_all_collisions);
         int i = gameEngine.gameTimeMillis;
+        boolean perfCollisions = gameEngine.settingsEngine.perfCollisions;
         UnitList unitList = aM;
         BaseUnit[] baseUnitArrA = BaseUnit.bE.a();
         int size = BaseUnit.bE.size();
@@ -496,14 +523,18 @@ public abstract class OrderableUnit extends UnitBase {
                     }
                     orderableUnit.nearbyCollisionSize = (byte) 0;
                     unitList.clear();
-                    gameEngine.unitSpatialIndex.b(orderableUnit.posX, orderableUnit.posY, f2, unitList);
+                    if (perfCollisions) {
+                        gameEngine.unitSpatialIndex.b(orderableUnit.posX, orderableUnit.posY, f2, 16.0f, unitList);
+                    } else {
+                        gameEngine.unitSpatialIndex.b(orderableUnit.posX, orderableUnit.posY, f2, unitList);
+                    }
                     BaseUnit[] baseUnitArrA2 = unitList.a();
                     int i4 = unitList.b;
                     for (int i5 = 0; i5 < i4; i5++) {
                         orderableUnit.resolveSoftCollisionWithUnit(baseUnitArrA2[i5], f, true);
                     }
                     if (orderableUnit.nearbyCollisionSize > 9 && orderableUnit.timeAliveStamp > i - 400) {
-                        orderableUnit.nextCollisionQueryTick = gameEngine.gameTimeMillis + 5 + (i3 % 5);
+                        orderableUnit.nextCollisionQueryTick = gameEngine.gameTimeMillis + (perfCollisions ? 40 + (i3 % 20) : 5 + (i3 % 5));
                         orderableUnit.collisionActive = true;
                     }
                 }
@@ -511,7 +542,10 @@ public abstract class OrderableUnit extends UnitBase {
         }
         gameEngine.performanceProfiler.b(ProfilerSection.update_do_all_collisions);
         gameEngine.performanceProfiler.a(ProfilerSection.update_do_all_collisions2);
-        for (int i6 = 0; i6 < size; i6++) {
+        // RWX 性能模式：推挤每两帧做一次，步长加倍补回两帧总位移；关闭时逐帧原样。
+        boolean pushThisFrame = !perfCollisions || (gameEngine.currentTick & 1) == 0;
+        float pushScale = perfCollisions ? 2.0f : 1.0f;
+        for (int i6 = 0; i6 < size && pushThisFrame; i6++) {
             if (baseUnitArrA[i6] instanceof OrderableUnit) {
                 OrderableUnit orderableUnit2 = (OrderableUnit) baseUnitArrA[i6];
                 if (orderableUnit2.movementActiveThisFrame && (b = orderableUnit2.nearbyCollisionSize) > 0 && orderableUnit2.I()) {
@@ -519,7 +553,7 @@ public abstract class OrderableUnit extends UnitBase {
                         orderableUnit2.collisionActive = true;
                     }
                     for (int i7 = 0; i7 < b; i7++) {
-                        orderableUnit2.resolveSoftCollisionWithUnit(orderableUnit2.nearbyUnits[i7], f, false);
+                        orderableUnit2.resolveSoftCollisionWithUnit(orderableUnit2.nearbyUnits[i7], f * pushScale, false);
                     }
                 }
             }
@@ -1776,6 +1810,26 @@ public abstract class OrderableUnit extends UnitBase {
                     this.isLowPriority = true;
                     clearTransportState();
                 }
+                // RWX：有路却走不动（被单位堵住、被地形夹住、目标落在不可达的孤点）同样算停滞。
+                if (this.rwxStuckSampled) {
+                    float sdx = this.posX - this.rwxStuckX;
+                    float sdy = this.posY - this.rwxStuckY;
+                    if (sdx * sdx + sdy * sdy > 1024.0f) {
+                        this.rwxStuckTimer = 0.0f;
+                        this.rwxStuckX = this.posX;
+                        this.rwxStuckY = this.posY;
+                    } else {
+                        this.rwxStuckTimer += f;
+                        if (this.rwxStuckTimer > RWX_STUCK_LIMIT) {
+                            rwxAbandonStuckWaypoint();
+                            return;
+                        }
+                    }
+                } else {
+                    this.rwxStuckSampled = true;
+                    this.rwxStuckX = this.posX;
+                    this.rwxStuckY = this.posY;
+                }
             }
         }
         if (unitCommand != null) {
@@ -2826,6 +2880,12 @@ public abstract class OrderableUnit extends UnitBase {
                         if (this.repathCooldown == 0.0f) {
                             z = true;
                         }
+                        // RWX：完全无路可走时也计入停滞，超阈值直接作废路径点，避免每 500 冷却无限重试。
+                        this.rwxStuckTimer += f;
+                        if (this.rwxStuckTimer > RWX_STUCK_LIMIT) {
+                            rwxAbandonStuckWaypoint();
+                            return;
+                        }
                     }
                     if (this.repathCooldown == 0.0f && (isAirborne() || useVelocityExtendedRange())) {
                         float fM = m() - 1.0f;
@@ -3783,6 +3843,45 @@ public abstract class OrderableUnit extends UnitBase {
         advanceWaypoint();
     }
 
+    // RWX：作废「走不过去」的当前路径点，并连带丢掉后面指向同一片区域的移动行动。
+    // 只动移动类命令，build/attack/reclaim 等原地可执行的命令保留，让单位当场恢复干活。
+    private void rwxAbandonStuckWaypoint() {
+        UnitCommand unitCommand = getCurrentWaypoint();
+        this.rwxStuckTimer = 0.0f;
+        this.rwxStuckSampled = false;
+        if (unitCommand == null) {
+            return;
+        }
+        float stuckTargetX = unitCommand.getTargetX();
+        float stuckTargetY = unitCommand.getTargetY();
+        this.aU = null;
+        this.pathPositionProvider = null;
+        clearPathData();
+        this.isPathingActive = false;
+        this.repathCooldown = 0.0f;
+        if (RW_PATH_STATS) {
+            rwUnreachableCancels++;
+            // 调试期每次弃点都打一行，方便确认检测点真的被走到；正式用可改回取模。
+            GameEngine.log("RWX_PATHSTATS stuckWaypointCancels=" + rwUnreachableCancels + " at tick=" + GameEngine.getInstance().currentTick + " type=" + unitCommand.commandType);
+        }
+        advanceWaypointWithTransportedUnits();
+        for (int guard = 0; guard < 8; guard++) {
+            UnitCommand next = getCurrentWaypoint();
+            if (next == null) {
+                break;
+            }
+            if (next.commandType != UnitCommandType.move && next.commandType != UnitCommandType.attackMove && next.commandType != UnitCommandType.patrol) {
+                break;
+            }
+            float dx = next.getTargetX() - stuckTargetX;
+            float dy = next.getTargetY() - stuckTargetY;
+            if (dx * dx + dy * dy > 160000.0f) {
+                break;
+            }
+            advanceWaypointWithTransportedUnits();
+        }
+    }
+
     /* JADX INFO: renamed from: ay */
     public void advanceWaypoint() {
         this.wayPointTimer = 0.0f;
@@ -3828,6 +3927,22 @@ public abstract class OrderableUnit extends UnitBase {
 
     /* JADX INFO: renamed from: az */
     public void clearAllWaypoints() {
+        // RWX：模组行动（WaypointAction）加的路径点带 isForceMove 标记。
+        // 只保护「队首」那一个——模组用 addWaypoint_prepend 前插，队首就是它这次要执行的点。
+        // 后面堆积的旧点必须清掉：否则模组每行动一次就前插一个，AI 永远拿不回指挥权，
+        // 单位被一堆随机偏移点永久钉住（MC 模组 1043 处 addWaypoint，实测会锁死建造）。
+        UnitCommand rwxHead = this.waypointCount > 0 ? this.waypoints[0] : null;
+        boolean rwxKeepHead = rwxHead != null && rwxHead.isForceMove;
+        if (rwxKeepHead) {
+            for (int rk2 = this.waypointCount - 1; rk2 >= 1; rk2--) {
+                removeWaypointAt(rk2);
+            }
+            if (this.waypointCount <= 1) {
+                this.wayPointTimer = 0.0f;
+                this.waypointDwellTimer = 0.0f;
+            }
+            return;
+        }
         int i = this.waypointCount;
         if (this.waypointCount > 0) {
             onCurrentWaypointRemoved(this.waypoints[0]);
@@ -3852,9 +3967,17 @@ public abstract class OrderableUnit extends UnitBase {
 
     /* JADX INFO: renamed from: aA */
     public void removeNonBuildRepairWaypoints() {
-        for (int i = 0; i < this.waypointCount; i++) {
+        // RWX：倒序删，避免删掉一项后后面的元素前移导致漏删。
+        // 队首若是模组行动加的点就留着（模组前插的那一个），其余非 build/repair 一律清。
+        for (int i = this.waypointCount - 1; i >= 0; i--) {
             UnitCommand unitCommand = this.waypoints[i];
-            if (unitCommand != null && unitCommand.commandType != UnitCommandType.build && unitCommand.commandType != UnitCommandType.repair) {
+            if (unitCommand == null) {
+                continue;
+            }
+            if (i == 0 && unitCommand.isForceMove) {
+                continue;
+            }
+            if (unitCommand.commandType != UnitCommandType.build && unitCommand.commandType != UnitCommandType.repair) {
                 removeWaypointAt(i);
             }
         }
@@ -3993,6 +4116,9 @@ public abstract class OrderableUnit extends UnitBase {
 
     /* JADX INFO: renamed from: aH */
     public void clearPathData() {
+        // RWX：activePathCount 归零时 provider 若还挂着，getPathPositionAt 会先问 provider——
+        // 它里面的游标是旧路径的，会算出越界位置；provider 持有的 Path 也随时可能被复用，一并断开
+        this.pathPositionProvider = null;
         this.activePathCount = 0;
         this.isPathIncomplete = false;
         this.totalPathPositions = 0;
@@ -4083,6 +4209,21 @@ public abstract class OrderableUnit extends UnitBase {
         GameEngine gameEngine = GameEngine.getInstance();
         PathEngine pathEngine = gameEngine.pathfindingEngine;
         TileMap tileMap = gameEngine.tileMap;
+        // RWX：所有寻路请求的唯一出口。目标可能在图外（追到地图外的敌人、编队槽位外扩、
+        // AI 共享临时点、玩家点的黑边）。原版会让 Path 静默钳到边缘列，单位就一路开到边界停住。
+        // 这里先钳进图内半格再交给求解器，越界情况记一次日志。
+        {
+            float rwxLimX = tileMap.getWorldWidth();
+            float rwxLimY = tileMap.getWorldHeight();
+            float rwxOx = f;
+            float rwxOy = f2;
+            if (rwxLimX > 0.0f) { f = f < 0.0f ? 0.0f : (f > rwxLimX - 1.0f ? rwxLimX - 1.0f : f); }
+            if (rwxLimY > 0.0f) { f2 = f2 < 0.0f ? 0.0f : (f2 > rwxLimY - 1.0f ? rwxLimY - 1.0f : f2); }
+            if ((f != rwxOx || f2 != rwxOy) && RWX_TARGET_CLAMP_N < 20) {
+                RWX_TARGET_CLAMP_N++;
+                io.github.rwx.probe.RwxPerf.out("RWX_TARGET_CLAMP " + rwxOx + "," + rwxOy + " -> " + f + "," + f2 + " type=" + getMovementType());
+            }
+        }
         this.isMoving = true;
         boolean z3 = false;
         boolean z4 = false;
@@ -4198,6 +4339,34 @@ public abstract class OrderableUnit extends UnitBase {
         if (L && i > 2) {
             i = 2;
         }
+        // RWX：发起前先做 O(1) 地形组预判——确认「没有任何可通行的地形抵达目的地」就干脆不去麻烦求解器，
+        // 直接走与消费端同款的两级反应：第 1~3 次只记账（换目标会清零），第 4 次取消这个路径点。
+        // 预判和求解器的孤岛判定读同一份静态分组表，各端一致，锁步安全。
+        tileMap.setCursorTileIndexFromWorldPoint(f, f2);
+        if (pathEngine.isEndOnSeparateIsland(getMovementType(), i2, i3, tileMap.cursorTileX, tileMap.cursorTileY, i)) {
+            this.pathRetryCount = (byte) (this.pathRetryCount + 1);
+            if (this.pathRetryCount > 3) {
+                if (RW_PATH_STATS) {
+                    rwUnreachableCancels++;
+                    if (rwUnreachableCancels % 50 == 1) {
+                        GameEngine.log("RWX_PATHSTATS unreachableCancels=" + rwUnreachableCancels);
+                    }
+                }
+                this.aU = null;
+                this.pathPositionProvider = null;
+                clearPathData();
+                this.isPathingActive = false;
+                advanceWaypoint();
+                return;
+            }
+            // 没到取消的门槛：不排求解器，让单位停在原地等下一次冷却再试
+            this.isPathIncomplete = false;
+            this.activePathCount = 0;
+            this.totalPathPositions = 0;
+            this.pathPositionProvider = null;
+            this.aU = null;
+            return;
+        }
         this.aU = createPathToTarget(f, f2, i, z, true, z2);
     }
 
@@ -4284,6 +4453,49 @@ public abstract class OrderableUnit extends UnitBase {
                             this.activePathCount++;
                         }
                         setPathPosition(this.activePathCount - 1, this.lastPathTargetX, this.lastPathTargetY);
+                    }
+                }
+                // RWX：终点落在图边 = 典型「奔边界」。记下真实目标与末点，用来分辨是目标本身在边界，
+                // 还是求解器把终点搬到了边界（fake-end）。mapSize 一并记，防止钳制范围算错。
+                if (!this.isPathIncomplete && this.activePathCount > 0 && RWX_EDGE_PATH_N < 30) {
+                    PositionData rwxLast = this.pathPositions[this.activePathCount - 1];
+                    if (rwxLast != null) {
+                        int rwxLTX = (int) (rwxLast.posX * tileMap.tileScaleX);
+                        int rwxLTY = (int) (rwxLast.posY * tileMap.tileScaleY);
+                        boolean rwxOnEdge = rwxLTX <= 1 || rwxLTY <= 1 || rwxLTX >= tileMap.tileCountX - 2 || rwxLTY >= tileMap.tileCountY - 2;
+                        if (rwxOnEdge) {
+                            tileMap.setCursorTileIndexFromWorldPoint(this.lastPathTargetX, this.lastPathTargetY);
+                            boolean rwxTargetOnEdge = tileMap.cursorTileX <= 1 || tileMap.cursorTileY <= 1 || tileMap.cursorTileX >= tileMap.tileCountX - 2 || tileMap.cursorTileY >= tileMap.tileCountY - 2;
+                            if (!rwxTargetOnEdge) {
+                                RWX_EDGE_PATH_N++;
+                                io.github.rwx.probe.RwxPerf.out("RWX_EDGE_PATH unit=" + (r() == null ? "?" : r().getUnitTypeDescriptionShort()) + " type=" + getMovementType() + " target=" + (int) this.lastPathTargetX + "," + (int) this.lastPathTargetY + " lastTile=" + rwxLTX + "," + rwxLTY + " map=" + tileMap.tileCountX + "x" + tileMap.tileCountY + " nodes=" + this.activePathCount + " unreachable=" + this.aU.endUnreachable);
+                            }
+                        }
+                    }
+                }
+                // RWX：寻路器确认「没有任何可通行的地形能抵达目标」时不再走向最近可达点空转。
+                // 每确认一次加一次 pathRetryCount（换目标时 requestPathToTarget 会清零，不影响重试新目的地）；
+                // 第 4 次确认仍不可达就取消这个路径点——与 1869 行既有的放弃行为同款。
+                if (this.aU.endUnreachable && !this.isPathIncomplete) {
+                    this.pathRetryCount = (byte) (this.pathRetryCount + 1);
+                    if (this.pathRetryCount > 3) {
+                        if (RW_PATH_STATS) {
+                            rwUnreachableCancels++;
+                            if (rwUnreachableCancels % 50 == 1) {
+                                GameEngine.log("RWX_PATHSTATS unreachableCancels=" + rwUnreachableCancels);
+                            }
+                        }
+                        this.aU = null;
+                        // provider 里存着 Path 的引用，Path 会被还回对象池复用，必须断开
+                        this.pathPositionProvider = null;
+                        clearPathData();
+                        this.isPathingActive = false;
+                        // RWX：不再丢弃路径点。否则单位停在最近可达点后命令直接消失，
+                        // 看起来就是「死死卡在岸边」。保留命令，隔 10 秒再试一次。
+                        if (this.repathCooldown < 10.0f) {
+                            this.repathCooldown = 10.0f;
+                        }
+                        return;
                     }
                 }
                 this.aU = null;

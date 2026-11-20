@@ -26,3 +26,6 @@ include(":mod-tools")
 include(":slick2d-lwjgl3")
 include(":desktop")
 include(":android")
+
+// 大叔加的台架模块，不属于上游：可控刷兵，仅用于性能基准
+include(":bench-mod")

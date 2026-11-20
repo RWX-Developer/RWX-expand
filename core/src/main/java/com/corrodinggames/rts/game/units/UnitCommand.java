@@ -162,6 +162,12 @@ public final class UnitCommand {
         return this.commandType;
     }
 
+    /* RWX: 阵型偏移 —— 只改目标坐标，不动命令类型、队列标记和运输目标 */
+    public void rwxSetFormationOffset(float f, float f2) {
+        this.targetX = f;
+        this.targetY = f2;
+    }
+
     /* JADX INFO: renamed from: e */
     public void resetCommand() {
         this.commandType = UnitCommandType.move;
@@ -207,7 +213,28 @@ public final class UnitCommand {
     }
 
     /* JADX INFO: renamed from: a */
+    // RWX：命令目标从入口就没有钳制。玩家点在地图外的黑边、编队槽位外扩、AI 的共享临时点
+    // 都可能把图外坐标塞进来；Path 那边只是静默钳到边缘列，于是单位「直奔游戏边界然后停住」。
+    // 在这里统一钳进图内（留半格余量），并把原始值记进日志供取证。
+    private static int RWX_CMD_CLAMP_N = 0;
+    private static float rwxClampX(float x, float y, boolean isX) {
+        com.corrodinggames.rts.gameFramework.GameEngine ge = com.corrodinggames.rts.gameFramework.GameEngine.getInstance();
+        if (ge == null || ge.tileMap == null) { return x; }
+        float lim = isX ? ge.tileMap.getWorldWidth() : ge.tileMap.getWorldHeight();
+        if (lim <= 0.0f) { return x; }
+        float v = isX ? x : y;
+        float c = v < 0.0f ? 0.0f : (v > lim - 1.0f ? lim - 1.0f : v);
+        if (c != v && RWX_CMD_CLAMP_N < 20) {
+            RWX_CMD_CLAMP_N++;
+            io.github.rwx.probe.RwxPerf.out("RWX_CMD_CLAMP " + (isX ? "x" : "y") + "=" + v + " -> " + c + " limit=" + lim + " target=" + x + "," + y);
+        }
+        return c;
+    }
     public void setMoveTarget(float f, float f2) {
+        float rwxOx = f;
+        float rwxOy = f2;
+        f = rwxClampX(rwxOx, rwxOy, true);
+        f2 = rwxClampX(rwxOx, rwxOy, false);
         resetCommand();
         this.commandType = UnitCommandType.move;
         this.targetX = f;
@@ -216,6 +243,10 @@ public final class UnitCommand {
 
     /* JADX INFO: renamed from: b */
     public void setAttackMoveTarget(float f, float f2) {
+        float rwxOx = f;
+        float rwxOy = f2;
+        f = rwxClampX(rwxOx, rwxOy, true);
+        f2 = rwxClampX(rwxOx, rwxOy, false);
         resetCommand();
         this.commandType = UnitCommandType.attackMove;
         this.targetX = f;

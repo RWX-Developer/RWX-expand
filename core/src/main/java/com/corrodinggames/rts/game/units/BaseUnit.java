@@ -72,6 +72,7 @@ public abstract class BaseUnit extends SizedObject {
             this.isHidden = false;
         }
         bE.remove(this);
+        com.corrodinggames.rts.game.PlayerTeam.rwxStructureChanged();
         a.b(this);
         GameEngine engine = GameEngine.getInstance();
         engine.unitSpatialIndex.a(this);
@@ -82,6 +83,7 @@ public abstract class BaseUnit extends SizedObject {
         if (!transaction.equals(this.pendingPortalTransfer)) return;
         this.pendingPortalTransfer = null;
         if (!bE.contains(this)) bE.add(this);
+        com.corrodinggames.rts.game.PlayerTeam.rwxStructureChanged();
         a.a(this);
         if (!this.isHidden && this.team != null) {
             this.team.teamStatistics.a(this);
@@ -94,6 +96,7 @@ public abstract class BaseUnit extends SizedObject {
         registerTransferObject();
         this.isHighlighted = true;
         bE.add(this);
+        com.corrodinggames.rts.game.PlayerTeam.rwxStructureChanged();
         a.a(this);
         PlayerTeam.c(this);
         GameEngine.getInstance().unitSpatialIndex.a(this);
@@ -110,6 +113,7 @@ public abstract class BaseUnit extends SizedObject {
         }
         this.pendingPortalTransfer = "disposed";
         bE.remove(this);
+        com.corrodinggames.rts.game.PlayerTeam.rwxStructureChanged();
         a.b(this);
         GameEngine engine = GameEngine.getInstance();
         engine.unitSpatialIndex.a(this);
@@ -503,6 +507,7 @@ public abstract class BaseUnit extends SizedObject {
         if (!z) {
             this.isHighlighted = true;
             bE.add(this);
+            com.corrodinggames.rts.game.PlayerTeam.rwxStructureChanged();
             a.a(this);
         }
         this.timeAliveStamp = GameEngine.getInstance().gameTimeMillis;
@@ -996,6 +1001,7 @@ public abstract class BaseUnit extends SizedObject {
         if (this.isDead) {
             GameEngine gameEngine = GameEngine.getInstance();
             bE.remove(this);
+            com.corrodinggames.rts.game.PlayerTeam.rwxStructureChanged();
             gameEngine.unitSpatialIndex.a(this);
         }
         super.a(gameInputStream);
@@ -1008,6 +1014,7 @@ public abstract class BaseUnit extends SizedObject {
         PlayerTeam.a(this);
         if (this.isHighlighted) {
             bE.remove(this);
+            com.corrodinggames.rts.game.PlayerTeam.rwxStructureChanged();
             a.b(this);
         }
         GameEngine.getInstance().gameUI.deselectUnit(this);
@@ -1739,6 +1746,7 @@ public abstract class BaseUnit extends SizedObject {
         gameEngine.gameUI.deselectUnit(this);
         PlayerTeam.a(this);
         if (bE.remove(this)) {
+            com.corrodinggames.rts.game.PlayerTeam.rwxStructureChanged();
         }
         this.isDead = true;
         this.unitCreationTime = gameEngine.gameTimeMillis;
@@ -1840,12 +1848,20 @@ public abstract class BaseUnit extends SizedObject {
         if (playerTeam == null) {
             throw new RuntimeException("Could not set team to null");
         }
+        if (this.team != playerTeam) {
+            // RWX：换队影响每队快照（俘获/转移）；同队重设不标脏
+            com.corrodinggames.rts.game.PlayerTeam.rwxStructureChanged();
+        }
         this.team = playerTeam;
     }
 
     /* JADX INFO: renamed from: Q */
     public final void setTeam(int i) throws MapLoadException {
         if (this.pendingPortalTransfer != null) return;
+        // RWX：下面先覆写 this.team，setUnitTeam 里的换队脏标记会比不出差异，这里先补一刀
+        if (this.team != PlayerTeam.k(i)) {
+            com.corrodinggames.rts.game.PlayerTeam.rwxStructureChanged();
+        }
         this.team = PlayerTeam.k(i);
         if (this.team == null) {
             throw new MapLoadException("Could not find team with id: " + i);

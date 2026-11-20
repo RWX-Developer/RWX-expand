@@ -6,6 +6,9 @@ import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -75,7 +78,16 @@ fun AppLoadingDialog(state: LoadingDialogUiState, enableAnimations: Boolean = tr
                     Text(state.title, style = MaterialTheme.typography.headlineSmall, color = palette.primary)
                     Text(state.message, color = palette.textSecondary,
                         modifier = Modifier.fillMaxWidth().weight(1f, fill = false).verticalScroll(rememberScrollState()))
-                    val progress = state.progress?.takeIf { it.isFinite() }?.coerceIn(0f, 1f)
+                    val rawProgress = state.progress?.takeIf { it.isFinite() }?.coerceIn(0f, 1f)
+                    // 同一个道理：让条子和百分比平滑地爬上去，不要一格一格闪。
+                    val dialogTarget = remember { mutableFloatStateOf(rawProgress ?: 0f) }
+                        if (rawProgress != null) {
+                            dialogTarget.floatValue = if (rawProgress < dialogTarget.floatValue - 0.05f) rawProgress else maxOf(dialogTarget.floatValue, rawProgress)
+                        }
+                    val progress = rawProgress?.let {
+                        if (!enableAnimations) it
+                        else animateFloatAsState(dialogTarget.floatValue, tween(220, easing = FastOutSlowInEasing), label = "loading-dialog-progress").value
+                    }
                     if (progress == null) {
                         CircularProgressIndicator(Modifier.size(40.dp).align(Alignment.CenterHorizontally).testTag("loading-indeterminate"), color = palette.primary)
                     } else {

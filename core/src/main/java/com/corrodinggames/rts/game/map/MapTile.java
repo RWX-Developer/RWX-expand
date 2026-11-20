@@ -39,6 +39,8 @@ public final class MapTile {
 
     /* JADX INFO: renamed from: f */
     public boolean isWaterBridge;
+    // RWX：浅水（shallowwater.png）——视觉上是水，但陆军也能踩过去
+    public boolean isShallowWater;
 
     /* JADX INFO: renamed from: g */
     public boolean isLava;
@@ -78,6 +80,7 @@ public final class MapTile {
         mapTile.tileset = this.tileset;
         mapTile.tilesetLocalIndex = this.tilesetLocalIndex;
         mapTile.isWater = this.isWater;
+        mapTile.isShallowWater = this.isShallowWater;
         mapTile.isWaterBridge = this.isWaterBridge;
         mapTile.isLava = this.isLava;
         mapTile.isCliff = this.isCliff;
@@ -253,6 +256,7 @@ public final class MapTile {
         if (mapTile.tileset != null && (str = mapTile.tileset.imageKey) != null) {
             if (mapTile.tilesetLocalIndex == 0 && str.equals("shallowwater.png")) {
                 i3 = 5;
+                mapTile.isShallowWater = true;
             }
             if (mapTile.tilesetLocalIndex == 0 && str.equals("deepwater.png")) {
                 i3 = 2;

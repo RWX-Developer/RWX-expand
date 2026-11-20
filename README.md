@@ -1,3 +1,17 @@
+# RWX-expand
+
+本仓库是 [yomi2539/RWX](https://github.com/yomi2539/RWX)（AGPL-3.0）的引擎级改版分支。
+上游代码与许可证原样保留；以下改动以 `RWX` 前缀标注在源码中：
+
+- **寻路质量**：始终启用的走廊式路径规划，对不可通行地形留出更大净空，路径中主动避开单位碰撞。
+- **AI 下令守卫**（可用环境变量 `RWX_AI_GUARD=0` 关闭）：目标不可达不下移动令；不向已死亡/非敌对/不可选中的目标下攻击令；
+  建造落点校验可达性与敌方火力密度（250px 内 ≥4 个能攻击的地面单位即拒建）。
+- **诊断设施**：`RwxPerf` / `RwxProbe` 性能与行为探针（`RWX_PROF=1` / `RWX_BAR=1` 开启），无头基准模式。
+- **地图边界修复**：AI 随机目标点钳制到地图范围内，修复部队集体往地图边缘跑的问题。
+
+构建：`gradle :desktop:packageUberJarForCurrentOS`（JDK 21+），产物在 `desktop/build/compose/jars/`。
+
+---
 <div style="text-align: center;">
 
 ![logo](logo.svg)

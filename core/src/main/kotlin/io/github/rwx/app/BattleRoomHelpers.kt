@@ -1,5 +1,6 @@
 package io.github.rwx.app
 
+import com.corrodinggames.rts.game.units.custom.CustomUnitConfig
 import com.corrodinggames.rts.gameFramework.GameEngine
 import com.corrodinggames.rts.gameFramework.network.GameRoomSettings
 import io.github.rwx.BATTLE_ROOM_AUTO_TEAM_VALUE
@@ -124,8 +125,12 @@ internal fun battleRoomOptionsForm(options: GameRoomSettings, maxPlayers: Int = 
                 label = I18n.battleroom.options.startingUnits(),
                 options = (1..5).map {
                     DialogFormOption(startingUnitsLabel(it), it.toString())
+                } + customStartingUnitValues().map {
+                    DialogFormOption(startingUnitsLabel(it), it.toString())
                 },
-                selectedIndex = (options.startingUnits - 1).coerceIn(0, 4),
+                selectedIndex = ((1..5).toList() + customStartingUnitValues())
+                    .indexOf(options.startingUnits)
+                    .coerceAtLeast(0),
             ),
             DialogFormField.Choice(
                 id = "fogMode",
@@ -210,7 +215,7 @@ internal fun playerConfigForm(
 private fun playerOverrideFields(player: BattleRoomPlayer, roomOptions: GameRoomSettings): List<DialogFormField> {
     val effectiveStartingUnits = player.startingUnitsOverride ?: roomOptions.startingUnits
     val effectiveAiDifficulty = player.aiDifficultyOverride ?: roomOptions.aiDifficulty
-    val startingUnitValues = (1..5).toList()
+    val startingUnitValues = (1..5).toList() + customStartingUnitValues()
     val aiDifficultyValues = listOf(-2, -1, 0, 1, 2, 3)
     return listOf(
         DialogFormField.Choice(
@@ -320,6 +325,24 @@ internal fun startingCreditsLabel(code: Int): String =
         8 -> "$200000"
         else -> "$999"
     }
+
+/**
+ * 模组自带的开局单位：解析期只把 [core] isPickableStartingUnit:true 的单位收进 configsById，
+ * 引擎按 startingUnits=100+序号 用 CustomUnitConfig.c(id) 生成。
+ * getAllCustomUnitTypeIds() 返回的正好是这批，界面以前只列 1..5。
+ */
+internal fun customStartingUnitValues(limit: Int = 200): List<Int> =
+    runCatching {
+        val ids = CustomUnitConfig.getAllCustomUnitTypeIds()
+        val out = ArrayList<Int>()
+        for (entry in ids) {
+            val id = (entry as? Int) ?: continue
+            if (CustomUnitConfig.c(id) == null) continue
+            out.add(id)
+            if (out.size >= limit) break
+        }
+        out
+    }.getOrDefault(emptyList())
 
 internal fun startingUnitsLabel(value: Int): String =
     when (value) {

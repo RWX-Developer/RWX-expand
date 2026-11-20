@@ -577,9 +577,7 @@ public abstract class UnitReference extends LogicBoolean implements Cloneable {
 
         @LogicBoolean.Parameter
         public void withinRange(float f) {
-            if (f > 1500.0f) {
-                throw new ConfigException("NearestUnit distance cannot be over 1500 is: " + f);
-            }
+            // RWX：老师要求拆掉 NearestUnit 的 1500 距离限制（同 withinRange>1000 那两处）；查询走空间索引矩形，代价由地图边界封顶
             this.withinRange = f;
             this.withinRangeSq = f * f;
         }

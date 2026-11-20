@@ -26,6 +26,12 @@ import io.github.rwx.ui.InGameMenuController
 import kotlinx.coroutines.CompletableDeferred
 import org.lwjgl.BufferUtils
 import org.lwjgl.opengl.GL11
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import javax.imageio.ImageIO
+import io.github.rwx.DesktopPlatformStorage
 import org.newdawn.slick.BasicGame
 import org.newdawn.slick.GameContainer
 import org.newdawn.slick.Graphics
@@ -74,7 +80,7 @@ object SlickGraphicsBinding {
     }
 }
 
-private const val SLICK_LAYER_REDRAW_BUDGET_MS = 2
+private const val SLICK_LAYER_REDRAW_BUDGET_MS = 4
 private val SLICK_TARGET_FPS_OVERRIDE: Int? =
     System.getenv("RWX_SLICK_TARGET_FPS")?.toIntOrNull()?.takeIf { it > 0 }
 
@@ -256,6 +262,21 @@ class SlickGame(
     private var latestFrameSnapshotSequence: Long = 0L
     private val pendingFrameSnapshotRequest = AtomicReference<CompletableFuture<SlickFrameSnapshot?>?>(null)
 
+    /** 剩下还要「合成后再读一次」的帧数；>0 时交换缓冲前会读回整帧。 */
+    private val compositedCaptureFrames = AtomicInteger(0)
+
+    /** 加载期间由 EDT 每帧续期：到期前把待重绘的图块全部排干，不等视野内那点预算。 */
+    private val urgentLayerDrainDeadlineNanos = java.util.concurrent.atomic.AtomicLong(0L)
+
+    @Volatile
+    private var screenshotRequested = false
+
+    private var readyDrainWaitFrames = 0
+
+    private var presentationHoldFrames = 0
+
+    private val lastSnapshotRefreshNanos = java.util.concurrent.atomic.AtomicLong(0L)
+
     override fun init(container: GameContainer) {
         GameEngine.screenSize = Point(initialWidth, initialHeight)
         SlickGraphicsBinding.bind(graphicsEngine)
@@ -269,9 +290,9 @@ class SlickGame(
         )
         resetSlickRenderCaches(activeEngine)
         if (activeEngine is GameLogic) {
-            activeEngine.worldFrameRenderedListener = Runnable {
-                captureFrameSnapshotAfterWorldRender(container)
-            }
+            // 快照改到交换缓冲前一刻再读：引擎回调触发时 HUD 和 Compose 覆盖层都还没画，
+            // 拿到的图永远少一层，主菜单背景的残影就是这么来的。
+            activeEngine.worldFrameRenderedListener = null
         }
         installNetworkCallbacks(activeEngine)
         activeEngine.colorizeLogMessage(view, false)
@@ -366,7 +387,10 @@ class SlickGame(
         } else if (gameLoopDriven) {
             activeEngine.gameLoop(legacySlickDeltaSpeed(deltaMillis), deltaMillis)
         }
-        if (shouldRenderSlickBackgroundLayerRedraw(gameLoopDriven)) {
+        // 地图还没被宣布就绪（加载中的那一段时间）就持续逼图块缓存排干；就绪之后立刻回到
+        // 正常的小预算，免得平时缩放平移也跟着排视野外的图块。
+        if (runningMapPath != null && readyNotifiedMapPath != runningMapPath) armUrgentLayerBufferDrain()
+        if (shouldRenderSlickBackgroundLayerRedraw(gameLoopDriven) || isUrgentLayerDrainActive()) {
             renderPendingLayerRedraws(activeEngine)
         }
         notifyReadyAfterVisibleFrames(activeEngine)
@@ -376,6 +400,7 @@ class SlickGame(
     }
 
     private fun drainPendingWork(activeEngine: GameEngine, container: GameContainer) {
+        pollScreenshotHotkeys(activeEngine)
         applyPendingInputEvents(activeEngine)
         applyPendingSize(activeEngine, container)
         applyPendingRequest(activeEngine)
@@ -386,10 +411,72 @@ class SlickGame(
     }
 
     private fun renderPendingLayerRedraws(activeEngine: GameEngine) {
+        val urgent = isUrgentLayerDrainActive()
         synchronized(activeEngine.gameStateLock) {
             if (!activeEngine.hasLoadedLevel || activeEngine.tileMap == null) return
-            TileMap.layerBufferManager.renderPendingRedraws(SLICK_LAYER_REDRAW_BUDGET_MS)
+            if (urgent) {
+                // 加载页留住画面的时候，视野外的图块也算「还没画好」；只排视野内的会一直卡着，
+                // 加载进度就停在 98% 不动，最后靠 15 秒超时兜底。这里把视野外的也一并排干。
+                TileMap.layerBufferManager.renderPendingRedraws(SLICK_LAYER_REDRAW_BUDGET_MS_LOADING)
+            } else {
+                TileMap.layerBufferManager.renderPendingRedraws(SLICK_LAYER_REDRAW_BUDGET_MS)
+            }
         }
+    }
+
+    /** 加载页每帧调用一次续期；离开加载页后 1 秒内自然失效，不会拖到战局里。 */
+    internal fun armUrgentLayerBufferDrain() {
+        val deadline = System.nanoTime() + SLICK_URGENT_DRAIN_REUSE_NANOS
+        while (true) {
+            val current = urgentLayerDrainDeadlineNanos.get()
+            if (current >= deadline) return
+            if (urgentLayerDrainDeadlineNanos.compareAndSet(current, deadline)) return
+        }
+    }
+
+    internal fun isUrgentLayerDrainActive(): Boolean = System.nanoTime() < urgentLayerDrainDeadlineNanos.get()
+
+    /** 画面交还给 Compose：加载期的排干压力到此为止，别把它带进战局。 */
+    internal fun clearUrgentLayerBufferDrain() {
+        urgentLayerDrainDeadlineNanos.set(0L)
+    }
+
+    /** 让接下来几帧在交换缓冲前多读一次合成结果（切屏、进战局时用，保证快照面板不是残影）。 */
+    internal fun armCompositedCapture(frames: Int = SLICK_CAPTURE_ARM_FRAMES) {
+        if (frames <= 0) return
+        compositedCaptureFrames.set(maxOf(compositedCaptureFrames.get(), frames))
+    }
+
+    /**
+     * 交换缓冲前问一句：这一帧能不能给玩家看。新地图没画完整就换缓冲，屏幕上就是
+     * 半张地图加残影，HUD 已经切过去了、画面还停在上一幕 —— 进战局不同步就是这个。
+     * 拦不住的时候宁可不换，屏幕继续显示上一帧，等首帧画好再一口气换过去。
+     */
+    /** 渲染线程问一句：这一帧可以呈现了吗（无引擎时默认可以）。 */
+    fun shouldSwapBuffers(): Boolean {
+        val activeEngine = engine ?: return true
+        return shouldSwapBuffers(activeEngine)
+    }
+
+    fun shouldSwapBuffers(activeEngine: GameEngine): Boolean {
+        val mapPath = runningMapPath
+        if (mapPath == null || !activeEngine.hasLoadedLevel) {
+            presentationHoldFrames = 0
+            return true
+        }
+        if (readyNotifiedMapPath == mapPath || presentationHoldFrames >= SLICK_PRESENTATION_HOLD_MAX_FRAMES) {
+            presentationHoldFrames = 0
+            return true
+        }
+        presentationHoldFrames += 1
+        armUrgentLayerBufferDrain()
+        return false
+    }
+
+    /** 截图请求：真正读像素在合成完的那一帧，见 [captureCompositedFrameSnapshot]。 */
+    fun requestScreenshot() {
+        screenshotRequested = true
+        armCompositedCapture(1)
     }
 
     private fun shouldDriveGameLoop(activeEngine: GameEngine): Boolean {
@@ -532,6 +619,7 @@ class SlickGame(
         }
 
     private fun beginRunningMap(mapPath: String?) {
+        presentationHoldFrames = 0
         runningMapPath = mapPath
         readyNotifiedMapPath = null
         renderedFramesForRunningMap = 0
@@ -758,12 +846,25 @@ class SlickGame(
         ) {
             return
         }
+        // 「就绪」不能只等一帧：图块缓存没排干就报 ready，Compose 会立刻切进战局，
+        // 玩家看到的第一帧是半张地图加残影，这是进战局画面不同步的主因之一。
+        // 先逼它排干，最多等 SLICK_READY_DRAIN_MAX_FRAMES 帧，超时照样放行，不会把进局卡死。
+        if (!layerBuffersSettled()) {
+            armUrgentLayerBufferDrain()
+            readyDrainWaitFrames += 1
+            if (readyDrainWaitFrames <= SLICK_READY_DRAIN_MAX_FRAMES) return
+            TileMap.layerBufferManager.renderVisiblePendingRedrawsNow()
+        }
+        readyDrainWaitFrames = 0
         renderedFramesForRunningMap += 1
         if (renderedFramesForRunningMap >= READY_FRAME_COUNT) {
             readyNotifiedMapPath = mapPath
             onMapReady(mapPath)
         }
     }
+
+    private fun layerBuffersSettled(): Boolean =
+        runCatching { !TileMap.layerBufferManager.hasVisiblePendingRedraws() }.getOrDefault(true)
 
     private fun updatePointerCursor(container: GameContainer, activeEngine: GameEngine) {
         val shouldApply = gameVisible &&
@@ -963,17 +1064,74 @@ class SlickGame(
         return didWork
     }
 
-    private fun captureFrameSnapshotAfterWorldRender(container: GameContainer) {
-        val request = pendingFrameSnapshotRequest.get()
-        if (request == null) {
-            return
+    /**
+     * 交换缓冲前读回整帧：世界、引擎自己的 HUD、以及 Compose 覆盖层都已经提交，
+     * 这份像素才等于屏幕上真正会出现的那一帧。快照面板、退出帧、截图三条路径共用它。
+     */
+    fun captureCompositedFrameSnapshot(container: GameContainer) {
+        val hasPendingRequest = pendingFrameSnapshotRequest.get() != null
+        val wantsScreenshot = screenshotRequested
+        val wantsRefresh = SlickCanvasHost.snapshotPanelActive && snapshotRefreshDue()
+        var armedFrames = compositedCaptureFrames.get()
+        var wantsArmed = false
+        while (armedFrames > 0) {
+            if (compositedCaptureFrames.compareAndSet(armedFrames, armedFrames - 1)) {
+                wantsArmed = true
+                break
+            }
+            armedFrames = compositedCaptureFrames.get()
         }
-        if (runningMapPath == null || (!runningMenuBackground && !gameVisible)) {
-            request?.let { completeFrameSnapshotRequest(it, latestFrameSnapshot) }
-            return
+        if (!hasPendingRequest && !wantsScreenshot && !wantsRefresh && !wantsArmed) return
+        val snapshot = captureFrameSnapshot(container) ?: return
+        pendingFrameSnapshotRequest.get()?.let { completeFrameSnapshotRequest(it, snapshot) }
+        if (wantsScreenshot) {
+            screenshotRequested = false
+            saveScreenshot(snapshot)
         }
-        val snapshot = captureFrameSnapshot(container) ?: latestFrameSnapshot
-        request?.let { completeFrameSnapshotRequest(it, snapshot) }
+    }
+
+    private fun snapshotRefreshDue(): Boolean {
+        val now = System.nanoTime()
+        val last = lastSnapshotRefreshNanos.get()
+        if (now - last < SNAPSHOT_REFRESH_MIN_INTERVAL_NANOS) return false
+        return lastSnapshotRefreshNanos.compareAndSet(last, now)
+    }
+
+    private fun pollScreenshotHotkeys(activeEngine: GameEngine) {
+        val controller = activeEngine.inputController ?: return
+        // 引擎里原本挂了两条绑定（CTRL+SHIFT+ALT+S / +D），代码从来没轮询过，等于没实现。
+        val requested = runCatching {
+            controller.ae?.a() == true || controller.af?.a() == true
+        }.getOrDefault(false)
+        if (requested) requestScreenshot()
+    }
+
+    /** 截图落盘：PNG 写到根目录的 screenshots/，编码丢给后台线程，不卡渲染帧。 */
+    private fun saveScreenshot(snapshot: SlickFrameSnapshot) {
+        val pixels = snapshot.pixels
+        val width = snapshot.width
+        val height = snapshot.height
+        val name = "rwx-" + screenshotStampFormat.format(Date()) + "-" + width + "x" + height + ".png"
+        val out = File(screenshotDirectory, name)
+        Thread({
+            val result = runCatching {
+                val image = java.awt.image.BufferedImage(width, height, java.awt.image.BufferedImage.TYPE_INT_RGB)
+                image.setRGB(0, 0, width, height, pixels, 0, width)
+                screenshotDirectory.mkdirs()
+                if (!ImageIO.write(image, "png", out)) error("PNG writer unavailable")
+                Unit
+            }
+            result.onSuccess {
+                println("RWX_SCREENSHOT:" + out.absolutePath)
+                System.out.flush()
+                GameEngine.addUIMessage(null, "截图已保存: " + out.name)
+            }.onFailure { error ->
+                logger.warn(error) { "Failed to write Slick screenshot" }
+                println("RWX_SCREENSHOT_FAILED:" + error.message)
+                System.out.flush()
+                GameEngine.addUIMessage(null, "截图保存失败: " + (error.message ?: error.javaClass.simpleName))
+            }
+        }, "rwx-screenshot").start()
     }
 
     private fun resetFrameSnapshot() {
@@ -1223,6 +1381,27 @@ class SlickGame(
     private companion object {
         const val SLICK_KEY_COUNT = 224
         const val READY_FRAME_COUNT = 1
+
+        /** 加载期间一次排干图块缓存的时间预算；正常帧只用 [SLICK_LAYER_REDRAW_BUDGET_MS]。 */
+        const val SLICK_LAYER_REDRAW_BUDGET_MS_LOADING = 40
+
+        /** 快照面板可见时读回整帧的最小间隔，约 30 帧每秒。 */
+        const val SNAPSHOT_REFRESH_MIN_INTERVAL_NANOS = 32_000_000L
+
+        const val SLICK_CAPTURE_ARM_FRAMES = 3
+
+        /** 等待图块缓存排干的上限帧数。 */
+        const val SLICK_READY_DRAIN_MAX_FRAMES = 90
+
+        /** 首帧没画好之前最多压住交换缓冲多少帧，超时照常放行，不会把画面冻死。 */
+        const val SLICK_PRESENTATION_HOLD_MAX_FRAMES = 3
+
+        /** 加载排干预算的续期窗口。 */
+        const val SLICK_URGENT_DRAIN_REUSE_NANOS = 1_000_000_000L
+
+        val screenshotStampFormat = SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.ROOT)
+
+        val screenshotDirectory: File by lazy { File(DesktopPlatformStorage.defaultRoot(), "screenshots") }
     }
 }
 

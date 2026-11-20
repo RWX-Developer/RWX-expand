@@ -36,6 +36,17 @@ value class Tag(val value: String) {
     init {
         requireLocalId(value, "Tag")
     }
+
+    companion object {
+        /**
+         * 非抛异常版校验：本地 INI 模组里大量 tag 是中文等自由文本，逐个走构造器校验
+         * 等于每命中一次就 fillInStackTrace 一次（run7 实测 60 秒 11664 次）。
+         * 需要「解析所有 tag、跳过不合法」的调用方用它；手写的字面量仍走构造器立即报错。
+         */
+        @JvmStatic
+        fun ofOrNull(value: String): Tag? =
+            if (value.matches(LOCAL_ID_PATTERN)) Tag(value) else null
+    }
 }
 
 @JvmInline

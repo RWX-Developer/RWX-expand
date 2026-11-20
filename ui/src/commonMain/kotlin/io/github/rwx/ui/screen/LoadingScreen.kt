@@ -1,5 +1,8 @@
 package io.github.rwx.ui.screen
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -8,6 +11,9 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -21,7 +27,16 @@ import io.github.rwx.ui.theme.Spacing
 @Composable
 fun LoadingScreen(state: LoadingUiState) {
     val scheme = LocalColorScheme.current
-    val progress = state.progress
+    val rawProgress = state.progress
+    // 引擎的进度是「完成了几个步骤」，会一格一格地跳；补间一下，加载页就不会一顿一顿的。
+    val targetProgress = remember { mutableFloatStateOf(rawProgress ?: 0f) }
+        if (rawProgress != null) {
+            // 只往上爬；新一局从 0 开始时直接对齐，不然条子会卡在上一局的尾巴上。
+            targetProgress.floatValue = if (rawProgress < targetProgress.floatValue - 0.05f) rawProgress else maxOf(targetProgress.floatValue, rawProgress)
+        }
+    val progress = rawProgress?.let {
+        animateFloatAsState(targetProgress.floatValue, tween(220, easing = FastOutSlowInEasing), label = "loading-progress").value
+    }
     BoxWithConstraints(Modifier.fillMaxSize().background(scheme.palette.surfaceBase).testTag("startup-loading")) {
         val compact = maxHeight < Layout.compactHeightBreakpoint
         val showHeader = maxHeight >= 320.dp

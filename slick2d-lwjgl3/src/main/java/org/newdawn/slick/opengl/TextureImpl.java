@@ -164,8 +164,11 @@ public class TextureImpl implements Texture {
     /**
      * @see org.newdawn.slick.opengl.Texture#bind()
      */
+    public static long realBinds = 0L;
+
     public void bind() {
         if (lastBind != this) {
+            realBinds++;
             lastBind = this;
             GL.glEnable(SGL.GL_TEXTURE_2D);
             GL.glBindTexture(target, textureID);

@@ -132,7 +132,29 @@ public class GameSaver {
         }
         if (!FileHelper.renameFileInternal(fileIsAutosaveEnabled2, fileIsAutosaveEnabled)) {
             GameEngine.log("Failed to rename to final file");
-            throw new IOException("Failed to rename to final file. Check file permissions of storage.");
+            // RWX: Windows 上目标被杀软/索引器短暂占用时 renameTo 会失败。
+            // 依次尝试：删掉目标再改名 -> 直接拷贝内容（只需读 tmp、写目标）。
+            boolean zRenamed = fileIsAutosaveEnabled.exists()
+                    && FileHelper.deleteDirectory(fileIsAutosaveEnabled)
+                    && FileHelper.renameFileInternal(fileIsAutosaveEnabled2, fileIsAutosaveEnabled);
+            if (!zRenamed) {
+                try {
+                    copyFileTo(fileIsAutosaveEnabled2, fileIsAutosaveEnabled);
+                    FileHelper.deleteDirectory(fileIsAutosaveEnabled2);
+                    zRenamed = true;
+                } catch (IOException e3) {
+                    GameEngine.log("Save copy fallback failed: " + e3.getMessage());
+                }
+            }
+            if (!zRenamed) {
+                if (z) {
+                    // RWX: 自动保存失败绝不能打断游戏循环——IOException 冒泡会让整局退回主菜单（2026-11-16 16:45 事故）
+                    FileHelper.deleteDirectory(fileIsAutosaveEnabled2);
+                    gameEngine.gameUI.warLogDisplay.logMessage("Auto Save failed", 1000);
+                    return;
+                }
+                throw new IOException("Failed to rename to final file. Check file permissions of storage.");
+            }
         }
         FileHelper.scanFile(fileIsAutosaveEnabled);
         z2 = true;
@@ -142,6 +164,25 @@ public class GameSaver {
             } else {
                 gameEngine.gameUI.messageManager.addMessage((String) null, "Game saved");
             }
+        }
+    }
+
+    /* RWX: 兜底拷贝（改名被占用时保住存档） */
+    private static void copyFileTo(File fileFrom, File fileTo) throws IOException {
+        InputStream inputStream = new FileInputStream(fileFrom);
+        try {
+            OutputStream outputStream = new FileOutputStream(fileTo);
+            try {
+                byte[] buffer = new byte[65536];
+                int n;
+                while ((n = inputStream.read(buffer)) > 0) {
+                    outputStream.write(buffer, 0, n);
+                }
+            } finally {
+                outputStream.close();
+            }
+        } finally {
+            inputStream.close();
         }
     }
 

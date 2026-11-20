@@ -42,6 +42,10 @@ public final class PathSolver implements Runnable {
     final PathPoint q = new PathPoint();
     final PathPoint r = new PathPoint();
     public volatile boolean s = true;
+    // RWX：RWX_PATH_STATS=1 时每 100 次不可达汇总一行（走法与 DRAW_STATS 一致，默认零开销）
+    static final boolean PATH_STATS = System.getenv("RWX_PATH_STATS") != null;
+    static int unreachableCount = 0;
+    static int solvedCount = 0;
     Object x = new Object();
     Object A = new Object();
     Paint B = new Paint();
@@ -98,6 +102,9 @@ public final class PathSolver implements Runnable {
             linkedListE = t;
         } else {
             linkedListE = e();
+            if (PATH_STATS) {
+                solvedCount++;
+            }
         }
         synchronized (this.C.G) {
             this.D.f();
@@ -251,6 +258,13 @@ public final class PathSolver implements Runnable {
         return (iAbs == 4 || iAbs == 5) ? 0 : 25;
     }
 
+    // RWX：假终点（求解器自己选的「最近可达点」）离真目标超过这么多格，就不再开过去。
+    // 触发场景：运输船装了陆军后被派到岸边/陆地上，WATER 图上陆地全 -1，全图扫描把终点
+    // 丢到地图边缘，船一路开到边界停住。宁可原地等冷却，也不要横穿全图。
+    private static final int RWX_FAKE_END_MAX_TILES = 16;
+    // RWX：clearance 惩罚倍数（越大越远离障碍；1=原版）
+    private static final int RWX_CLEARANCE_WEIGHT = 6;
+    private static int RWX_FAKEEND_LOG_N = 0;
     public LinkedList e() {
         short s;
         int n;
@@ -281,6 +295,8 @@ public final class PathSolver implements Runnable {
         int n10 = path.endTileY;
         short s5 = path.n;
         LinkedList linkedList = new LinkedList();
+        // RWX：本次尝试重置不可达标记（超时重排队后可能地形已通，不能沿用上次的结论）
+        path.endUnreachable = false;
         if (s3 == n9 && s4 == n10) {
             if (PathEngine.a) {
                 Log.d("RustedWarfare", "no point pathing when start=end");
@@ -321,6 +337,9 @@ public final class PathSolver implements Runnable {
                 if (PathEngine.a) {
                     Log.d("RustedWarfare", "end is blocked on isolated groups");
                 }
+                // RWX：目标落在另一个孤立地形组 = 这个 movementType 没有任何地形能抵达目的地，
+                // 下面只是「走到最近的地方」，不是真的到了。标记出来让单位别再无限重寻路。
+                path.endUnreachable = true;
                 n14 = n12;
                 n3 = n13;
                 float f2 = -1.0f;
@@ -367,6 +386,8 @@ public final class PathSolver implements Runnable {
             }
         }
         if (bl2) {
+            // RWX：目标半径内一格都过不去（同上，走的是最近可达点，不是目的地）
+            path.endUnreachable = true;
             n5 = n12;
             n4 = n13;
             float f = -1.0f;
@@ -406,6 +427,20 @@ public final class PathSolver implements Runnable {
         }
         if (PathEngine.a && (n12 != n9 || n13 != n10)) {
             Log.d("RustedWarfare", "Moved end to fakeEndX:" + n12 + " fakeEndY:" + n13);
+        }
+        // RWX：假终点离真目标太远 = 这个 movementType 根本到不了目的地。
+        // 原来会一路开到那个「最近可达点」（常常是地图边界），到了再停住，看起来就是船自己跑去撞墙。
+        if (n12 != n9 || n13 != n10) {
+            int rwxDx = n12 - n9;
+            int rwxDy = n13 - n10;
+            if (rwxDx * rwxDx + rwxDy * rwxDy > RWX_FAKE_END_MAX_TILES * RWX_FAKE_END_MAX_TILES) {
+                if (RWX_FAKEEND_LOG_N < 20) {
+                    RWX_FAKEEND_LOG_N++;
+                    io.github.rwx.probe.RwxPerf.out("RWX_FAKEEND abandon dist=" + (int) Math.sqrt((double) (rwxDx * rwxDx + rwxDy * rwxDy)) + " realEnd=" + n9 + "," + n10 + " fakeEnd=" + n12 + "," + n13 + " type=" + path.movementType);
+                }
+                linkedList.clear();
+                return linkedList;
+            }
         }
         this.o.a(n12, n13);
         this.o.a(0, s3, s4);
@@ -578,7 +613,11 @@ public final class PathSolver implements Runnable {
                     }
                 }
                 if (this.f != null) {
-                    n19 += (4 - this.f[pathPoint.tileX * s2 + pathPoint.tileY]) * n6;
+                    // RWX：老师要求「离不可通行地形远一些」——clearance 0..4（4=离障≥4格）。
+                    // 原来权重 n6(1或7)，贴墙格只比开阔格贵一点，A* 会贴着障碍走。这里放大：
+                    // 贴墙(0) = +base*4，离1格 = +base*3 … 开阔(4) = 0。
+                    int rwxClear = this.f[pathPoint.tileX * s2 + pathPoint.tileY];
+                    n19 += (4 - rwxClear) * n6 * RWX_CLEARANCE_WEIGHT;
                 }
                 if (n7 > 0 && this.f != null && (by6 = this.f[pathPoint.tileX * s2 + pathPoint.tileY]) <= n7) {
                     n19 += 100;
@@ -597,6 +636,16 @@ public final class PathSolver implements Runnable {
         }
         long l = System.currentTimeMillis();
         if (!bl2) {
+            // RWX：open list 双双耗尽都没碰上——这个 movementType 没有任何地形能到目标。
+            if (!path.endUnreachable) {
+                path.endUnreachable = true;
+                if (PATH_STATS) {
+                    unreachableCount++;
+                    if (unreachableCount % 100 == 1) {
+                        Log.a("RustedWarfare", "RWX_PATHSTATS unreachable=" + unreachableCount + " solved=" + solvedCount);
+                    }
+                }
+            }
             if (PathEngine.a) {
                 Log.d("RustedWarfare", "could not find end node");
             }

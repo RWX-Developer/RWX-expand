@@ -312,7 +312,9 @@ public class GameLogic extends GameEngine {
         if (isSpaceGame() && getClass().equals(GameLogic.class)) {
             throw new RuntimeException("inSpace but class is:" + getClass());
         }
-        System.gc();
+        if (GameEngine.isAndroidPlatform()) {
+            System.gc();
+        }
         loadLevel("Asset Index");
         this.assetIndex = new AssetIndex();
         long jA = PerformanceProfiler.a();
@@ -529,7 +531,9 @@ public class GameLogic extends GameEngine {
         this.z = new Paint();
         this.z.a(50, 255, 255, 255);
         onInitialContentLoaded();
-        System.gc();
+        if (GameEngine.isAndroidPlatform()) {
+            System.gc();
+        }
         this.isInitialized = true;
         GameEngine.log("Init completed");
         PerformanceProfiler.a("Loading took:", jA);
@@ -618,7 +622,11 @@ public class GameLogic extends GameEngine {
         resetGame(z2);
         PlayerTeam.syncAllTeamUnitCaps();
         this.isGameRecording = false;
-        System.gc();
+        // RWX: 桌面端跳过这次全量 GC。243 MB 的 MOD 贴图堆上，一次 full GC 就是几百毫秒到
+        // 一秒的纯停顿，正好落在「点进地图」那一刻。Android 保留原行为。
+        if (GameEngine.isAndroidPlatform()) {
+            System.gc();
+        }
         this.fullReload = true;
         this.hasLoadedLevel = false;
         this.isShowingDialog = false;
@@ -947,8 +955,12 @@ public class GameLogic extends GameEngine {
                 this.settingsEngine.hasPlayedGameOrSeenHelp = true;
                 this.settingsEngine.save();
             }
-            for (int i12 = 0; i12 < 5; i12++) {
-                System.gc();
+            // RWX: 开局连调 5 次 full GC，桌面上每次都是几百毫秒的硬停顿，合起来就是
+            // 「进地图后卡一大截」的主因。Android 上这是低内存设备的回收手段，保留。
+            if (GameEngine.isAndroidPlatform()) {
+                for (int i12 = 0; i12 < 5; i12++) {
+                    System.gc();
+                }
             }
             if (!GameEngine.isNonAndroidVersion) {
                 Log.a("RustedWarfare", "getNativeHeapSize" + String.valueOf(Debug.getNativeHeapSize()));
@@ -1470,6 +1482,7 @@ public class GameLogic extends GameEngine {
 
     /* JADX INFO: renamed from: a */
     public void update(float deltaSpeed) throws IOException {
+        long rwxT = io.github.rwx.probe.RwxPerf.beginFrame();
         if (isInNetworkOrReplay() && deltaSpeed < 0.1f) {
             NetworkEngine.reportDesync("updateAllGame1: deltaSpeed:" + deltaSpeed + " frame:" + this.currentTick + " network.currentStepRate:" + this.networkEngine.getCurrentStepRate());
         }
@@ -1479,27 +1492,29 @@ public class GameLogic extends GameEngine {
         float f = deltaSpeed * this.speedMultiplier;
         this.I = f + 2.0f;
         this.lastDelta = f;
-        this.networkEngine.update(f);
+        { long t0 = io.github.rwx.probe.RwxPerf.now(); this.networkEngine.update(f); io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.C_NET, t0); }
         int timeBeforeOutcomeFence = this.gameTimeMillis;
         boolean hadOutcomeFence = this.missionEngine != null && this.missionEngine.linkedWorldState != null
                 && this.missionEngine.linkedWorldState.isOutcomeFenced();
         this.gameTimeMillis = (int) (this.gameTimeMillis + (f * 16.666666f));
-        if (!hadOutcomeFence) CommandQueue.drain();
-        this.commandController.executeAllCommands();
-        this.replayEngine.update(f);
+        { long t0 = io.github.rwx.probe.RwxPerf.now(); if (!hadOutcomeFence) CommandQueue.drain(); io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.C_DRAIN, t0); }
+        { long t0 = io.github.rwx.probe.RwxPerf.now(); this.commandController.executeAllCommands(); io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.C_EXEC, t0); }
+        { long t0 = io.github.rwx.probe.RwxPerf.now(); this.replayEngine.update(f); io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.C_REPLAY, t0); }
         this.currentTick++;
         boolean hasOutcomeFence = this.missionEngine != null && this.missionEngine.linkedWorldState != null
                 && this.missionEngine.linkedWorldState.isOutcomeFenced();
         if (hadOutcomeFence || hasOutcomeFence) this.gameTimeMillis = timeBeforeOutcomeFence;
         if (hasOutcomeFence) return;
-        ModScheduler.tick();
-        PlayerTeam.g(f);
+        { long t0 = io.github.rwx.probe.RwxPerf.now(); ModScheduler.tick(); io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.C_MODS, t0); }
+        { long t0 = io.github.rwx.probe.RwxPerf.now(); PlayerTeam.g(f); io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.C_TEAMSG, t0); }
+        io.github.rwx.probe.RwxProbe.tick(this.currentTick);
         if (this.tileMap != null) {
-            this.tileMap.updateFogLogicFrame(f);
+            { long t0 = io.github.rwx.probe.RwxPerf.now(); this.tileMap.updateFogLogicFrame(f); io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.C_FOG, t0); }
         }
         if (isInNetworkOrReplay() && f < 0.1f) {
             NetworkEngine.reportDesync("updateAllGame2: deltaSpeed:" + f + " frame:" + this.currentTick);
         }
+        rwxT = io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.COMMANDS, rwxT);
         BaseUnit.getGlobalUnitList();
         TransactionalArrayList transactionalArrayListDK = GameObject.dK();
         Object[] objArrB = transactionalArrayListDK.b();
@@ -1528,10 +1543,11 @@ public class GameLogic extends GameEngine {
                 }
             }
         }
-        this.performanceProfiler.a(ProfilerSection.update_geo_indexes);
+        rwxT = io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.OBJECTS, rwxT);
         this.unitSpatialIndex.a();
-        this.performanceProfiler.b(ProfilerSection.update_geo_indexes);
+        rwxT = io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.SPATIAL, rwxT);
         OrderableUnit.updateAllUnitCollisions(f);
+        rwxT = io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.COLLISION, rwxT);
         CustomUnit.s(f);
         CustomUnit.a(f, 0);
         UnitEventRuntime.drain();
@@ -1553,34 +1569,37 @@ public class GameLogic extends GameEngine {
                 }
             }
         }
-        this.performanceProfiler.a(ProfilerSection.update_all_team_and_ai);
+        rwxT = io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.CUSTOM, rwxT);
         PlayerTeam.updateAllTeams(f);
+        rwxT = io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.TEAMS, rwxT);
         this.performanceProfiler.b(ProfilerSection.update_all_team_and_ai);
         BuildPreview.updateAll(f);
         this.effectManager.update(f);
+        rwxT = io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.FX_MGR, rwxT);
         this.cloudRenderer.update(f);
         GameViewUtils.a(f);
         if (this.missionEngine != null) {
             this.missionEngine.c(f);
         }
-        this.performanceProfiler.a(ProfilerSection.update_groupcontroller);
         this.formationEngine.a(f);
-        this.performanceProfiler.b(ProfilerSection.update_groupcontroller);
-        this.performanceProfiler.a(ProfilerSection.update_minimap);
+        rwxT = io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.EFFECTS, rwxT);
         this.minimap.update(f);
-        this.performanceProfiler.b(ProfilerSection.update_minimap);
+        rwxT = io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.MINIMAP, rwxT);
         this.pathfindingEngine.b(f);
         if (this.teamStats != null) {
             this.teamStats.update();
         }
         this.gameStatistics.b();
+        io.github.rwx.probe.RwxPerf.endFrame(rwxT, this.currentTick, transactionalArrayListDK.size(), System.identityHashCode(this));
     }
 
     /* JADX INFO: renamed from: a */
     public void drawThreadSafe(float f) {
+        long rwxDrawT = io.github.rwx.probe.RwxPerf.beginRender();
         synchronized (this.drawLock) {
             draw(f, true);
         }
+        io.github.rwx.probe.RwxPerf.endRender(rwxDrawT, this.currentTick, System.identityHashCode(this));
     }
 
     /** Draws the world for a background frame without painting the in-game HUD. */
@@ -1656,6 +1675,8 @@ public class GameLogic extends GameEngine {
     }
 
     private void draw(float f, boolean includeUi) {
+    // RWX 渲染剖析：RD_LOCK
+    io.github.rwx.probe.RwxPerf.rendSection(io.github.rwx.probe.RwxPerf.RD_LOCK);
         if (isHeadlessMode) {
             return;
         }
@@ -1719,6 +1740,8 @@ public class GameLogic extends GameEngine {
                 this.performanceProfiler.a(ProfilerSection.draw_gui);
                 drawUI(f);
                 this.performanceProfiler.b(ProfilerSection.draw_gui);
+                // RWX 渲染剖析：RD_UI
+                io.github.rwx.probe.RwxPerf.rendSection(io.github.rwx.probe.RwxPerf.RD_UI);
             }
             if (includeUi && this.settingsEngine.showFps && this.pauseTransition == 0.0f && !this.isMenuOpen && !this.isPaused) {
                 this.renderGraphicsEngine.a(this.fpsString, 100.0f, 35.0f, this.fpsPaint);
@@ -1815,12 +1838,16 @@ public class GameLogic extends GameEngine {
                 this.renderListBuffer = var12;
             }
 
+            // RWX 渲染剖析：RD_COLLECT（collect 段：在 sort 之前收口）
+            io.github.rwx.probe.RwxPerf.rendSection(io.github.rwx.probe.RwxPerf.RD_COLLECT);
             if (!this.shouldDrawUnitIcons()) {
                 Collections.sort(this.renderList, GameObject.ei);
             }
 
             this.performanceProfiler.b(ProfilerSection.update_game_sortRender);
             this.performanceProfiler.a(ProfilerSection.draw_setup);
+            // RWX 渲染剖析：RD_SORT
+            io.github.rwx.probe.RwxPerf.rendSection(io.github.rwx.probe.RwxPerf.RD_SORT);
             this.performanceProfiler.a(ProfilerSection.draw_setup_clip);
             this.renderGraphicsEngine.i();
             this.renderGraphicsEngine.a(this.screenClipRect);
@@ -1875,6 +1902,8 @@ public class GameLogic extends GameEngine {
             boolean var13 = this.shouldDrawUnitIcons();
             this.pathfindingEngine.c(float2);
             this.performanceProfiler.b(ProfilerSection.draw_setup);
+            // RWX 渲染剖析：RD_MAP
+            io.github.rwx.probe.RwxPerf.rendSection(io.github.rwx.probe.RwxPerf.RD_MAP);
             GameObject[] var14 = this.renderList.a();
             int var15 = this.renderList.size();
             this.shouldDrawHighDetailEffects = true;
@@ -1974,6 +2003,8 @@ public class GameLogic extends GameEngine {
             this.shouldDrawUnitShadows = true;
             this.performanceProfiler.b(ProfilerSection.draw_game_unit);
             this.performanceProfiler.a(ProfilerSection.draw_game_effects);
+            // RWX 渲染剖析：RD_UNITS
+            io.github.rwx.probe.RwxPerf.rendSection(io.github.rwx.probe.RwxPerf.RD_UNITS);
             this.effectManager.drawEffect(float2, 2);
             this.performanceProfiler.b(ProfilerSection.draw_game_effects);
 
@@ -1992,6 +2023,8 @@ public class GameLogic extends GameEngine {
             this.handleFloat(float2);
             GameViewUtils.b(float2);
             this.unitSpatialIndex.c(float2);
+            // RWX 渲染剖析：RD_FX
+            io.github.rwx.probe.RwxPerf.rendSection(io.github.rwx.probe.RwxPerf.RD_FX);
             this.performanceProfiler.a(ProfilerSection.draw_end);
             this.renderGraphicsEngine.j();
             this.performanceProfiler.b(ProfilerSection.draw_end);
