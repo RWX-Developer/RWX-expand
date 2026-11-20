@@ -673,9 +673,53 @@ public abstract class LogicBoolean implements Cloneable {
             return str;
         }
 
+        // RWX 第十轮：只有「非负计数」型函数才允许提前收手，其余函数保持原样。
+        protected boolean rwxCountOnly() {
+            return false;
+        }
+
+        // RWX 第十轮：本次 getValue 的计数上限；默认 MAX 表示要求精确值。
+        protected int rwxCountCap = Integer.MAX_VALUE;
+
+        private int rwxCapForThreshold() {
+            if (this.full) {
+                return Integer.MAX_VALUE;
+            }
+            int cap = Integer.MAX_VALUE;
+            if (this.empty) {
+                cap = 1;
+            }
+            if (this.greaterThan != -1.0f) {
+                int g = (int) Math.floor((double) this.greaterThan) + 1;
+                if (g < cap) {
+                    cap = g;
+                }
+            }
+            if (this.lessThan != -1.0f) {
+                int l = (int) Math.ceil((double) this.lessThan);
+                if (l < cap) {
+                    cap = l;
+                }
+            }
+            if (cap < 1) {
+                cap = 1;
+            }
+            return cap;
+        }
+
         @Override // com.corrodinggames.rts.game.units.custom.logicBooleans.LogicBoolean
         public boolean read(OrderableUnit orderableUnit) {
-            float value = getValue(orderableUnit);
+            float value;
+            if (rwxCountOnly()) {
+                this.rwxCountCap = rwxCapForThreshold();
+                try {
+                    value = getValue(orderableUnit);
+                } finally {
+                    this.rwxCountCap = Integer.MAX_VALUE;
+                }
+            } else {
+                value = getValue(orderableUnit);
+            }
             boolean z = true;
             if (this.full && value < getMaxValue(orderableUnit)) {
                 z = false;

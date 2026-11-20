@@ -22,6 +22,9 @@ class BenchRampMod : JvmMod() {
     private var ownFodder = 0L
     private var trigTarget = 0L
     private var clampTestDone = false
+    private var trigRangeOverride = 0
+
+    private fun r0(fallback: Int): Int = if (trigRangeOverride > 0) trigRangeOverride else fallback
     private var trigCheapMode = false
 
     private var lastMark = 0L
@@ -67,30 +70,25 @@ class BenchRampMod : JvmMod() {
                 movementType = MovementType.LAND
                 moveSpeed = 0.05f
             }
-            rawSection("action_t0", mapOf(
-                "text" to "t0", "resetCustomTimer" to true,
-                "autoTrigger" to "if numberOfUnitsInTeam(withinRange=600) > 999999",
-            ))
-            rawSection("action_t1", mapOf(
-                "text" to "t1", "resetCustomTimer" to true,
-                "autoTrigger" to "if numberOfUnitsInAllTeams(withinRange=300) > 999999",
-            ))
-            rawSection("action_t2", mapOf(
-                "text" to "t2", "resetCustomTimer" to true,
-                "autoTrigger" to "if (numberOfUnitsInTeam(withinRange=400) > 999999) and (self.hp > 0)",
-            ))
-            rawSection("action_t3", mapOf(
-                "text" to "t3", "resetCustomTimer" to true,
-                "autoTrigger" to "if (self.hp < 0) or (numberOfUnitsInTeam(withinRange=400) > 999999)",
-            ))
-            rawSection("action_t4", mapOf(
-                "text" to "t4", "resetCustomTimer" to true,
-                "autoTrigger" to "if numberOfUnitsInTeam(withinRange=800) > 999999",
-            ))
-            rawSection("action_t5", mapOf(
-                "text" to "t5", "resetCustomTimer" to true,
-                "autoTrigger" to "if (numberOfUnitsInTeam(withTag=\"rwx_no_such_tag\", withinRange=600) > 0) or (numberOfUnitsInEnemyTeam(withinRange=600) > 0)",
-            ))
+            val trigConds = if (System.getProperty("bench.trigForm", "cmp").trim() == "gt") arrayOf(
+                // 真实模组写法：greaterThan 参数 + withinRange，布尔化计数（大于 0 就够）
+                "if numberOfUnitsInAllTeams(greaterThan=0, withinRange=" + r0(400) + ") ",
+                "if numberOfUnitsInTeam(greaterThan=2, withinRange=" + r0(400) + ") ",
+                "if (numberOfUnitsInAllTeams(greaterThan=0, withinRange=" + r0(400) + ") and (self.hp > 0)) ",
+                "if (self.hp < 0) or (numberOfUnitsInTeam(greaterThan=1, withinRange=" + r0(400) + ")) ",
+                "if numberOfUnitsInTeam(greaterThan=0, withinRange=" + r0(400) + ") ",
+                "if (numberOfUnitsInTeam(withTag=\"rwx_no_such_tag\", greaterThan=0, withinRange=" + r0(400) + ") or numberOfUnitsInAllTeams(greaterThan=0, withinRange=" + r0(400) + ")) ",
+            ) else arrayOf(
+                "if numberOfUnitsInTeam(withinRange=" + r0(600) + ") > 999999",
+                "if numberOfUnitsInAllTeams(withinRange=" + r0(300) + ") > 999999",
+                "if (numberOfUnitsInTeam(withinRange=" + r0(400) + ") > 999999) and (self.hp > 0)",
+                "if (self.hp < 0) or (numberOfUnitsInTeam(withinRange=" + r0(400) + ") > 999999)",
+                "if numberOfUnitsInTeam(withinRange=" + r0(800) + ") > 999999",
+                "if (numberOfUnitsInTeam(withTag=\"rwx_no_such_tag\", withinRange=" + r0(600) + ") > 0) or (numberOfUnitsInEnemyTeam(withinRange=" + r0(600) + ") > 0)",
+            )
+            for ((gi, cond) in trigConds.withIndex()) {
+                rawSection("action_t$gi", mapOf("text" to "t$gi", "resetCustomTimer" to true, "autoTrigger" to cond))
+            }
         }
         // 对照单位：与 bench:trig 同样 6 条永假条件，但全部无 withinRange（走 O(1) 计数或纯字段比较）。
         // 用来把「布尔树开销」与「空间扫格开销」分离。
@@ -126,6 +124,7 @@ class BenchRampMod : JvmMod() {
         val target = System.getProperty("bench.target", "0").toLong()
         trigTarget = System.getProperty("bench.trigTarget", "0").toLong()
         trigCheapMode = System.getProperty("bench.trigMode", "spatial").trim().lowercase() == "cheap"
+        trigRangeOverride = System.getProperty("bench.trigRange", "0").toInt()
         // RWX 第九轮：验证 Command 落点钳制（图外目标必须被收回地图内）。
         // 用法：-Dbench.clampTest=1，tick 120 对图外坐标 (-99999,-99999) 发一条移动命令，看 RWX_CLAMP 日志。
         if ("1" == System.getProperty("bench.clampTest", "0").trim()) {

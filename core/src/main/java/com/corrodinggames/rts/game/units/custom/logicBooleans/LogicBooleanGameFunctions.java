@@ -14,6 +14,8 @@ import com.corrodinggames.rts.gameFramework.utility.*;
 
 /* JADX INFO: loaded from: game-lib.jar:com/corrodinggames/rts/game/units/custom/logicBooleans/LogicBooleanGameFunctions.class */
 public class LogicBooleanGameFunctions {
+    // RWX 第十轮：布尔化计数早退次数（只打前 3 条日志）
+    static int RWX_COUNT_ABORT_N = 0;
     static void addBooleanType(LogicBoolean logicBoolean, String... strArr) {
         LogicBoolean.addBooleanType(logicBoolean, strArr);
     }
@@ -1507,6 +1509,11 @@ public class LogicBooleanGameFunctions {
         }
 
         @Override // com.corrodinggames.rts.game.units.custom.logicBooleans.LogicBoolean.AbstractNumberBoolean
+        protected boolean rwxCountOnly() {
+            return true;
+        }
+
+        @Override // com.corrodinggames.rts.game.units.custom.logicBooleans.LogicBoolean.AbstractNumberBoolean
         public float getValue(OrderableUnit orderableUnit) {
             PlayerTeam playerTeam;
             int iCanAffordResource;
@@ -1546,6 +1553,8 @@ public class LogicBooleanGameFunctions {
             }
             handleCallbackCount.withinRangeSq = this.withinRangeSq;
             handleCallbackCount.count = 0;
+            handleCallbackCount.rwxCap = this.rwxCountCap;
+            handleCallbackCount.rwxAbort = false;
             handleCallbackCount.tag = animationTag;
             handleCallbackCount.incompleteBuildings = this.incompleteBuildings;
             handleCallbackCount.targetTeam = playerTeam;
@@ -1593,7 +1602,17 @@ public class LogicBooleanGameFunctions {
                     if (baseUnit.buildProgress < 1.0f && !this.incompleteBuildings) {
                         return;
                     }
-                    this.count++;
+                    // RWX 第十轮：饱和到上限，count 恒等于 min(真实计数, cap)，比较结果不受扫描何时收手影响
+                    if (this.count < this.rwxCap) {
+                        this.count++;
+                        if (this.count >= this.rwxCap) {
+                            this.rwxAbort = true;
+                            // RWX 第十轮：前 3 次早退留痕，证明这条路真被执行（不是死代码）
+                            if (RWX_COUNT_ABORT_N++ < 3) {
+                                io.github.rwx.probe.RwxPerf.out("RWX_COUNT_ABORT cap=" + this.rwxCap + " at unit=" + this.count);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1647,6 +1666,11 @@ public class LogicBooleanGameFunctions {
         }
 
         @Override // com.corrodinggames.rts.game.units.custom.logicBooleans.LogicBoolean.AbstractNumberBoolean
+        protected boolean rwxCountOnly() {
+            return true;
+        }
+
+        @Override // com.corrodinggames.rts.game.units.custom.logicBooleans.LogicBoolean.AbstractNumberBoolean
         public float getValue(OrderableUnit orderableUnit) {
             int iC;
             PlayerTeam playerTeam = orderableUnit.team;
@@ -1661,6 +1685,8 @@ public class LogicBooleanGameFunctions {
             if (!this.ally) {
                 handleCallbackCountEnemies.withinRangeSq = this.withinRangeSq;
                 handleCallbackCountEnemies.count = 0;
+                handleCallbackCountEnemies.rwxCap = this.rwxCountCap;
+                handleCallbackCountEnemies.rwxAbort = false;
                 handleCallbackCountEnemies.tag = this._withTag;
                 handleCallbackCountEnemies.incompleteBuildings = this.incompleteBuildings;
                 GameEngine.getInstance().unitSpatialIndex.a(orderableUnit.posX, orderableUnit.posY, this.withinRange, orderableUnit, 0.0f, handleCallbackCountEnemies);
@@ -1668,6 +1694,8 @@ public class LogicBooleanGameFunctions {
             }
             handleCallbackCountAlly.withinRangeSq = this.withinRangeSq;
             handleCallbackCountAlly.count = 0;
+            handleCallbackCountAlly.rwxCap = this.rwxCountCap;
+            handleCallbackCountAlly.rwxAbort = false;
             handleCallbackCountAlly.tag = this._withTag;
             handleCallbackCountAlly.incompleteBuildings = this.incompleteBuildings;
             handleCallbackCountAlly.ally = orderableUnit.team;
@@ -1714,7 +1742,17 @@ public class LogicBooleanGameFunctions {
                     if (baseUnit.buildProgress < 1.0f && !this.incompleteBuildings) {
                         return;
                     }
-                    this.count++;
+                    // RWX 第十轮：饱和到上限，count 恒等于 min(真实计数, cap)，比较结果不受扫描何时收手影响
+                    if (this.count < this.rwxCap) {
+                        this.count++;
+                        if (this.count >= this.rwxCap) {
+                            this.rwxAbort = true;
+                            // RWX 第十轮：前 3 次早退留痕，证明这条路真被执行（不是死代码）
+                            if (RWX_COUNT_ABORT_N++ < 3) {
+                                io.github.rwx.probe.RwxPerf.out("RWX_COUNT_ABORT cap=" + this.rwxCap + " at unit=" + this.count);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1762,7 +1800,17 @@ public class LogicBooleanGameFunctions {
                     if (baseUnit.buildProgress < 1.0f && !this.incompleteBuildings) {
                         return;
                     }
-                    this.count++;
+                    // RWX 第十轮：饱和到上限，count 恒等于 min(真实计数, cap)，比较结果不受扫描何时收手影响
+                    if (this.count < this.rwxCap) {
+                        this.count++;
+                        if (this.count >= this.rwxCap) {
+                            this.rwxAbort = true;
+                            // RWX 第十轮：前 3 次早退留痕，证明这条路真被执行（不是死代码）
+                            if (RWX_COUNT_ABORT_N++ < 3) {
+                                io.github.rwx.probe.RwxPerf.out("RWX_COUNT_ABORT cap=" + this.rwxCap + " at unit=" + this.count);
+                            }
+                        }
+                    }
                 }
             }
         }

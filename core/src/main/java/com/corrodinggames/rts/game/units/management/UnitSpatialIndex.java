@@ -168,6 +168,9 @@ public final class UnitSpatialIndex {
                             filteredUnitCallback.callback(orderableUnit, f, baseUnit);
                         }
                     }
+                    if (filteredUnitCallback.rwxAbort) {
+                        return;
+                    }
                 }
             }
             return;
@@ -187,6 +190,9 @@ public final class UnitSpatialIndex {
                                     filteredUnitCallback.callback(orderableUnit, f, baseUnit2);
                                 }
                             }
+                            if (filteredUnitCallback.rwxAbort) {
+                                return;
+                            }
                         }
                     }
                 }
@@ -204,6 +210,9 @@ public final class UnitSpatialIndex {
                                 if (unitCallback.a(baseUnit3)) {
                                     filteredUnitCallback.callback(orderableUnit, f, baseUnit3);
                                 }
+                            }
+                            if (filteredUnitCallback.rwxAbort) {
+                                return;
                             }
                         }
                     }
@@ -227,6 +236,9 @@ public final class UnitSpatialIndex {
                             if (unitCallback.a(baseUnit4)) {
                                 filteredUnitCallback.callback(orderableUnit, f, baseUnit4);
                             }
+                        }
+                        if (filteredUnitCallback.rwxAbort) {
+                            return;
                         }
                     }
                 }
@@ -264,6 +276,9 @@ public final class UnitSpatialIndex {
                                         filteredUnitCallback.callback(orderableUnit, f, baseUnit6);
                                     }
                                 }
+                                if (filteredUnitCallback.rwxAbort) {
+                                    return;
+                                }
                             }
                         }
                     }
@@ -284,6 +299,9 @@ public final class UnitSpatialIndex {
                                     if (unitCallback.a(baseUnit6)) {
                                         filteredUnitCallback.callback(orderableUnit, f, baseUnit6);
                                     }
+                                }
+                                if (filteredUnitCallback.rwxAbort) {
+                                    return;
                                 }
                             }
                         }
