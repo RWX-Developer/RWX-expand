@@ -6,46 +6,36 @@ import io.github.rwx.ui.AppScreen
 
 internal class FrameRenderController(
     private val gameSession: GameSession,
-    private val shouldShowBackgroundBattle: (AppScreen) -> Boolean,
+    private val screenPresenter: ScreenPresenter,
     private val startupPreparationController: StartupPreparationController,
     private val presenter: GameFramePresenter,
 ) {
     fun render(
         screen: AppScreen,
-        isExternalBattleRoomJoinPending: Boolean,
+        isBattleRoomJoinPending: Boolean,
         canResumeForFrame: Boolean,
         canvasViewport: Viewport,
         deltaSeconds: Float,
     ) {
+        screenPresenter.refresh(screen, canResumeForFrame)
         val source = FrameSource.from(
-            screen = screen,
-            isExternalJoinPending = isExternalBattleRoomJoinPending,
-            shouldShowBackgroundBattle = shouldShowBackgroundBattle(screen),
+            presentation = screenPresenter.presentation,
+            isJoinPending = isBattleRoomJoinPending,
             isStartupMenuBackgroundLoading = startupPreparationController.isStartupMenuBackgroundLoading(screen),
-            isRwGameLoading = startupPreparationController.isRwGameLoading(screen),
-            canResumeForFrame = canResumeForFrame,
-            gameSession = gameSession,
+            isEngineLoading = startupPreparationController.isEngineLoading(screen),
         )
         when (source) {
-            FrameSource.RwGame ->
-                gameSession.updateFrame(canvasViewport, deltaSeconds)
-
-            FrameSource.BackgroundBattle ->
+            FrameSource.Game -> gameSession.updateFrame(canvasViewport, deltaSeconds)
+            FrameSource.BackgroundBattle, FrameSource.ResumeBackground ->
                 gameSession.updateFrame(canvasViewport, deltaSeconds, drainVisibleLayerBuffers = true)
 
-            FrameSource.ResumeBackground ->
-                resumeBackgroundFrameForSession(gameSession, canvasViewport, deltaSeconds)
-
-            FrameSource.RwGameLoading -> when {
+            FrameSource.Loading -> when {
                 startupPreparationController.isStartupMenuBackgroundLoading(screen) ->
                     startupPreparationController.renderStartupMenuBackgroundLoadingFrame(canvasViewport, deltaSeconds)
-
-                startupPreparationController.isRwGameLoading(screen) ->
-                    startupPreparationController.renderRwGameLoadingFrame(canvasViewport, deltaSeconds)
-
+                startupPreparationController.isEngineLoading(screen) ->
+                    startupPreparationController.renderEngineLoadingFrame(canvasViewport)
                 else -> Unit
             }
-
             FrameSource.Empty -> Unit
         }
         if (screen != lastScreen) {
@@ -86,19 +76,5 @@ internal class FrameRenderController(
     private companion object {
         const val PRESENTATION_REFRESH_FRAMES = 12
         val PROBE_ENABLED: Boolean = System.getenv("RWX_PROBE_FRAME") != null
-    }
-}
-
-internal fun resumeBackgroundFrameForSession(
-    gameSession: GameSession,
-    canvasViewport: Viewport,
-    deltaSeconds: Float,
-) {
-    if (!gameSession.usesFrameCommandRendering) {
-        gameSession.updateFrame(
-            canvasViewport,
-            deltaSeconds,
-            drainVisibleLayerBuffers = true,
-        )
     }
 }
