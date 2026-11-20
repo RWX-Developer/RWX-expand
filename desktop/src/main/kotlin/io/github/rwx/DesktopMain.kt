@@ -223,9 +223,6 @@ object DesktopMain : KoinComponent {
                 overlayOpacity = settings.overlayOpacity.value,
                 loading = LoadingSceneHost(settings).snapshot(),
             ))
-            if (System.getProperty("rwx.editor") == "1") {
-                io.github.rwx.editor.EditorWindow.open()
-            }
             try {
                 val presenter: GameFramePresenter = when (renderBackend) {
                     DesktopRenderBackend.Skia -> GameFramePresenter { }

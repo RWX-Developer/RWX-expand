@@ -276,17 +276,17 @@ core 里 687 个文件是 JADX 产物（`/* JADX INFO: renamed from: a */` 之�
 
 ## 13. 骨架 v0（已落地，可编译可打开）
 
-代码位置：`desktop/src/main/kotlin/io/github/rwx/editor/`
+代码位置：独立 Gradle 模块 `:editor`（`editor/src/main/kotlin/io/github/rwx/editor/`）
 
 | 文件 | 作用 | 状态 |
 | --- | --- | --- |
-| `EditorWindow.kt` | 独立 Swing/Compose 窗口，不参与游戏主循环 | 可用 |
+| `Main.kt` | 独立程序入口（Compose `application { Window(...) }`） | 可用 |
 | `EditorRoot.kt` | 左侧三个工作面切换（模组编辑 / 部件预览 / 客户端 UI） | 可用 |
 | `ModEditorScreen.kt` | 扫 mods/units、列文件、截断读文本（4000 行上限） | 可读，不可写 |
 | `PartPreviewScreen.kt` | 画布 + 网格 + 中心线 | 只有画布 |
 | `ClientUiScreen.kt` | 只读展示全屏/垂直同步/渲染后端 | 只读 |
 
-打开方式：`-Drwx.editor=1`（DesktopMain 里在启动 UI 之后调用 `EditorWindow.open()`）。
+打开方式：`java -jar editor/build/compose/jars/RWX-Editor-windows-x64-0.1.0.jar [工作区目录]`，工作区也可用环境变量 `RWX_WORKSPACE` 指定；不传就自动找整合包或 RWPP 的 mods/units。
 
 ### 13.1 明确没做的（不假装）
 
@@ -312,4 +312,36 @@ core 里 687 个文件是 JADX 产物（`/* JADX INFO: renamed from: a */` 之�
 ### 13.3 骨架阶段的验证
 
 - `:desktop:compileKotlin` 通过（scripts/build.sh，约 48 秒）。
-- GUI 冒烟（实测）：`-Drwx.editor=1` 启动后窗口列表里同时有 "RWX Game" 与 "RWX 编辑器（骨架）"，无异常堆栈。
+- GUI 冒烟（实测）：单独起编辑器 jar，窗口列表只有 "RWX 编辑器（骨架）— <工作区>"，没有 "RWX Game"；无异常堆栈。
+
+## 14. 编辑器是独立程序（v3 决定）
+
+老师口径：编辑器本身是单独程序，不寄生在客户端进程里。已按此重构：
+
+| 项 | 之前 | 现在 |
+| --- | --- | --- |
+| 代码位置 | desktop 模块内 `editor/` 包 | 独立模块 `:editor` |
+| 启动方式 | 游戏启动后加 `-Drwx.editor=1` 附带开窗 | 独立 jar 直接启动，游戏不用起 |
+| 依赖 | 跟着 desktop 一起吃 core / slick / lwjgl | 只依赖 Compose（`compose.desktop.currentOs` + material3） |
+| 崩溃隔离 | 共用游戏进程 | 各自进程，互不影响 |
+| 产物 | 无 | `RWX-Editor-windows-x64-0.1.0.jar`（后续可出 app-image） |
+
+### 14.1 为什么这样更对
+
+- 模组作者只做模组，不该为了改一个 ini 去起一个 2.7GB 的游戏进程。
+- 编辑器崩溃不会带走游戏，游戏崩溃也不会带走未保存的编辑。
+- 独立程序可以单独分发、单独版本号（现在 0.1.0）。
+- 需要游戏能力时（局内预览、渲染校验）用**子进程或本地服务**去接，比如起 headless 会话或调用 RWPP 的预览器服务，
+  而不是把编辑器塞进引擎进程。
+
+### 14.2 独立化之后的接口变化
+
+- 不能直接引用 `SettingsEngine` 之类引擎类了：客户端 UI 面板改成直接读 `preferences.toml` 文本。
+  这也正好逼着我们把「配置读写」做成编辑器自己的文档模型，而不是借引擎的内存对象。
+- 工作区从命令行参数或 `RWX_WORKSPACE` 传入，默认自动探测整合包 / RWPP 的 `mods/units`。
+
+### 14.3 验证（实测）
+
+- `:editor:packageUberJarForCurrentOS` 通过，产物 `editor/build/compose/jars/RWX-Editor-windows-x64-0.1.0.jar`。
+- 直接 `java -jar` 启动：窗口标题为「RWX 编辑器（骨架）— D:/Game/RWX-整合包/mods/units」，
+  窗口列表中没有 "RWX Game"，即确实没起游戏。
