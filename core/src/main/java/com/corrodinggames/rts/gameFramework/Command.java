@@ -132,6 +132,8 @@ public class Command {
     public boolean rwxFromAi = false;
     // RWX：不可达拒令的日志计数（有上限）
     private static int RWX_UNREACHABLE_N = 0;
+    // RWX：落点被钳回地图内的次数（日志只打前 8 条）
+    private static int RWX_CLAMP_N = 0;
     // RWX：三类拒令总开关；RWX_AI_GUARD=0 时全部退回原版行为
     private static final boolean RWX_ORDER_GUARD = !("0".equals((System.getenv("RWX_AI_GUARD") == null ? "" : System.getenv("RWX_AI_GUARD").trim())));
     private static int RWX_REFUSE_TOTAL = 0;
@@ -144,7 +146,7 @@ public class Command {
         // 不查单位和目标是不是同一个连通组；隔水/隔山的点单位照样接到命令，一路蹭到假终点。
         // 现在判据换成引擎自己的可达性（连通组 ID，与 isPathPossibleBetweenPoints 同源），
         // 沿回头线采样仍不可达就返回 null —— 调用方不建 unitCommand，等于这道命令不发。
-        if (!this.rwxFromAi || this.selectedUnits == null) {
+        if (this.selectedUnits == null) {
             return new float[]{f, f2};
         }
         OrderableUnit probe = null;
@@ -175,13 +177,47 @@ public class Command {
                     return new float[]{px, py};
                 }
             }
-            if (RWX_UNREACHABLE_N++ < 20) {
-                io.github.rwx.probe.RwxPerf.out("RWX_AI_UNREACHABLE order refused: cmd=" + this.unitCommand
-                    + " type=" + mt + " target=" + (int) f + "," + (int) f2 + " from=" + (int) probe.posX + "," + (int) probe.posY);
+            if (this.rwxFromAi) {
+                if (RWX_UNREACHABLE_N++ < 20) {
+                    io.github.rwx.probe.RwxPerf.out("RWX_AI_UNREACHABLE order refused: cmd=" + this.unitCommand
+                        + " type=" + mt + " target=" + (int) f + "," + (int) f2 + " from=" + (int) probe.posX + "," + (int) probe.posY);
+                }
+                return null;
             }
         } catch (Throwable th) {
         }
-        return null;
+        // RWX：玩家命令找不到可走点也照发（落回钳过的目标），只有 AI 才拒令。
+        return new float[]{f, f2};
+    }
+
+    // RWX：把落点钳进地图世界坐标范围，并向内缩半格。
+    // 这就是「单位一路开到地图边缘」的第一道闸：图外目标进寻路前先收回最近的可站立列。
+    private static float[] rwxClampTarget(float f, float f2) {
+        try {
+            GameEngine ge = GameEngine.getInstance();
+            if (ge == null || ge.tileMap == null) {
+                return new float[]{f, f2};
+            }
+            com.corrodinggames.rts.game.map.TileMap tm = ge.tileMap;
+            if (tm.tileCountX <= 0 || tm.tileCountY <= 0 || tm.tileWorldSizeX <= 0 || tm.tileWorldSizeY <= 0) {
+                return new float[]{f, f2};
+            }
+            float hx = tm.halfTileWorldSizeX;
+            float hy = tm.halfTileWorldSizeY;
+            float maxX = tm.getWorldWidth() - hx;
+            float maxY = tm.getWorldHeight() - hy;
+            float cx = f < hx ? hx : (f > maxX ? maxX : f);
+            float cy = f2 < hy ? hy : (f2 > maxY ? maxY : f2);
+            if (cx != f || cy != f2) {
+                if (RWX_CLAMP_N++ < 8) {
+                    io.github.rwx.probe.RwxPerf.out("RWX_CLAMP out of map: " + (int) f + "," + (int) f2
+                        + " -> " + (int) cx + "," + (int) cy + " map=" + tm.tileCountX + "x" + tm.tileCountY);
+                }
+            }
+            return new float[]{cx, cy};
+        } catch (Throwable th) {
+            return new float[]{f, f2};
+        }
     }
 
     // RWX：老师要求「避免 AI 向空气下命令」——攻击目标为 null、已死、非敌对、
@@ -542,30 +578,36 @@ public class Command {
 
     /* JADX INFO: renamed from: a */
     public void setMoveTarget(float f, float f2) {
-        if (this.rwxFromAi) {
-            float[] rwxP = rwxWalkableTarget(f, f2);
-            if (rwxP == null) {
-                // RWX：落点对该单位不可达 —— 不建 unitCommand，这道命令不下（拒发）
-                return;
-            }
-            f = rwxP[0];
-            f2 = rwxP[1];
+        // RWX：落点先钳进地图（半格内缩），再校正到最近的可站立点。
+        // 只有 AI 的不可达命令会拿到 null；玩家命令一律照发，绝不因为落点不好而吞掉。
+        float[] rwxC = rwxClampTarget(f, f2);
+        f = rwxC[0];
+        f2 = rwxC[1];
+        float[] rwxP = rwxWalkableTarget(f, f2);
+        if (rwxP == null) {
+            // RWX：AI 命令落点不可达 —— 不建 unitCommand，这道命令不下（拒发）
+            return;
         }
+        f = rwxP[0];
+        f2 = rwxP[1];
         this.unitCommand = new UnitCommand();
         this.unitCommand.setMoveTarget(f, f2);
     }
 
     /* JADX INFO: renamed from: b */
     public void setAttackMoveTarget(float f, float f2) {
-        if (this.rwxFromAi) {
-            float[] rwxP = rwxWalkableTarget(f, f2);
-            if (rwxP == null) {
-                // RWX：落点对该单位不可达 —— 不建 unitCommand，这道命令不下（拒发）
-                return;
-            }
-            f = rwxP[0];
-            f2 = rwxP[1];
+        // RWX：落点先钳进地图（半格内缩），再校正到最近的可站立点。
+        // 只有 AI 的不可达命令会拿到 null；玩家命令一律照发，绝不因为落点不好而吞掉。
+        float[] rwxC = rwxClampTarget(f, f2);
+        f = rwxC[0];
+        f2 = rwxC[1];
+        float[] rwxP = rwxWalkableTarget(f, f2);
+        if (rwxP == null) {
+            // RWX：AI 命令落点不可达 —— 不建 unitCommand，这道命令不下（拒发）
+            return;
         }
+        f = rwxP[0];
+        f2 = rwxP[1];
         this.unitCommand = new UnitCommand();
         this.unitCommand.setAttackMoveTarget(f, f2);
     }
@@ -582,15 +624,18 @@ public class Command {
 
     /* JADX INFO: renamed from: a */
     public void setAttackMoveTarget(float f, float f2, boolean z) {
-        if (this.rwxFromAi) {
-            float[] rwxP = rwxWalkableTarget(f, f2);
-            if (rwxP == null) {
-                // RWX：落点对该单位不可达 —— 不建 unitCommand，这道命令不下（拒发）
-                return;
-            }
-            f = rwxP[0];
-            f2 = rwxP[1];
+        // RWX：落点先钳进地图（半格内缩），再校正到最近的可站立点。
+        // 只有 AI 的不可达命令会拿到 null；玩家命令一律照发，绝不因为落点不好而吞掉。
+        float[] rwxC = rwxClampTarget(f, f2);
+        f = rwxC[0];
+        f2 = rwxC[1];
+        float[] rwxP = rwxWalkableTarget(f, f2);
+        if (rwxP == null) {
+            // RWX：AI 命令落点不可达 —— 不建 unitCommand，这道命令不下（拒发）
+            return;
         }
+        f = rwxP[0];
+        f2 = rwxP[1];
         this.unitCommand = new UnitCommand();
         this.unitCommand.setAttackMoveTarget(f, f2);
         this.unitCommand.isQueued = z;

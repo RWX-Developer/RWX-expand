@@ -21,6 +21,7 @@ class BenchRampMod : JvmMod() {
     private var trigLive = 0L
     private var ownFodder = 0L
     private var trigTarget = 0L
+    private var clampTestDone = false
     private var trigCheapMode = false
 
     private var lastMark = 0L
@@ -125,6 +126,28 @@ class BenchRampMod : JvmMod() {
         val target = System.getProperty("bench.target", "0").toLong()
         trigTarget = System.getProperty("bench.trigTarget", "0").toLong()
         trigCheapMode = System.getProperty("bench.trigMode", "spatial").trim().lowercase() == "cheap"
+        // RWX 第九轮：验证 Command 落点钳制（图外目标必须被收回地图内）。
+        // 用法：-Dbench.clampTest=1，tick 120 对图外坐标 (-99999,-99999) 发一条移动命令，看 RWX_CLAMP 日志。
+        if ("1" == System.getProperty("bench.clampTest", "0").trim()) {
+            api.game.repeat(1, ModTask { a ->
+                try {
+                    val g = a.game
+                    if (g.tick >= 120L && !clampTestDone) {
+                        clampTestDone = true
+                        val cls = Class.forName("com.corrodinggames.rts.gameFramework.Command")
+                        val m = cls.getDeclaredMethod("rwxClampTarget", java.lang.Float.TYPE, java.lang.Float.TYPE)
+                        m.isAccessible = true
+                        for (probe in arrayOf(-99999.0f to -99999.0f, 999999.0f to 999999.0f, 4000.0f to 3000.0f)) {
+                            val res = m.invoke(null, probe.first, probe.second) as FloatArray
+                            g.log(LogLevel.INFO, "BENCH clampTest tick=" + g.tick + " in=" + probe.first + "," + probe.second
+                                + " out=" + res[0] + "," + res[1])
+                        }
+                    }
+                } catch (t: Throwable) {
+                    try { a.game.log(LogLevel.INFO, "BENCH clampTest failed: " + t) } catch (_: Throwable) {}
+                }
+            })
+        }
         if (target <= 0 && trigTarget <= 0) return
         val batch = System.getProperty("bench.batch", "40").toInt()
         val interval = System.getProperty("bench.interval", "4").toLong()
