@@ -26,6 +26,8 @@ public final class UnitSpatialIndex {
     final Rect k = new Rect();
     final int l = 32;
     int m;
+    // RWX 第八轮：计数查询的敌方桶下标暂存（每查询重填，与原循环下标同键）。
+    private final int[] rwxEnemyIds = new int[PlayerTeam.TEAM_ALLIES];
 
     public void a(float f, float f2, float f3, OrderableUnit orderableUnit, float f4, FilteredUnitCallback filteredUnitCallback) {
         this.g.a(f - f3, f2 - f3, f + f3, f2 + f3);
@@ -155,8 +157,11 @@ public final class UnitSpatialIndex {
             for (int i = iA; i <= iA2; i++) {
                 for (int i2 = iB; i2 <= iB2; i2++) {
                     com.corrodinggames.rts.game.units.management.UnitList unitList = unitStatisticsManagerArr[i][i2].a;
-                    BaseUnit[] baseUnitArrA = unitList.a();
                     int i3 = unitList.size;
+                    if (i3 == 0) {
+                        continue;
+                    }
+                    BaseUnit[] baseUnitArrA = unitList.a();
                     for (int i4 = 0; i4 < i3; i4++) {
                         BaseUnit baseUnit = baseUnitArrA[i4];
                         if ((playerTeamK == null || baseUnit.team != playerTeamK) && unitCallback.a(baseUnit)) {
@@ -173,9 +178,9 @@ public final class UnitSpatialIndex {
                 for (int i6 = iA; i6 <= iA2; i6++) {
                     for (int i7 = iB; i7 <= iB2; i7++) {
                         com.corrodinggames.rts.game.units.management.UnitList unitList2 = unitStatisticsManagerArr[i6][i7].d;
-                        if (unitList2.size > 0) {
+                        int i8 = unitList2.size;
+                        if (i8 > 0) {
                             BaseUnit[] baseUnitArrA2 = unitList2.a();
-                            int i8 = unitList2.size;
                             for (int i9 = 0; i9 < i8; i9++) {
                                 BaseUnit baseUnit2 = baseUnitArrA2[i9];
                                 if (unitCallback.a(baseUnit2)) {
@@ -191,9 +196,9 @@ public final class UnitSpatialIndex {
                 for (int i10 = iA; i10 <= iA2; i10++) {
                     for (int i11 = iB; i11 <= iB2; i11++) {
                         com.corrodinggames.rts.game.units.management.UnitList unitList3 = unitStatisticsManagerArr[i10][i11].c;
-                        if (unitList3.size > 0) {
+                        int i12 = unitList3.size;
+                        if (i12 > 0) {
                             BaseUnit[] baseUnitArrA3 = unitList3.a();
-                            int i12 = unitList3.size;
                             for (int i13 = 0; i13 < i12; i13++) {
                                 BaseUnit baseUnit3 = baseUnitArrA3[i13];
                                 if (unitCallback.a(baseUnit3)) {
@@ -206,11 +211,17 @@ public final class UnitSpatialIndex {
                 return;
             }
             for (int i14 = iA; i14 <= iA2; i14++) {
+                UnitStatisticsManager[] rwxRow = unitStatisticsManagerArr[i14];
                 for (int i15 = iB; i15 <= iB2; i15++) {
-                    com.corrodinggames.rts.game.units.management.UnitList unitList4 = unitStatisticsManagerArr[i14][i15].b[i5];
-                    if (unitList4.size > 0) {
+                    // RWX 第八轮：队桶是全单位桶的子集，空格先跳；行指针缓存省一次二级寻址。
+                    UnitStatisticsManager rwxMgr = rwxRow[i15];
+                    if (rwxMgr.a.size == 0) {
+                        continue;
+                    }
+                    com.corrodinggames.rts.game.units.management.UnitList unitList4 = rwxMgr.b[i5];
+                    int i16 = unitList4.size;
+                    if (i16 > 0) {
                         BaseUnit[] baseUnitArrA4 = unitList4.a();
-                        int i16 = unitList4.size;
                         for (int i17 = 0; i17 < i16; i17++) {
                             BaseUnit baseUnit4 = baseUnitArrA4[i17];
                             if (unitCallback.a(baseUnit4)) {
@@ -223,36 +234,56 @@ public final class UnitSpatialIndex {
             return;
         }
         if (playerTeamOnlyEnemiesOfTeam != PlayerTeam.TEAM_UNKNOWN) {
-            for (int i18 = iA; i18 <= iA2; i18++) {
-                for (int i19 = iB; i19 <= iB2; i19++) {
-                    com.corrodinggames.rts.game.units.management.UnitList unitList5 = unitStatisticsManagerArr[i18][i19].c;
-                    if (unitList5.size > 0) {
-                        BaseUnit[] baseUnitArrA5 = unitList5.a();
-                        int i20 = unitList5.size;
-                        for (int i21 = 0; i21 < i20; i21++) {
-                            BaseUnit baseUnit5 = baseUnitArrA5[i21];
-                            if (unitCallback.a(baseUnit5)) {
-                                filteredUnitCallback.callback(orderableUnit, f, baseUnit5);
+            if (filteredUnitCallback.orderIndependent()) {
+                // RWX 第八轮：只计数的查询用格优先扫描。桶的包含关系（UnitStatisticsManager.a
+                // 收全部单位，b[team] 是它的子集）保证「全单位桶为空」⇒「各队桶皆空」，
+                // 于是可以按格跳过敌队循环；访问的桶集合与原「逐敌队×逐格」完全一致，
+                // 只有顺序不同——计数与顺序无关。桶下标沿用原代码的循环下标，键不变。
+                int rwxN = 0;
+                for (int i23 = 0; i23 <= this.m; i23++) {
+                    PlayerTeam playerTeamK2 = PlayerTeam.k(i23);
+                    if (playerTeamK2 != null && playerTeamOnlyEnemiesOfTeam != playerTeamK2 && playerTeamOnlyEnemiesOfTeam.c(playerTeamK2)) {
+                        this.rwxEnemyIds[rwxN++] = i23;
+                    }
+                }
+                for (int i24 = iA; i24 <= iA2; i24++) {
+                    UnitStatisticsManager[] rwxRow = unitStatisticsManagerArr[i24];
+                    for (int i25 = iB; i25 <= iB2; i25++) {
+                        UnitStatisticsManager rwxMgr = rwxRow[i25];
+                        if (rwxMgr.a.size == 0) {
+                            continue;
+                        }
+                        for (int t = 0; t < rwxN; t++) {
+                            com.corrodinggames.rts.game.units.management.UnitList unitList6 = rwxMgr.b[this.rwxEnemyIds[t]];
+                            int i26 = unitList6.size;
+                            if (i26 > 0) {
+                                BaseUnit[] baseUnitArrA6 = unitList6.a();
+                                for (int i27 = 0; i27 < i26; i27++) {
+                                    BaseUnit baseUnit6 = baseUnitArrA6[i27];
+                                    if (unitCallback.a(baseUnit6)) {
+                                        filteredUnitCallback.callback(orderableUnit, f, baseUnit6);
+                                    }
+                                }
                             }
                         }
                     }
                 }
+                return;
             }
-        }
-        int i22 = this.m;
-        for (int i23 = 0; i23 <= i22; i23++) {
-            PlayerTeam playerTeamK2 = PlayerTeam.k(i23);
-            if (playerTeamK2 != null && playerTeamOnlyEnemiesOfTeam != playerTeamK2 && playerTeamOnlyEnemiesOfTeam.c(playerTeamK2)) {
-                for (int i24 = iA; i24 <= iA2; i24++) {
-                    for (int i25 = iB; i25 <= iB2; i25++) {
-                        com.corrodinggames.rts.game.units.management.UnitList unitList6 = unitStatisticsManagerArr[i24][i25].b[i23];
-                        int i26 = unitList6.size;
-                        if (i26 > 0) {
-                            BaseUnit[] baseUnitArrA6 = unitList6.a();
-                            for (int i27 = 0; i27 < i26; i27++) {
-                                BaseUnit baseUnit6 = baseUnitArrA6[i27];
-                                if (unitCallback.a(baseUnit6)) {
-                                    filteredUnitCallback.callback(orderableUnit, f, baseUnit6);
+            for (int i23 = 0; i23 <= this.m; i23++) {
+                PlayerTeam playerTeamK2 = PlayerTeam.k(i23);
+                if (playerTeamK2 != null && playerTeamOnlyEnemiesOfTeam != playerTeamK2 && playerTeamOnlyEnemiesOfTeam.c(playerTeamK2)) {
+                    for (int i24 = iA; i24 <= iA2; i24++) {
+                        for (int i25 = iB; i25 <= iB2; i25++) {
+                            com.corrodinggames.rts.game.units.management.UnitList unitList6 = unitStatisticsManagerArr[i24][i25].b[i23];
+                            int i26 = unitList6.size;
+                            if (i26 > 0) {
+                                BaseUnit[] baseUnitArrA6 = unitList6.a();
+                                for (int i27 = 0; i27 < i26; i27++) {
+                                    BaseUnit baseUnit6 = baseUnitArrA6[i27];
+                                    if (unitCallback.a(baseUnit6)) {
+                                        filteredUnitCallback.callback(orderableUnit, f, baseUnit6);
+                                    }
                                 }
                             }
                         }

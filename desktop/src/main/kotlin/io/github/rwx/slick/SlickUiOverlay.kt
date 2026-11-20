@@ -23,7 +23,9 @@ internal class SlickUiOverlay {
         val program = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM)
         val activeTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE)
         val matrixMode = GL11.glGetInteger(GL11.GL_MATRIX_MODE)
-        GL11.glPushAttrib(GL11.GL_ALL_ATTRIB_BITS)
+        // RWX：只压 UI 合成真的会改的五组状态；GL_ALL 在多数驱动上是全状态复制，每帧必付。
+        GL11.glPushAttrib(GL11.GL_ENABLE_BIT or GL11.GL_COLOR_BUFFER_BIT or GL11.GL_TEXTURE_BIT or
+            GL11.GL_CURRENT_BIT or GL11.GL_POLYGON_BIT)
         GL11.glPushClientAttrib(GL11.GL_CLIENT_PIXEL_STORE_BIT)
         GL11.glMatrixMode(GL11.GL_PROJECTION)
         GL11.glPushMatrix()

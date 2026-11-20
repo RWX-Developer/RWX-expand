@@ -18,6 +18,12 @@ public abstract class FilteredUnitCallback extends UnitSpatialCallback {
     public void setup(OrderableUnit orderableUnit, float f) {
     }
 
+    // RWX 第八轮：回调结果与遍历顺序无关（比如只做计数）时返回 true，
+    // 空间索引可以换一种遍历结构扫描；默认 false 保持原顺序语义。
+    public boolean orderIndependent() {
+        return false;
+    }
+
     public BaseUnit getResult() {
         return null;
     }

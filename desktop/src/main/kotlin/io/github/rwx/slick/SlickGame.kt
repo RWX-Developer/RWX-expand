@@ -1163,12 +1163,22 @@ class SlickGame(
         }
     }
 
+    private var rwxReadBackBuffer: java.nio.ByteBuffer? = null
+
     private fun readBackBufferSnapshot(width: Int, height: Int, sequence: Long): SlickFrameSnapshot {
-        val buffer = BufferUtils.createByteBuffer(width * height * 4)
+        // RWX：堆外回读缓冲复用，只在容量不足时重建（1080p 每次读回原本要新建 16MB 直接内存）。
+        var buffer = rwxReadBackBuffer
+        if (buffer == null || buffer.capacity() < width * height * 4) {
+            buffer = BufferUtils.createByteBuffer(width * height * 4)
+            rwxReadBackBuffer = buffer
+        }
+        buffer.clear()
         GL11.glReadBuffer(GL11.GL_BACK)
         GL11.glPixelStorei(GL11.GL_PACK_ALIGNMENT, 1)
         GL11.glReadPixels(0, 0, width, height, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, buffer)
 
+        // pixels 每帧新建：saveScreenshot 的后台线程和快照面板都会持有这个数组，
+        // 复用会让它们读到下一帧的像素。堆外 buffer 只在函数内使用，可以复用。
         val pixels = IntArray(width * height)
         for (y in 0 until height) {
             val sourceRow = height - 1 - y

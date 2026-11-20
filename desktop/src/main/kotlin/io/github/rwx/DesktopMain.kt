@@ -131,9 +131,10 @@ object DesktopMain : KoinComponent {
      * RWX：Slick 的 SGL 被各绘制类在 static 初始化时捕获（`static SGL GL = Renderer.get()`），
      * 所以渲染器必须在任何 slick 类被加载之前定下来，否则改不动。
      * 用 VAOGLRenderer 时四边形会攒进顶点数组批量提交，而不是一个四边形一次 glBegin/glEnd。
+     * RWX：默认已切 vao（批量提交）；有兼容问题可用 -Drwx.slickRenderer=immediate 退回。
      */
     private fun installSlickRenderer() {
-        val id = System.getProperty("rwx.slickRenderer", "immediate").trim().lowercase()
+        val id = System.getProperty("rwx.slickRenderer", "vao").trim().lowercase()
         if (id != "vao" && id != "vertexarray") return
         org.newdawn.slick.opengl.renderer.Renderer.setRenderer(
             org.newdawn.slick.opengl.renderer.Renderer.VERTEX_ARRAY_RENDERER

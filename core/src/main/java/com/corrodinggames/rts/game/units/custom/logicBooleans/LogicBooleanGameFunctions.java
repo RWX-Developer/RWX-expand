@@ -1555,6 +1555,12 @@ public class LogicBooleanGameFunctions {
 
         /* JADX INFO: loaded from: game-lib.jar:com/corrodinggames/rts/game/units/custom/logicBooleans/LogicBooleanGameFunctions$NumberOfUnitsInTeam$HandleCallbackCount.class */
         public static class HandleCallbackCount extends FilteredUnitCallback {
+
+            // RWX 第八轮：本回调只累加计数，与遍历顺序无关。
+            @Override // com.corrodinggames.rts.game.units.spatial.FilteredUnitCallback
+            public boolean orderIndependent() {
+                return true;
+            }
             public AnimationTag tag;
             public int count;
             public float withinRangeSq;
@@ -1671,6 +1677,12 @@ public class LogicBooleanGameFunctions {
 
         /* JADX INFO: loaded from: game-lib.jar:com/corrodinggames/rts/game/units/custom/logicBooleans/LogicBooleanGameFunctions$NumberOfUnitsInEnemyOrAllyTeam$HandleCallbackCountEnemies.class */
         public static class HandleCallbackCountEnemies extends FilteredUnitCallback {
+
+            // RWX 第八轮：本回调只累加计数，与遍历顺序无关。
+            @Override // com.corrodinggames.rts.game.units.spatial.FilteredUnitCallback
+            public boolean orderIndependent() {
+                return true;
+            }
             public AnimationTag tag;
             public int count;
             public float withinRangeSq;
@@ -1709,6 +1721,12 @@ public class LogicBooleanGameFunctions {
 
         /* JADX INFO: loaded from: game-lib.jar:com/corrodinggames/rts/game/units/custom/logicBooleans/LogicBooleanGameFunctions$NumberOfUnitsInEnemyOrAllyTeam$HandleCallbackCountAlly.class */
         public static class HandleCallbackCountAlly extends FilteredUnitCallback {
+
+            // RWX 第八轮：本回调只累加计数，与遍历顺序无关。
+            @Override // com.corrodinggames.rts.game.units.spatial.FilteredUnitCallback
+            public boolean orderIndependent() {
+                return true;
+            }
             public PlayerTeam ally;
             public AnimationTag tag;
             public int count;
