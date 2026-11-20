@@ -345,3 +345,29 @@ core 里 687 个文件是 JADX 产物（`/* JADX INFO: renamed from: a */` 之�
 - `:editor:packageUberJarForCurrentOS` 通过，产物 `editor/build/compose/jars/RWX-Editor-windows-x64-0.1.0.jar`。
 - 直接 `java -jar` 启动：窗口标题为「RWX 编辑器（骨架）— D:/Game/RWX-整合包/mods/units」，
   窗口列表中没有 "RWX Game"，即确实没起游戏。
+
+## 15. 启动方式（打包后双击就行）
+
+| 场景 | 怎么做 |
+| --- | --- |
+| 日常用 | 双击 `D:\Game\RWX-整合包\启动编辑器.bat` |
+| 构建+部署 | `bash scripts/package-editor.sh`（可选传整合包目录，默认 `D:/Game/RWX-整合包`） |
+| 开发调试 | `bash scripts/build.sh :editor:packageUberJarForCurrentOS`，再 `java -jar editor/build/compose/jars/RWX-Editor-windows-x64-0.1.0.jar` |
+
+`package-editor.sh` 做三件事：
+
+1. 构建 `:editor:packageUberJarForCurrentOS`；
+2. 把 jar 复制到 `<整合包>/editor/RWX-Editor-windows-x64-0.1.0.jar`；
+3. 把 `scripts/win/启动编辑器.bat` 复制到整合包根目录，并写 `editor/VERSION.txt`（记 commit 短哈希）。
+
+`启动编辑器.bat` 的行为（内容全 ASCII，避免代码页问题）：
+
+- 优先用整合包自带的 `runtime\bin\javaw.exe`（不弹控制台窗口），没有就回退到 `runtime\bin\java.exe`，再回退 `JAVA_HOME`；
+- 找不到 java 或 jar 缺失时打印中文提示并 `pause`，不会静默失败；
+- 工作区参数是 `<整合包>\mods\units`。
+
+### 15.1 实测
+
+- `bash scripts/package-editor.sh` 通过：jar 37,574,809 bytes，bat 827 bytes，部署到 `D:/Game/RWX-整合包/`。
+- 用 `cmd /c` 跑该 bat：进程列表出现 `javaw.exe`，窗口列表出现
+  「RWX 编辑器（骨架）— D:\Game\RWX-整合包\mods\units」，没有 "RWX Game"。
