@@ -273,3 +273,43 @@ core 里 687 个文件是 JADX 产物（`/* JADX INFO: renamed from: a */` 之�
 1. 客户端编辑器的改动范围：只许 UI/接口/模式层，还是 core 引擎逻辑也允许改？
 2. L2/L3 的改动要不要一条「必须通过台架 + GUI 冒烟」的硬门槛才能导出？
 3. S2 的练手目标用哪一个：UI 从 core 剥离，还是 GameUI（4,649 行）拆分？
+
+## 13. 骨架 v0（已落地，可编译可打开）
+
+代码位置：`desktop/src/main/kotlin/io/github/rwx/editor/`
+
+| 文件 | 作用 | 状态 |
+| --- | --- | --- |
+| `EditorWindow.kt` | 独立 Swing/Compose 窗口，不参与游戏主循环 | 可用 |
+| `EditorRoot.kt` | 左侧三个工作面切换（模组编辑 / 部件预览 / 客户端 UI） | 可用 |
+| `ModEditorScreen.kt` | 扫 mods/units、列文件、截断读文本（4000 行上限） | 可读，不可写 |
+| `PartPreviewScreen.kt` | 画布 + 网格 + 中心线 | 只有画布 |
+| `ClientUiScreen.kt` | 只读展示全屏/垂直同步/渲染后端 | 只读 |
+
+打开方式：`-Drwx.editor=1`（DesktopMain 里在启动 UI 之后调用 `EditorWindow.open()`）。
+
+### 13.1 明确没做的（不假装）
+
+- 无损文档模型：现在用 `readLines` 只读展示，**保存会丢注释**，所以没有保存入口。
+- MCP 接入：右侧校验面板是占位文本，没有接 `rw-modding-mcp`。
+- 预览器合流：画布画的是网格，没有解析 ini、不能拖拽、不写回。
+- 客户端 UI 可改：只有只读数值，没有写回通道。
+
+### 13.2 合流方案（下一步，按依赖排序）
+
+1. **无损文档模型**：`Document`（行数组 + 行号→section/key 索引 + 脏标记），文本为真源。
+   模组编辑的保存、预览器的拖拽写回都走它，保证只改目标行。
+2. **预览器解析**：读 ini 里 base/turret/arm/leg 的坐标与贴图引用，画到画布（先只读，不写回）。
+   预览器现有实现（RWPP 侧 `mods/预览器`：server.ps1/server.js + app.js）可以当规格参考，
+   但它的写回逻辑要移植到 `Document` 上，不能直接复用文件级写。
+3. **拖拽写回**：拖拽 = 一次文本区间替换（`x: 12` → `x: 18`），进撤销栈；保存前跑 lint。
+4. **MCP 接入**：`rw-modding-mcp` 是 Python 只读工具（lint / lookup_key / get_ref / explain_actions / search_source）。
+   接入方式二选一：进程内调用（把它的 Python 换成 HTTP/stdio 子进程）或由编辑器起一个本地 MCP 客户端。
+   先接 `lint`（保存前必跑）与 `lookup_key`（键补全/纠错）。
+5. **客户端 UI 可改**：把只读行换成「开关/滑杆 → 预览 → 写回 preferences.toml」，
+   写回同样走 `Document` 保护注释。
+
+### 13.3 骨架阶段的验证
+
+- `:desktop:compileKotlin` 通过（scripts/build.sh，约 48 秒）。
+- GUI 冒烟（实测）：`-Drwx.editor=1` 启动后窗口列表里同时有 "RWX Game" 与 "RWX 编辑器（骨架）"，无异常堆栈。
