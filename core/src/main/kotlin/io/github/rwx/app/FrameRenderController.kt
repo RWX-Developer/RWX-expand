@@ -52,7 +52,6 @@ internal class FrameRenderController(
             println(
                 "RWX_PROBE screen=$screen source=$source" +
                     " startupMenuLoading=" + startupPreparationController.isStartupMenuBackgroundLoading(screen) +
-                    " rwGameLoading=" + startupPreparationController.isRwGameLoading(screen) +
                     " preparingMap=" + gameSession.isPreparingMap() +
                     " menuBgActive=" + gameSession.isMenuBackgroundActive() +
                     " readyForDisplay=" + gameSession.isReadyForDisplay(),
