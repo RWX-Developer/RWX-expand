@@ -4,6 +4,7 @@
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export JAVA_HOME="${JAVA_HOME:-D:/Game/tools/zulu25.38.109-ca-jdk25.0.5.0.3-win_x64}"
+export GRADLE_USER_HOME="${GRADLE_USER_HOME:-D:/Game/tools/gradle-home}"
 GRADLE="${GRADLE:-D:/Game/tools/gradle-9.8.0/bin/gradle.bat}"
 TASKS="${*:-:desktop:packageUberJarForCurrentOS :bench-mod:build}"
 LOG="${BUILD_LOG:-/tmp/rwx-build.log}"
