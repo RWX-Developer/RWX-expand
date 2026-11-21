@@ -54,6 +54,24 @@ class BenchRampMod : JvmMod() {
         }
         // RWX 第八轮：AUTO_TRIGGER 台架单位。6 条永假条件（>999999 / 恒假比较），不触发只测求值成本：
         // 4 条带 withinRange 的空间计数 + 1 条 allTeams + 1 条 withTag 线性扫 + &&/|| 混合。
+        // RWX：海军台架单位 —— 真实 WATER 移动层，用来验「船走旱路」。
+        val boat = UnitId("bench:boat")
+        api.units.unit(boat) {
+            core {
+                name = "bench_boat"
+                displayText = "Bench Boat"
+                maxHp = 2000000
+                mass = 3000
+                radius = 14
+                price = 1
+                buildSpeed = "1s"
+            }
+            graphics { image = "ROOT:assets/units/missing_unit/missing.png" }
+            movement {
+                movementType = MovementType.WATER
+                moveSpeed = 0.5f
+            }
+        }
         val trig = UnitId("bench:trig")
         api.units.unit(trig) {
             core {
@@ -217,6 +235,8 @@ class BenchRampMod : JvmMod() {
 
     private fun armPathBench(n: Int) {
         val spawned = ArrayList<UnitInstanceId>()
+        var lastTX = -1.0f
+        var lastTY = -1.0f
         val rnd = java.util.Random(20261121L)
         var waves = 0
         api.game.repeat(2, ModTask { a ->
@@ -229,7 +249,7 @@ class BenchRampMod : JvmMod() {
             if (ref == null) break
             spawned.add(ref.instanceId)
         }
-        if (spawned.size >= n && a.game.tick % 90L == 0L) {
+        if (spawned.size >= n && a.game.tick % 600L == 0L) {
             waves++
             val tx = 300f + rnd.nextFloat() * 3600f
             val ty = 300f + rnd.nextFloat() * 3600f
@@ -260,10 +280,12 @@ class BenchRampMod : JvmMod() {
 
     // RWX：海军自动测试 —— 反射拿引擎的瓦片通行性，找水域刷船，然后发水域移动令。
     private fun armWaterBench(n: Int) {
-        val spawned = ArrayList<UnitInstanceId>()
+        val spawned = ArrayList<UnitRuntimeRef>()
         val rnd = java.util.Random(20261122L)
         var waves = 0
         var waterFound = 0
+        var lastTX = -1.0f
+        var lastTY = -1.0f
         api.game.repeat(2, ModTask { a ->
             if (waterFound == 0) {
                 waterFound = 1
@@ -306,33 +328,59 @@ class BenchRampMod : JvmMod() {
                 val ox = cx + rnd.nextInt(9) - 4
                 val oy = cy + rnd.nextInt(9) - 4
                 if (!isWater(ox, oy)) continue
-                val ref = a.unitWorld.spawn(UnitSpawnRequest(UnitId("heavy_battleship"), teamId, WorldPosition(ox * twx + hx, oy * twy + hy)))
+                val ref = a.unitWorld.spawn(UnitSpawnRequest(UnitId("bench:boat"), teamId, WorldPosition(ox * twx + hx, oy * twy + hy)))
                 if (ref == null) {
                     spawnFail++
                     if (spawnFail == 1) {
-                        a.game.log(LogLevel.INFO, "BENCH_WATER spawn failed id=heavy_battleship at " + ox + "," + oy)
+                        a.game.log(LogLevel.INFO, "BENCH_WATER spawn failed id=bench:boat at " + ox + "," + oy)
                     }
                     continue
                 }
-                spawned.add(ref.instanceId)
+                spawned.add(ref)
             }
             if (attempts >= 1 && spawned.isEmpty() && a.game.tick % 300L == 0L) {
                 a.game.log(LogLevel.INFO, "BENCH_WATER no ships attempts=" + attempts + " fail=" + spawnFail)
             }
             if (spawned.size >= n && a.game.tick % 90L == 0L) {
+                // 以船队中心为基准找 ±40 格内的水格（近目标才好在 600 tick 内验到达）
+                var ccx = 0; var ccy = 0; var cn = 0
+                for (refI in spawned) {
+                    val st = a.unitWorld.state(refI) ?: continue
+                    ccx += (st.position.x / twx).toInt(); ccy += (st.position.y / twy).toInt(); cn++
+                }
+                if (cn == 0) return@ModTask
+                ccx /= cn; ccy /= cn
                 var tx = -1; var ty = -1
-                for (tryI in 0 until 200) {
-                    val rx = 4 + rnd.nextInt(w - 8)
-                    val ry = 4 + rnd.nextInt(h - 8)
+                for (tryI in 0 until 300) {
+                    val rx = (ccx + rnd.nextInt(81) - 40).coerceIn(4, w - 5)
+                    val ry = (ccy + rnd.nextInt(81) - 40).coerceIn(4, h - 5)
                     if (isWater(rx, ry)) { tx = rx; ty = ry; break }
                 }
                 if (tx > 0) {
+                    // 上一波的到达率（离目标 6 格内算到）
+                    if (lastTX > 0f) {
+                        var arrived = 0
+                        var alive = 0
+                        var minD = 1e9f
+                        for (refI in spawned) {
+                            val st = a.unitWorld.state(refI) ?: continue
+                            alive++
+                            val dx = (st.position.x - lastTX) / twx
+                            val dy = (st.position.y - lastTY) / twy
+                            if (dx * dx + dy * dy < 64f) arrived++
+                            val d = Math.sqrt((dx * dx + dy * dy).toDouble()).toFloat()
+                            if (d < minD) minD = d
+                        }
+                        a.game.log(LogLevel.INFO, "BENCH_WATER arrived=" + arrived + "/" + alive + " minDist=" + minD.toInt() + " wave=" + waves)
+                    }
+                    lastTX = tx * twx + hx
+                    lastTY = ty * twy + hy
                     waves++
                     var ok = 0
                     var offset = 0
                     while (offset < spawned.size) {
                         val end = minOf(offset + 20, spawned.size)
-                        val res = a.commands.submit(UnitCommandRequest(teamId = teamId, unitIds = spawned.subList(offset, end).toList(),
+                        val res = a.commands.submit(UnitCommandRequest(teamId = teamId, unitIds = spawned.subList(offset, end).map { it.instanceId },
                             type = UnitCommandType.MOVE, target = UnitCommandTarget.Point(WorldPosition(tx * twx + hx, ty * twy + hy)), stopCurrentAction = true))
                         if (res.accepted) ok++
                         offset = end
