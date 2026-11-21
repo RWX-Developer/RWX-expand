@@ -428,14 +428,25 @@ public class UnitGroup extends AIUnitGroupBase {
                     }
                 }
                 if (!rwxBatch.isEmpty()) {
-                    Command commandNewCommandForTeam = gameEngine.commandController.newCommandForTeam(this.aiController);
-                    for (OrderableUnit orderableUnit3 : rwxBatch) {
-                        commandNewCommandForTeam.addUnitToCommand(orderableUnit3);
-                    }
-                    if (this.isRetreating) {
-                        commandNewCommandForTeam.setMoveTarget(this.posX, this.posY);
+                    // RWX：最后一道闸。组目标仍在图外就不发这条命令（图外目标会被钳到边界 → 开到地图边缘），
+                    // 把 commandTimer 压短，下一轮用新目标重试。
+                    if (!rwxAiTargetInMap(this.posX, this.posY)) {
+                        if (RWX_AI_TARGET_N < 20) {
+                            RWX_AI_TARGET_N++;
+                            io.github.rwx.probe.RwxPerf.out("RWX_AI_TARGET out of map, command skipped: " + (int) this.posX + "," + (int) this.posY
+                                + " retreating=" + this.isRetreating + " units=" + rwxBatch.size());
+                        }
+                        this.commandTimer = 200.0f;
                     } else {
-                        commandNewCommandForTeam.setAttackMoveTarget(this.posX, this.posY);
+                        Command commandNewCommandForTeam = gameEngine.commandController.newCommandForTeam(this.aiController);
+                        for (OrderableUnit orderableUnit3 : rwxBatch) {
+                            commandNewCommandForTeam.addUnitToCommand(orderableUnit3);
+                        }
+                        if (this.isRetreating) {
+                            commandNewCommandForTeam.setMoveTarget(this.posX, this.posY);
+                        } else {
+                            commandNewCommandForTeam.setAttackMoveTarget(this.posX, this.posY);
+                        }
                     }
                 }
             }
@@ -640,6 +651,22 @@ public class UnitGroup extends AIUnitGroupBase {
         }
     }
 
+    // RWX：AI 组目标是否在图内（图内 = [0, (tileCount-1)*tileWorldSize]）
+    private static int RWX_AI_TARGET_N = 0;
+    private boolean rwxAiTargetInMap(float f, float f2) {
+        GameEngine rwxGe = GameEngine.getInstance();
+        if (rwxGe == null || rwxGe.tileMap == null) {
+            return true;
+        }
+        com.corrodinggames.rts.game.map.TileMap rwxTm = rwxGe.tileMap;
+        if (rwxTm.tileCountX <= 0 || rwxTm.tileCountY <= 0) {
+            return true;
+        }
+        float rwxMaxX = (rwxTm.tileCountX - 1) * rwxTm.tileWorldSizeX;
+        float rwxMaxY = (rwxTm.tileCountY - 1) * rwxTm.tileWorldSizeY;
+        return f >= 0.0f && f2 >= 0.0f && f <= rwxMaxX && f2 <= rwxMaxY;
+    }
+
     /* JADX INFO: renamed from: h */
     public void repositionNearAttackTarget() {
         float f = this.attackTarget.posX;
@@ -659,6 +686,22 @@ public class UnitGroup extends AIUnitGroupBase {
         }
         float fFastCos = f + (Utility.fastCos(angleBetweenPoints) * randomIntInRange);
         float fFastSin = f2 + (Utility.fastSin(angleBetweenPoints) * randomIntInRange);
+        // RWX：攻击目标贴边时，这个「绕到侧面」的点会算出图外（负坐标）。图外目标到 Command 会被钳到边界列，
+        // 单位就一路开到地图边缘——这是「寻路寻到地图边缘」的真正源头之一，必须在算点时就夹住。
+        GameEngine rwxGe0 = GameEngine.getInstance();
+        if (rwxGe0 != null && rwxGe0.tileMap != null) {
+            com.corrodinggames.rts.game.map.TileMap rwxTm0 = rwxGe0.tileMap;
+            float rwxLimX0 = (rwxTm0.tileCountX - 1) * rwxTm0.tileWorldSizeX;
+            float rwxLimY0 = (rwxTm0.tileCountY - 1) * rwxTm0.tileWorldSizeY;
+            if (rwxLimX0 > 0.0f) {
+                if (fFastCos < 0.0f) { fFastCos = 0.0f; }
+                if (fFastCos > rwxLimX0) { fFastCos = rwxLimX0; }
+            }
+            if (rwxLimY0 > 0.0f) {
+                if (fFastSin < 0.0f) { fFastSin = 0.0f; }
+                if (fFastSin > rwxLimY0) { fFastSin = rwxLimY0; }
+            }
+        }
         boolean z = true;
         if (!isTileFreeForGroup(fFastCos, fFastSin)) {
             z = false;
