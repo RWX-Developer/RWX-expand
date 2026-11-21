@@ -148,6 +148,18 @@ class BenchRampMod : JvmMod() {
             })
         }
         // RWX：寻路 A/B 台架。-Dbench.path=N 刷 N 只兵并每 90 tick 全体改目标，制造持续寻路。
+        // RWX：海军自动测试。-Dbench.water=N 在水域刷 N 艘船，每 90 tick 全体换水域目标点。
+        val waterN = System.getProperty("bench.water", "0").toInt()
+        if (waterN > 0) armWaterBench(waterN)
+        val autoExit = System.getProperty("bench.autoExit", "0").toLong()
+        if (autoExit > 0) {
+            api.game.repeat(30, ModTask { a ->
+                if (a.game.tick >= autoExit) {
+                    a.game.log(LogLevel.INFO, "BENCH_AUTOEXIT tick=" + a.game.tick)
+                    System.exit(0)
+                }
+            })
+        }
         val pathN = System.getProperty("bench.path", "0").toInt()
         if (pathN > 0) armPathBench(pathN)
         if (target <= 0 && trigTarget <= 0) return
@@ -244,6 +256,92 @@ class BenchRampMod : JvmMod() {
         }
         })
         api.game.log(LogLevel.INFO, "BENCH path armed n=" + n)
+    }
+
+    // RWX：海军自动测试 —— 反射拿引擎的瓦片通行性，找水域刷船，然后发水域移动令。
+    private fun armWaterBench(n: Int) {
+        val spawned = ArrayList<UnitInstanceId>()
+        val rnd = java.util.Random(20261122L)
+        var waves = 0
+        var waterFound = 0
+        api.game.repeat(2, ModTask { a ->
+            if (waterFound == 0) {
+                waterFound = 1
+                a.game.log(LogLevel.INFO, "BENCH_WATER armed n=" + n)
+            }
+            val team = a.game.localTeam() ?: a.game.team(0)
+            teamId = team?.teamId ?: 0
+            val engineCls = Class.forName("com.corrodinggames.rts.gameFramework.GameEngine")
+            val ge = engineCls.getMethod("getInstance").invoke(null)
+            val tm = engineCls.getField("tileMap").get(ge)
+            val tmCls = tm.javaClass
+            val w = tmCls.getField("tileCountX").getInt(tm)
+            val h = tmCls.getField("tileCountY").getInt(tm)
+            val twx = tmCls.getField("tileWorldSizeX").getFloat(tm)
+            val twy = tmCls.getField("tileWorldSizeY").getFloat(tm)
+            val hx = tmCls.getField("halfTileWorldSizeX").getFloat(tm)
+            val hy = tmCls.getField("halfTileWorldSizeY").getFloat(tm)
+            val mtCls = Class.forName("com.corrodinggames.rts.game.units.UnitMovementType")
+            val water = mtCls.enumConstants.first { (it as Enum<*>).name == "WATER" }
+            val gvu = Class.forName("com.corrodinggames.rts.gameFramework.utility.GameViewUtils")
+            val walk = gvu.getMethod("b", java.lang.Float.TYPE, java.lang.Float.TYPE, mtCls)
+            fun isWater(tx: Int, ty: Int): Boolean = try {
+                (walk.invoke(null, tx * twx + hx, ty * twy + hy, water) as Short).toInt() >= 0
+            } catch (t: Throwable) { false }
+            var cx = -1
+            var cy = -1
+            outer@ for (ty in 4 until h - 4 step 3) {
+                for (tx in 4 until w - 4 step 3) {
+                    if (isWater(tx, ty) && isWater(tx + 1, ty) && isWater(tx, ty + 1) && isWater(tx + 1, ty + 1)) {
+                        cx = tx; cy = ty; break@outer
+                    }
+                }
+            }
+            if (cx < 0) return@ModTask
+            a.game.log(LogLevel.INFO, "BENCH_WATER_TILE cx=" + cx + " cy=" + cy + " map=" + w + "x" + h)
+            var attempts = 0
+            var spawnFail = 0
+            while (spawned.size < n && attempts < 400) {
+                attempts++
+                val ox = cx + rnd.nextInt(9) - 4
+                val oy = cy + rnd.nextInt(9) - 4
+                if (!isWater(ox, oy)) continue
+                val ref = a.unitWorld.spawn(UnitSpawnRequest(UnitId("heavy_battleship"), teamId, WorldPosition(ox * twx + hx, oy * twy + hy)))
+                if (ref == null) {
+                    spawnFail++
+                    if (spawnFail == 1) {
+                        a.game.log(LogLevel.INFO, "BENCH_WATER spawn failed id=heavy_battleship at " + ox + "," + oy)
+                    }
+                    continue
+                }
+                spawned.add(ref.instanceId)
+            }
+            if (attempts >= 1 && spawned.isEmpty() && a.game.tick % 300L == 0L) {
+                a.game.log(LogLevel.INFO, "BENCH_WATER no ships attempts=" + attempts + " fail=" + spawnFail)
+            }
+            if (spawned.size >= n && a.game.tick % 90L == 0L) {
+                var tx = -1; var ty = -1
+                for (tryI in 0 until 200) {
+                    val rx = 4 + rnd.nextInt(w - 8)
+                    val ry = 4 + rnd.nextInt(h - 8)
+                    if (isWater(rx, ry)) { tx = rx; ty = ry; break }
+                }
+                if (tx > 0) {
+                    waves++
+                    var ok = 0
+                    var offset = 0
+                    while (offset < spawned.size) {
+                        val end = minOf(offset + 20, spawned.size)
+                        val res = a.commands.submit(UnitCommandRequest(teamId = teamId, unitIds = spawned.subList(offset, end).toList(),
+                            type = UnitCommandType.MOVE, target = UnitCommandTarget.Point(WorldPosition(tx * twx + hx, ty * twy + hy)), stopCurrentAction = true))
+                        if (res.accepted) ok++
+                        offset = end
+                    }
+                    a.game.log(LogLevel.INFO, "BENCH_WATER wave=" + waves + " tick=" + a.game.tick + " ships=" + spawned.size
+                        + " target=" + tx + "," + ty + " accepted=" + ok)
+                }
+            }
+        })
     }
 
     override fun dispose() {}
