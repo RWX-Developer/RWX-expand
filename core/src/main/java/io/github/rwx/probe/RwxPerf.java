@@ -106,6 +106,11 @@ public final class RwxPerf {
     // RWX：本帧各段耗时（beginFrame 清零），尖峰帧当场写日志用
     private static final long[] frameAcc = new long[SECTIONS];
     private static final long SPIKE_NS = 50_000_000L; // 50ms
+
+    // RWX：尖峰归因 —— 本 tick 内触发求值帧数 / 回调访问数（beginFrame 清零）
+    public static long trigFramesTick;
+    public static long trigEvalTick;
+    public static long cbVisitsTick;
     private static long frameStart;
     private static int frames;
 
@@ -149,6 +154,7 @@ public final class RwxPerf {
             return 0L;
         }
         java.util.Arrays.fill(frameAcc, 0L);
+        trigFramesTick = 0; trigEvalTick = 0; cbVisitsTick = 0;
         frameStart = System.nanoTime();
         return frameStart;
     }
@@ -194,6 +200,7 @@ public final class RwxPerf {
             int worst = -1;
             long prevMax = 0;
             StringBuilder ss = new StringBuilder("RWX_SPIKE tick=").append(tick)
+                    .append(" trigN=").append(trigFramesTick).append('/').append(trigEvalTick).append("/cb").append(cbVisitsTick)
                     .append(" objects=").append(objectCount)
                     .append(" gid=").append(gid)
                     .append(" total=").append(String.format("%.1f", total / 1000000.0)).append("ms");

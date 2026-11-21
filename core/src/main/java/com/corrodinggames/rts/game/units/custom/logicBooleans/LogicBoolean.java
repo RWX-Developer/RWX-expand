@@ -682,27 +682,26 @@ public abstract class LogicBoolean implements Cloneable {
         protected int rwxCountCap = Integer.MAX_VALUE;
 
         private int rwxCapForThreshold() {
-            if (this.full) {
-                return Integer.MAX_VALUE;
-            }
-            int cap = Integer.MAX_VALUE;
+            // RWX 第十一轮：显式阈值（numberOfUnits(...)>20 这种写法）也要参与 cap。
+            // 原来 full（==/数值读取）直接要精确值 —— 但比较只需要「阈值±1」就能定真假，
+            // 计数饱和到 cap 后 min(count,cap) 与真值在比较结果上恒等，扫描提前收手。
+            int need = 1; // min(count,need) 至少要能区分的最小数：>g 需要 g+1，<l 需要 l，empty 需要 1
             if (this.empty) {
-                cap = 1;
+                need = Math.max(need, 1);
             }
             if (this.greaterThan != -1.0f) {
-                int g = (int) Math.floor((double) this.greaterThan) + 1;
-                if (g < cap) {
-                    cap = g;
-                }
+                need = Math.max(need, (int) Math.floor((double) this.greaterThan) + 1);
             }
             if (this.lessThan != -1.0f) {
-                int l = (int) Math.ceil((double) this.lessThan);
-                if (l < cap) {
-                    cap = l;
-                }
+                // 判「count < l」需要 l 以下精确：cap 取 l 时 min(count,l) 两侧都不会误判
+                need = Math.max(need, (int) Math.ceil((double) this.lessThan));
             }
-            if (cap < 1) {
-                cap = 1;
+            if (this.full) {
+                return Integer.MAX_VALUE; // ==maxValue 需要精确总数
+            }
+            int cap = Math.max(need, 1);
+            if (cap == 1 && !this.empty && this.greaterThan == -1.0f && this.lessThan == -1.0f) {
+                return Integer.MAX_VALUE; // 没带阈值的纯计数：要精确值
             }
             return cap;
         }

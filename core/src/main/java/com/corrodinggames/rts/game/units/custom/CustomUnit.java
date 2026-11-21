@@ -4394,6 +4394,7 @@ public class CustomUnit extends MovableUnit implements TransportUnitInterface, U
             return;
         }
         long rwxTrigT = io.github.rwx.probe.RwxPerf.now();
+        io.github.rwx.probe.RwxPerf.trigFramesTick++;
         try {
         if (RWX_TRIGGER_STATS) {
             rwTriggerFrames++;
@@ -4435,6 +4436,7 @@ public class CustomUnit extends MovableUnit implements TransportUnitInterface, U
     }
 
     public void a(float f, CustomUnitCondition[] customUnitConditionArr) {
+        io.github.rwx.probe.RwxPerf.trigEvalTick += customUnitConditionArr.length;
         CustomUnitConfig customUnitConfig = this.unitConfig;
         GameEngine gameEngine = GameEngine.getInstance();
         if (RWX_TRIGGER_STATS) {

@@ -1597,6 +1597,7 @@ public class LogicBooleanGameFunctions {
 
             @Override // com.corrodinggames.rts.game.units.spatial.UnitSpatialCallback
             public void callback(OrderableUnit orderableUnit, float f, BaseUnit baseUnit) {
+                io.github.rwx.probe.RwxPerf.cbVisitsTick++;
                 AnimationSet unitCombatAnimation = baseUnit.getTags();
                 if ((this.tag == null || (unitCombatAnimation != null && AnimationTag.a(this.tag, unitCombatAnimation))) && Utility.distanceSq(orderableUnit.posX, orderableUnit.posY, baseUnit.posX, baseUnit.posY) < this.withinRangeSq) {
                     if (baseUnit.buildProgress < 1.0f && !this.incompleteBuildings) {
