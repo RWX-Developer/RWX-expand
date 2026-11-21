@@ -322,7 +322,7 @@ public class UnitGroup extends AIUnitGroupBase {
         PointF pointF = new PointF();
         pointF.x = this.posX;
         pointF.y = this.posY;
-        float fRandom = (float) (Math.random() * 360.0d);
+        float fRandom = (float) (Utility.random() * 360.0d);
         float fRandomFloatInRange = Utility.randomFloatInRange(50.0f, 100.0f);
         pointF.x += Utility.fastCos(fRandom) * fRandomFloatInRange;
         pointF.y += Utility.fastSin(fRandom) * fRandomFloatInRange;

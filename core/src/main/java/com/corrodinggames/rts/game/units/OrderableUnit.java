@@ -5475,7 +5475,7 @@ public abstract class OrderableUnit extends UnitBase {
                 Vector3D vector3DBn = bn();
                 Effect effectCreateEffectInternal = GameEngine.getInstance().effectManager.createEffectInternal(vector3DBn.x, vector3DBn.y, this.posZ + vector3DBn.z, EffectType.custom, false, EffectQuality.low);
                 if (effectCreateEffectInternal != null) {
-                    float angleBetweenPoints = Utility.getAngleBetweenPoints(vector3DBn.x, vector3DBn.y, (float) (((double) baseUnit.posX) + (-8.0d) + (Math.random() * 16.0d)), (float) (((double) baseUnit.posY) + (-8.0d) + (Math.random() * 16.0d)));
+                    float angleBetweenPoints = Utility.getAngleBetweenPoints(vector3DBn.x, vector3DBn.y, (float) (((double) baseUnit.posX) + (-8.0d) + (Utility.random() * 16.0d)), (float) (((double) baseUnit.posY) + (-8.0d) + (Utility.random() * 16.0d)));
                     effectCreateEffectInternal.velocityX = Utility.fastCos(angleBetweenPoints) * Utility.randomFloatInRange(2.0f, 4.0f);
                     effectCreateEffectInternal.velocityY = Utility.fastSin(angleBetweenPoints) * Utility.randomFloatInRange(2.0f, 4.0f);
                     effectCreateEffectInternal.frameIndex = 6;
@@ -5498,7 +5498,7 @@ public abstract class OrderableUnit extends UnitBase {
                 PointF pointFE = E(0);
                 Effect effectCreateEffectInternal = GameEngine.getInstance().effectManager.createEffectInternal(baseUnit.posX, baseUnit.posY, baseUnit.posZ, EffectType.custom, false, EffectQuality.low);
                 if (effectCreateEffectInternal != null) {
-                    float angleBetweenPoints = Utility.getAngleBetweenPoints(baseUnit.posX, baseUnit.posY - baseUnit.posZ, (float) (((double) pointFE.x) + (-8.0d) + (Math.random() * 16.0d)), (float) (((double) pointFE.y) + (-8.0d) + (Math.random() * 16.0d)));
+                    float angleBetweenPoints = Utility.getAngleBetweenPoints(baseUnit.posX, baseUnit.posY - baseUnit.posZ, (float) (((double) pointFE.x) + (-8.0d) + (Utility.random() * 16.0d)), (float) (((double) pointFE.y) + (-8.0d) + (Utility.random() * 16.0d)));
                     effectCreateEffectInternal.velocityX = Utility.fastCos(angleBetweenPoints) * Utility.randomFloatInRange(2.0f, 4.0f);
                     effectCreateEffectInternal.velocityY = Utility.fastSin(angleBetweenPoints) * Utility.randomFloatInRange(2.0f, 4.0f);
                     effectCreateEffectInternal.frameIndex = 5;

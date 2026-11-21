@@ -164,6 +164,63 @@ public final class RwxPerf {
         return frameStart;
     }
 
+    // RWX：访问次数计数器（RWX_PROF=1 时才自增，关闭时一次布尔判断）。
+    // 计时只说「哪一段慢」，没说「慢在循环次数还是单次成本」；AI 那几段要改成
+    // 「每 tick 扫多少个单位」的账，得先有次数。索引见 AI_HIT_NAMES。
+    public static final int HIT_SNAP = 0;      // 走本队快照的循环：每访问 1 个单位 +1
+    public static final int HIT_LIST = 1;      // 走 unitsInZone 名单的循环
+    public static final int HIT_DIST = 2;      // isUnitInside 判定次数
+    public static final int HIT_NZ = 3;        // findNearestZone 调用次数
+    public static final int HIT_NZI = 4;       // findNearestZone 内层迭代次数
+    public static final int HIT_SCAN = 5;      // rwxZoneScan（整队重建名单）次数
+    public static final int HIT_SPATIAL = 6;
+    // RWX：list 每 tick 上万次访问，得知道是谁在读：
+    public static final int HIT_IDLE = 7;     // countIdleCombatUnits（12 连发第一动作）
+    public static final int HIT_TYPE = 8;     // countUnitsOfType（getBestBuildingToBuild 里每型一次）
+    public static final int HIT_FACT = 9;     // findFactoryForUnitType（buildUnit 找工厂）
+    public static final int HIT_BLD = 10;     // 其它名单读者（harvester/reclaim）   // 空间索引取 zone 内单位：每个命中 +1
+    public static final String[] AI_HIT_NAMES = {"snap", "list", "dist", "nz", "nzi", "scan", "spatial", "idle", "type", "fact", "bld"};
+    public static final long[] aiHits = new long[AI_HIT_NAMES.length];
+    private static final long[] aiHitsBase = new long[AI_HIT_NAMES.length];
+
+    public static void aiHit(int id) {
+        if (ON && id >= 0 && id < aiHits.length) {
+            aiHits[id]++;
+        }
+    }
+
+    public static void aiHitAdd(int id, long n) {
+        // RWX：越界只丢这一条计数，绝不把逻辑线程带崩（踩过一次：数组短一项，
+        // 整局在 tick=2 挂掉，Slick 容器起不来）
+        if (ON && id >= 0 && id < aiHits.length) {
+            aiHits[id] += n;
+        }
+    }
+
+    // RWX：状态摘要对照（-Drwx.stateSum=1）。引擎自带的联机校验和
+    // （GameStateChecksum.computeChecksums）累计了每个可命令单位的坐标、血量、
+    // objectId、路径与航点，加上各队资金——正是「两次运行行为是否逐位一致」的判据。
+    // 用它做等价性对照，比肉眼看 AI 有没有变笨可靠得多。默认关；开着时每 60 tick
+    // 多一次 O(单位数) 遍历，只用于台架。
+    public static final boolean STATE_SUM = "1".equals(System.getProperty("rwx.stateSum", "0"));
+    private static long sumBase;
+
+    public static void stateSum(int tick, com.corrodinggames.rts.gameFramework.network.GameStateChecksum sc) {
+        if (!STATE_SUM || tick % 60 != 0) {
+            return;
+        }
+        sc.computeChecksums();
+        out("RWX_STATE_SUM tick=" + tick
+                + " total=" + sc.totalChecksum
+                + " pos=" + sc.unitPositionChecksum.value
+                + " hp=" + sc.unitHealthChecksum.value
+                + " id=" + sc.unitIdChecksum.value
+                + " wp=" + sc.waypointChecksum.value
+                + " wpp=" + sc.waypointPositionChecksum.value
+                + " paths=" + sc.unitPathsChecksum.value
+                + " credits=" + sc.teamCreditsChecksum.value);
+    }
+
     /** 纯取时：不动 frameStart，供帧内子段计时用 */
     public static long now() {
         return ON ? System.nanoTime() : 0L;
@@ -240,6 +297,14 @@ public final class RwxPerf {
                 .append(" gid=").append(gid)
                 .append(" trigWin=").append(trigWin).append('/').append(evalWin).append("/cb").append(cbWin)
                 .append("/lockWin=").append((com.corrodinggames.rts.game.units.custom.logicBooleans.LogicBoolean.AbstractNumberBoolean.RWX_LOCK_N - lockBase) / 600L);
+        // RWX：600 tick 窗口内每 tick 平均访问次数
+        sb.append(" aiWin=");
+        for (int i = 0; i < AI_HIT_NAMES.length; i++) {
+            long curHit = aiHits[i];
+            sb.append(AI_HIT_NAMES[i]).append((curHit - aiHitsBase[i]) / 600L).append('/');
+            aiHitsBase[i] = curHit;
+        }
+        sb.setLength(sb.length() - 1);
         for (int i = 0; i < SECTIONS; i++) {
             double avg = (acc[i] / 1000000.0) / frames;
             double mx = max[i] / 1000000.0;

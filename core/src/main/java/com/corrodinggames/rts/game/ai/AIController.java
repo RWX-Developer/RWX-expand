@@ -913,7 +913,9 @@ public final class AIController extends PlayerTeam {
     BaseZone findNearestZone(float f, float f2) {
         float f3 = -1.0f;
         BaseZone baseZone = null;
+        io.github.rwx.probe.RwxPerf.aiHit(io.github.rwx.probe.RwxPerf.HIT_NZ);
         for (AIStrategyNode aIStrategyNode : this.activeStrategies) {
+            io.github.rwx.probe.RwxPerf.aiHit(io.github.rwx.probe.RwxPerf.HIT_NZI);
             if (aIStrategyNode instanceof BaseZone) {
                 BaseZone baseZone2 = (BaseZone) aIStrategyNode;
                 float fD = baseZone2.getDistanceSqToPoint(f, f2);
@@ -1016,6 +1018,7 @@ public final class AIController extends PlayerTeam {
         }
         BaseUnit[] baseUnitArrA = rwxTeamUnits(); // RWX：本队快照
         int size = Math.min(this.rwxSnapSize, baseUnitArrA.length);
+        io.github.rwx.probe.RwxPerf.aiHitAdd(io.github.rwx.probe.RwxPerf.HIT_SNAP, size);
         for (int i = 0; i < size; i++) {
             BaseUnit baseUnit = baseUnitArrA[i];
             if (baseUnit.team == this && (unitFilterMode == UnitFilterMode.include || !baseUnit.isActive)) {
@@ -1100,6 +1103,7 @@ public final class AIController extends PlayerTeam {
         GameEngine gameEngine = GameEngine.getInstance();
         BaseUnit[] baseUnitArrA = rwxTeamUnits(); // RWX：本队快照
         int size = Math.min(this.rwxSnapSize, baseUnitArrA.length);
+        io.github.rwx.probe.RwxPerf.aiHitAdd(io.github.rwx.probe.RwxPerf.HIT_SNAP, size);
         for (int i = 0; i < size; i++) {
             BaseUnit baseUnit = baseUnitArrA[i];
             if (baseUnit.team == this && gameEngine.bufferedVisibleWorldRect.b((int) (baseUnit.posX - 200.0f), (int) (baseUnit.posY - 200.0f), (int) (baseUnit.posX + 200.0f), (int) (baseUnit.posY + 200.0f))) {
@@ -1232,6 +1236,7 @@ public final class AIController extends PlayerTeam {
         // RWX：按参数队过滤，走该队快照（rwxTeamUnits 在 PlayerTeam 基类上）
         BaseUnit[] rwxArG = playerTeam.rwxTeamUnits();
         int rwxSzG = Math.min(playerTeam.rwxSnapSize, rwxArG.length);
+        io.github.rwx.probe.RwxPerf.aiHitAdd(io.github.rwx.probe.RwxPerf.HIT_SNAP, rwxSzG);
         for (int rwxIxG = 0; rwxIxG < rwxSzG; rwxIxG++) {
             BaseUnit baseUnit = rwxArG[rwxIxG];
             if (baseUnit.team == playerTeam && ((baseUnit instanceof CommandCenter) || baseUnit.isTargetable)) {
@@ -1241,6 +1246,7 @@ public final class AIController extends PlayerTeam {
         // RWX：按参数队过滤，走该队快照（rwxTeamUnits 在 PlayerTeam 基类上）
         BaseUnit[] rwxArG2 = playerTeam.rwxTeamUnits();
         int rwxSzG2 = Math.min(playerTeam.rwxSnapSize, rwxArG2.length);
+        io.github.rwx.probe.RwxPerf.aiHitAdd(io.github.rwx.probe.RwxPerf.HIT_SNAP, rwxSzG2);
         for (int rwxIxG2 = 0; rwxIxG2 < rwxSzG2; rwxIxG2++) {
             BaseUnit baseUnit2 = rwxArG2[rwxIxG2];
             if (baseUnit2.team == playerTeam && baseUnit2.isBuilder) {
@@ -1422,6 +1428,7 @@ public final class AIController extends PlayerTeam {
         // RWX：1411：本队快照替代全场遍历（谓词保留作保险）
         BaseUnit[] rwxAr1411 = rwxTeamUnits();
         int rwxSz1411 = Math.min(this.rwxSnapSize, rwxAr1411.length);
+        io.github.rwx.probe.RwxPerf.aiHitAdd(io.github.rwx.probe.RwxPerf.HIT_SNAP, rwxSz1411);
         for (int rwxIx1411 = 0; rwxIx1411 < rwxSz1411; rwxIx1411++) {
             BaseUnit baseUnit = rwxAr1411[rwxIx1411];
             if (baseUnit.team == this && (baseUnit instanceof OrderableUnit) && isEligibleUnitForRandomSelection(baseUnit)) {
@@ -1518,6 +1525,7 @@ public final class AIController extends PlayerTeam {
         int i = 0;
         BaseUnit[] baseUnitArrA = rwxTeamUnits(); // RWX：本队快照
         int size = Math.min(this.rwxSnapSize, baseUnitArrA.length);
+        io.github.rwx.probe.RwxPerf.aiHitAdd(io.github.rwx.probe.RwxPerf.HIT_SNAP, size);
         for (int i2 = 0; i2 < size; i2++) {
             BaseUnit baseUnit = baseUnitArrA[i2];
             if (baseUnit.team == this && !baseUnit.u()) {
@@ -1551,6 +1559,7 @@ public final class AIController extends PlayerTeam {
         // RWX：1536：本队快照替代全场遍历（谓词保留作保险）
         BaseUnit[] rwxAr1536 = rwxTeamUnits();
         int rwxSz1536 = Math.min(this.rwxSnapSize, rwxAr1536.length);
+        io.github.rwx.probe.RwxPerf.aiHitAdd(io.github.rwx.probe.RwxPerf.HIT_SNAP, rwxSz1536);
         for (int rwxIx1536 = 0; rwxIx1536 < rwxSz1536; rwxIx1536++) {
             BaseUnit baseUnit2 = rwxAr1536[rwxIx1536];
             if (baseUnit2.team == this && (baseUnit2 instanceof OrderableUnit)) {
@@ -1630,6 +1639,7 @@ public final class AIController extends PlayerTeam {
         this.unitCount = 0;
         BaseUnit[] baseUnitArrA2 = rwxTeamUnits(); // RWX：本队快照
         int size2 = Math.min(this.rwxSnapSize, baseUnitArrA2.length);
+        io.github.rwx.probe.RwxPerf.aiHitAdd(io.github.rwx.probe.RwxPerf.HIT_SNAP, size2);
         for (int i5 = 0; i5 < size2; i5++) {
             BaseUnit baseUnit3 = baseUnitArrA2[i5];
             if (baseUnit3.team == this && (baseUnit3 instanceof OrderableUnit)) {
@@ -1657,6 +1667,7 @@ public final class AIController extends PlayerTeam {
             // RWX：1638：本队快照替代全场遍历（谓词保留作保险）
             BaseUnit[] rwxAr1638 = rwxTeamUnits();
             int rwxSz1638 = Math.min(this.rwxSnapSize, rwxAr1638.length);
+        io.github.rwx.probe.RwxPerf.aiHitAdd(io.github.rwx.probe.RwxPerf.HIT_SNAP, rwxSz1638);
             for (int rwxIx1638 = 0; rwxIx1638 < rwxSz1638; rwxIx1638++) {
                 BaseUnit baseUnit4 = rwxAr1638[rwxIx1638];
                 if (baseUnit4.team == this && baseUnit4.isAlive()) {
@@ -1678,6 +1689,7 @@ public final class AIController extends PlayerTeam {
                 // RWX：1655：本队快照替代全场遍历（谓词保留作保险）
                 BaseUnit[] rwxAr1655 = rwxTeamUnits();
                 int rwxSz1655 = Math.min(this.rwxSnapSize, rwxAr1655.length);
+        io.github.rwx.probe.RwxPerf.aiHitAdd(io.github.rwx.probe.RwxPerf.HIT_SNAP, rwxSz1655);
                 for (int rwxIx1655 = 0; rwxIx1655 < rwxSz1655; rwxIx1655++) {
                     BaseUnit baseUnit5 = rwxAr1655[rwxIx1655];
                     if (baseUnit5.team == this && (baseUnit5 instanceof OrderableUnit)) {
@@ -1703,6 +1715,7 @@ public final class AIController extends PlayerTeam {
                 // RWX：1676：本队快照替代全场遍历（谓词保留作保险）
                 BaseUnit[] rwxAr1676 = rwxTeamUnits();
                 int rwxSz1676 = Math.min(this.rwxSnapSize, rwxAr1676.length);
+        io.github.rwx.probe.RwxPerf.aiHitAdd(io.github.rwx.probe.RwxPerf.HIT_SNAP, rwxSz1676);
                 for (int rwxIx1676 = 0; rwxIx1676 < rwxSz1676; rwxIx1676++) {
                     BaseUnit baseUnit6 = rwxAr1676[rwxIx1676];
                     if (baseUnit6.team == this && (baseUnit6 instanceof OrderableUnit)) {
@@ -1744,7 +1757,7 @@ public final class AIController extends PlayerTeam {
                                     if (Utility.getRandomInt(100) > 50) {
                                         orderableUnit5.clearAndAddAction(this.unitsToProcess);
                                         if (this.unitsToProcess.size() != 0) {
-                                            actionIdCm = (ActionId) this.unitsToProcess.get(new Random().nextInt(this.unitsToProcess.size()));
+                                            actionIdCm = (ActionId) this.unitsToProcess.get(Utility.randomInt(this.unitsToProcess.size()));
                                         }
                                     }
                                     boolean z4 = false;
@@ -2019,6 +2032,7 @@ public final class AIController extends PlayerTeam {
         }
         BaseUnit[] baseUnitArrA = rwxTeamUnits(); // RWX：本队快照
         int size = Math.min(this.rwxSnapSize, baseUnitArrA.length);
+        io.github.rwx.probe.RwxPerf.aiHitAdd(io.github.rwx.probe.RwxPerf.HIT_SNAP, size);
         for (int i5 = 0; i5 < size; i5++) {
             BaseUnit baseUnit5 = baseUnitArrA[i5];
             if (baseUnit5.team == this && baseUnit5.transportContainer == null && (baseUnit5 instanceof OrderableUnit) && baseUnit5.canUnitAttack() && isEligibleUnitForRandomSelection(baseUnit5)) {
@@ -2175,6 +2189,7 @@ public final class AIController extends PlayerTeam {
         // 计数与选中遍历之间不会再看到不同的成员集合
         BaseUnit[] baseUnitArrA = rwxTeamUnits();
         int size = Math.min(this.rwxSnapSize, baseUnitArrA.length);
+        io.github.rwx.probe.RwxPerf.aiHitAdd(io.github.rwx.probe.RwxPerf.HIT_SNAP, size);
         int i = 0;
         for (int i2 = 0; i2 < size; i2++) {
             BaseUnit baseUnit2 = baseUnitArrA[i2];
@@ -2182,7 +2197,7 @@ public final class AIController extends PlayerTeam {
                 i++;
             }
         }
-        int iRandom = (int) (Math.random() * ((double) i));
+        int iRandom = (int) (Utility.random() * ((double) i));
         int i3 = 0;
         for (int i4 = 0; i4 < size; i4++) {
             BaseUnit baseUnit3 = baseUnitArrA[i4];
@@ -2209,7 +2224,7 @@ public final class AIController extends PlayerTeam {
                 i++;
             }
         }
-        int iRandom = (int) (Math.random() * ((double) i));
+        int iRandom = (int) (Utility.random() * ((double) i));
         int i3 = 0;
         Iterator it = BaseUnit.bE.iterator();
         while (true) {
@@ -2240,7 +2255,7 @@ public final class AIController extends PlayerTeam {
                 i++;
             }
         }
-        int iRandom = (int) (Math.random() * ((double) i));
+        int iRandom = (int) (Utility.random() * ((double) i));
         int i3 = 0;
         Iterator it = BaseUnit.bE.iterator();
         while (true) {

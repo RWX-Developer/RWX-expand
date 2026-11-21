@@ -25,8 +25,40 @@ import java.util.regex.Pattern;
 /* JADX INFO: renamed from: com.corrodinggames.rts.gameFramework.f */
 /* JADX INFO: loaded from: game-lib.jar:com/corrodinggames/rts/gameFramework/f.class */
 public final class Utility {
-    static final Random a = new Random();
-    static final Random b = new Random();
+    static final Random a = rwxNewRandom();
+    static final Random b = rwxNewRandom();
+    // RWX：台架可复现——-Drwx.seed=<long> 固定两个 RNG，同一份代码两次跑出同一条
+    // 轨迹；不做这件事，「区域缓存 vs 原扫描」的等价性只能靠肉眼看，证不了。
+    // 不设属性时行为与原来完全一致（new Random()）。
+    private static Random rwxNewRandom() {
+        String s = null;
+        try {
+            s = System.getProperty("rwx.seed");
+        } catch (Throwable ignored) {
+        }
+        if (s != null && !s.isEmpty()) {
+            try {
+                return new Random(Long.parseLong(s.trim()));
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return new Random();
+    }
+    /**
+     * RWX：可播种的公共随机源。Math.random() 与 new Random() 各是一条独立流，
+     * -Drwx.seed 只管得到 Utility.a/b，管不到它们；AI 里 7 处 Math.random()
+     * 和 1 处 new Random() 都改成走这里，整条轨迹才谈得上可复现。
+     * 走同一个 Random(a)：与原来的差异只是「随机数取自哪条流」，
+     * 不改变任何判定分支的形状。
+     */
+    public static int randomInt(int bound) {
+        return bound > 0 ? a.nextInt(bound) : 0;
+    }
+
+    public static double random() {
+        return a.nextDouble();
+    }
+
     public static final PointF c = new PointF();
     private static final byte[] j = new byte[1001];
     static final PointF d;

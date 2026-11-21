@@ -1509,6 +1509,9 @@ public class GameLogic extends GameEngine {
     }
 
     /* JADX INFO: renamed from: a */
+    /** RWX：全局对象列表在更新途中被压缩的次数（应为 0；非 0 说明有直接 remove 的旁路） */
+    public static long RWX_OBJECT_NULL_TAIL = 0;
+
     public void update(float deltaSpeed) throws IOException {
         long rwxT = io.github.rwx.probe.RwxPerf.beginFrame();
         if (isInNetworkOrReplay() && deltaSpeed < 0.1f) {
@@ -1550,6 +1553,20 @@ public class GameLogic extends GameEngine {
         boolean zAy = isInNetworkOrReplay();
         for (int i = 0; i < size; i++) {
             GameObject gameObject = (GameObject) objArrB[i];
+            // RWX：台架实测崩过一次（tick=341, java.lang.NullPointerException:
+            // "gameObject" is null）。机制：size 在循环外抓取，循环体内某个 update
+            // 直接压缩了这个列表（remove 会把尾部置 null），于是走到位移后的空洞。
+            // 压缩只会把 null 留在尾部，前面的条目全部还在原位，所以遇到 null 就是
+            // 到底了——break 与原意「只更新抓快照时存在的对象」一致，且两侧行为相同。
+            if (gameObject == null) {
+                // 压缩只把 null 留在尾部，前移不会把对象送进未来的下标，
+                // 所以跳过这一个槽位继续走，等价于「更新抓快照时存在的其余对象」。
+                RWX_OBJECT_NULL_TAIL++;
+                if ((RWX_OBJECT_NULL_TAIL & 63L) == 1L) {
+                    io.github.rwx.probe.RwxPerf.out("RWX_OBJECT_NULL_TAIL n=" + RWX_OBJECT_NULL_TAIL + " tick=" + this.currentTick);
+                }
+                continue;
+            }
             if (zAy && f != this.lastDelta) {
                 NetworkEngine.reportDesyncImportant("JIT bug detected, attempting to correct. before object:" + gameObject.objectId + " frame:" + this.currentTick + " deltaSpeed:" + f);
                 f = this.lastDelta;
@@ -1617,6 +1634,7 @@ public class GameLogic extends GameEngine {
         if (this.teamStats != null) {
             this.teamStats.update();
         }
+        io.github.rwx.probe.RwxPerf.stateSum(this.currentTick, this.networkEngine.stateChecksum);
         this.gameStatistics.b();
         io.github.rwx.probe.RwxPerf.endFrame(rwxT, this.currentTick, transactionalArrayListDK.size(), System.identityHashCode(this));
     }

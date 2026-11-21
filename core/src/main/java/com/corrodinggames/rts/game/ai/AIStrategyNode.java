@@ -85,6 +85,7 @@ public abstract class AIStrategyNode extends Serializable {
 
     /* JADX INFO: renamed from: b */
     public boolean isUnitInside(BaseUnit baseUnit) {
+        io.github.rwx.probe.RwxPerf.aiHit(io.github.rwx.probe.RwxPerf.HIT_DIST);
         float fDistanceSq = Utility.distanceSq(this.posX, this.posY, baseUnit.posX, baseUnit.posY);
         float f = this.radius + baseUnit.radius;
         if (fDistanceSq < f * f) {
@@ -121,8 +122,8 @@ public abstract class AIStrategyNode extends Serializable {
     /* JADX INFO: renamed from: w */
     public PointF getRandomPointInside() {
         PointF pointF = new PointF();
-        float fRandom = (float) (Math.random() * 360.0d);
-        float fRandom2 = (float) (Math.random() * ((double) this.radius));
+        float fRandom = (float) (Utility.random() * 360.0d);
+        float fRandom2 = (float) (Utility.random() * ((double) this.radius));
         float rwxX = this.posX + (Utility.fastCos(fRandom) * fRandom2);
         float rwxY = this.posY + (Utility.fastSin(fRandom) * fRandom2);
         // RWX：zone 贴着地图边缘时，这个圆会伸出图外。目标点越界 → 引擎把它钳到边缘列 →
@@ -212,8 +213,8 @@ public abstract class AIStrategyNode extends Serializable {
             }
             if (!z2) {
                 if (!z) {
-                    float fRandom = (float) (Math.random() * 360.0d);
-                    float fRandom2 = (float) (Math.random() * ((double) f));
+                    float fRandom = (float) (Utility.random() * 360.0d);
+                    float fRandom2 = (float) (Utility.random() * ((double) f));
                     pointF.a(this.posX + (Utility.fastCos(fRandom) * fRandom2), this.posY + (Utility.fastSin(fRandom) * fRandom2));
                 }
                 gameEngine.tileMap.setCursorTileIndexFromWorldPoint(pointF.x, pointF.y);
