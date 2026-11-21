@@ -344,7 +344,7 @@ class BenchRampMod : JvmMod() {
             if (attempts >= 1 && spawned.isEmpty() && a.game.tick % 300L == 0L) {
                 a.game.log(LogLevel.INFO, "BENCH_WATER no ships attempts=" + attempts + " fail=" + spawnFail)
             }
-            if (spawned.size >= n && a.game.tick % 90L == 0L) {
+            if (spawned.size >= n && a.game.tick % waveTicks == 0L) {
                 // 以船队中心为基准找 ±40 格内的水格（近目标才好在 600 tick 内验到达）
                 var ccx = 0; var ccy = 0; var cn = 0
                 for (refI in spawned) {
@@ -353,10 +353,11 @@ class BenchRampMod : JvmMod() {
                 }
                 if (cn == 0) return@ModTask
                 ccx /= cn; ccy /= cn
+                val span = if (targetRange >= 999) 0 else targetRange
                 var tx = -1; var ty = -1
-                for (tryI in 0 until 300) {
-                    val rx = (ccx + rnd.nextInt(81) - 40).coerceIn(4, w - 5)
-                    val ry = (ccy + rnd.nextInt(81) - 40).coerceIn(4, h - 5)
+                for (tryI in 0 until 400) {
+                    val rx = if (span > 0) (ccx + rnd.nextInt(span * 2 + 1) - span).coerceIn(4, w - 5) else 4 + rnd.nextInt(w - 8)
+                    val ry = if (span > 0) (ccy + rnd.nextInt(span * 2 + 1) - span).coerceIn(4, h - 5) else 4 + rnd.nextInt(h - 8)
                     if (isWater(rx, ry)) { tx = rx; ty = ry; break }
                 }
                 if (tx > 0) {

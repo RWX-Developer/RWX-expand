@@ -93,15 +93,20 @@ public class Command {
 
     // RWX：走廊各道闸门失败计数
     private static final int[] RWX_RP_GATE = new int[10];
+    private static int RWX_RP_CLEAR_DIRECT; // 直线已安全，不需要走廊
+    private static int RWX_RP_FAIL_R;       // 带足迹搜路失败
+    private static int RWX_RP_FAIL_R0;      // 退回原始判定仍失败
     private static final int[] RWX_RP_TYPE = new int[UnitCommandType.values().length];
     private static final String[] RWX_RP_GATE_NAME = {
         "budget", "cmdType", "noLead", "airNone", "mapN", "snapEnd", "startFits", "route", "gate8", "other"
     };
     // RWX：体积膨胀缓存 —— 某格能否放下一艘半径 r 的船（周围一圈都得是通航格）
-    private static float rwxCorridorLen;
-    private static com.corrodinggames.rts.game.units.UnitMovementType rwxCorridorType;
-    private static int rwxCorridorEndTX;
-    private static int rwxCorridorEndTY;
+    private float rwxCorridorLen;
+    // RWX：必须是实例字段。原来 static，后一条命令的移动类型会覆盖前一条，
+    // 逐单位套用走廊时拿到的可能是别的单位的类型（水/陆混编时就会出现「船按陆地走廊走」）。
+    private com.corrodinggames.rts.game.units.UnitMovementType rwxCorridorType;
+    private int rwxCorridorEndTX;
+    private int rwxCorridorEndTY;
     private static int[] rwxTFreeStamp;
     private static byte[] rwxTFreeVal;
     private static int rwxTFreeGen;
@@ -1366,6 +1371,9 @@ public class Command {
         if (rwxStartX == rwxEndX && rwxStartY == rwxEndY) {
             { RWX_RP_GATE[4]++; return false; }
         }
+        // RWX：海军优先留出比足迹更大的安全边距 —— 船按真实足迹「刚好贴岸」也算通，
+        // 结果就是沿浅滩蹭着走、窄水道里反复卡停。水层用 1.5 倍足迹规划走廊，
+        // 走廊规划不出来再按原足迹退回，保证不比原版更差。
         this.rwxTFreeR = 0;
         this.rwxTFreePx = rwxRTiles;
         this.rwxTFreeGen++;
@@ -1389,15 +1397,20 @@ public class Command {
         if (this.rwxFromAi) { rwxAiCorridorUsedNs += System.nanoTime() - rwxCorridorT0; rwxCorridorT0 = System.nanoTime(); }
         if (rwxRes == 0) {
             this.rwxStagingReady = false;
+            RWX_RP_CLEAR_DIRECT++;
             { RWX_RP_GATE[7]++; return false; }
         }
         if (rwxRes < 0 && rwxRTiles > 0) {
+            RWX_RP_FAIL_R++;
             rwxRes = rwxBuildCorridor(rwxMoveType, rwxStartX, rwxStartY, rwxEndX, rwxEndY, 0);
             if (this.rwxFromAi) { rwxAiCorridorUsedNs += System.nanoTime() - rwxCorridorT0; rwxCorridorT0 = System.nanoTime(); }
             if (rwxRes == 0) {
                 this.rwxStagingReady = false;
+                RWX_RP_CLEAR_DIRECT++;
                 { RWX_RP_GATE[8]++; return false; }
             }
+        } else if (rwxRes < 0 && rwxRTiles <= 0) {
+            RWX_RP_FAIL_R0++;
         } else if (rwxRes > 0 && rwxRTiles > 0 && rwxCorridorLen > 10.0f) {
             // 链很短（<=10 格）不值得再搜一次，省掉常见短命令的双份预算
             // RWX：宽档绕远检查（图一另一半成因）—— 宽档宁可绕一大圈也不穿窄缝，
@@ -1703,6 +1716,7 @@ public class Command {
                 }
                 io.github.rwx.probe.RwxPerf.out("RWX_RP_STATS planned=" + RWX_RP_PLANNED + "/" + RWX_RP_TOTAL
                     + " unitSkipClear=" + RWX_RP_SKIP_CLEAR + " ai=" + this.rwxFromAi + " gates:" + rwxGates
+                    + " clearDirect=" + RWX_RP_CLEAR_DIRECT + " failR=" + RWX_RP_FAIL_R + " failR0=" + RWX_RP_FAIL_R0
                     + " blockedTypes:" + rwxBlockedTypes());
             }
             int i = 0;
