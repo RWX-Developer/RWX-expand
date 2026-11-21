@@ -76,6 +76,27 @@ public class Command {
     private static int[] rwxPathFrom;
     private static int[] rwxPathStamp;
     private static int rwxPathGen;
+    // RWX：走廊统计
+    private static int RWX_RP_TOTAL;
+    private static int RWX_RP_PLANNED;
+    private static int RWX_RP_SKIP_CLEAR;
+    // RWX：被 cmdType 门挡下的命令类型分布
+    private static String rwxBlockedTypes() {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < RWX_RP_TYPE.length; i++) {
+            if (RWX_RP_TYPE[i] > 0) {
+                sb.append(' ').append(UnitCommandType.values()[i]).append('=').append(RWX_RP_TYPE[i]);
+            }
+        }
+        return sb.toString();
+    }
+
+    // RWX：走廊各道闸门失败计数
+    private static final int[] RWX_RP_GATE = new int[10];
+    private static final int[] RWX_RP_TYPE = new int[UnitCommandType.values().length];
+    private static final String[] RWX_RP_GATE_NAME = {
+        "budget", "cmdType", "noLead", "airNone", "mapN", "snapEnd", "startFits", "route", "gate8", "other"
+    };
     // RWX：体积膨胀缓存 —— 某格能否放下一艘半径 r 的船（周围一圈都得是通航格）
     private static float rwxCorridorLen;
     private static com.corrodinggames.rts.game.units.UnitMovementType rwxCorridorType;
@@ -1294,11 +1315,12 @@ public class Command {
         this.rwxStagingReady = false;
         // RWX：老师要求「寻路始终启用」——AI 命令也走走廊，不再按 rwxFromAi 跳过。
         if (!RWX_RP_ENABLED || this.unitCommand == null || this.selectedUnits == null) {
-            return false;
+            { RWX_RP_GATE[0]++; return false; }
         }
         UnitCommandType unitCommandType = this.unitCommand.getCommandType();
-        if (unitCommandType != UnitCommandType.move && unitCommandType != UnitCommandType.attackMove) {
-            return false;
+        if (unitCommandType == UnitCommandType.guard || unitCommandType == UnitCommandType.guardAt
+                || unitCommandType == UnitCommandType.setPassiveTarget) {
+            { RWX_RP_GATE[1]++; RWX_RP_TYPE[unitCommandType.ordinal()]++; return false; }
         }
         OrderableUnit rwxLead = null;
         for (OrderableUnit orderableUnit : this.selectedUnits) {
@@ -1308,7 +1330,7 @@ public class Command {
             }
         }
         if (rwxLead == null) {
-            return false;
+            { RWX_RP_GATE[2]++; return false; }
         }
         GameEngine rwxEngine = GameEngine.getInstance();
         TileMap rwxTileMap = rwxEngine.tileMap;
@@ -1317,7 +1339,7 @@ public class Command {
         com.corrodinggames.rts.game.units.UnitMovementType rwxMoveType = rwxLead.getMovementType();
         if (rwxMoveType == com.corrodinggames.rts.game.units.UnitMovementType.AIR
                 || rwxMoveType == com.corrodinggames.rts.game.units.UnitMovementType.NONE) {
-            return false;
+            { RWX_RP_GATE[3]++; return false; }
         }
         int rwxTileSize = Math.max(1, rwxTileMap.tileWorldSizeX);
         // RWX：老师要求「寻路过程中避免碰撞、离不可通行地形远一些」。
@@ -1342,7 +1364,7 @@ public class Command {
         int rwxEndX = rwxTileMap.cursorTileX;
         int rwxEndY = rwxTileMap.cursorTileY;
         if (rwxStartX == rwxEndX && rwxStartY == rwxEndY) {
-            return false;
+            { RWX_RP_GATE[4]++; return false; }
         }
         this.rwxTFreeR = 0;
         this.rwxTFreePx = rwxRTiles;
@@ -1351,13 +1373,13 @@ public class Command {
         // 走廊终点就落在吸附点上；吸附不到才交回引擎原逻辑。
         int[] rwxEndOut = new int[2];
         if (!rwxSnapEndTile(rwxMoveType, rwxEndX, rwxEndY, rwxEndOut)) {
-            return false;
+            { RWX_RP_GATE[5]++; return false; }
         }
         rwxEndX = rwxEndOut[0];
         rwxEndY = rwxEndOut[1];
         if (rwxRTiles > 0 && !rwxTileFits(rwxMoveType, rwxStartX, rwxStartY)) {
             // 出发点挤在障碍里：足迹放不下就交回引擎（单位会先脱困再走）
-            return false;
+            { RWX_RP_GATE[6]++; return false; }
         }
         // RWX：分层回退 —— 先按体积找宽路；窄水道放不下就退回引擎原始判定（R=0），
         // 保证走廊结果不会比原版更差，只是可能蹭岸。
@@ -1367,14 +1389,14 @@ public class Command {
         if (this.rwxFromAi) { rwxAiCorridorUsedNs += System.nanoTime() - rwxCorridorT0; rwxCorridorT0 = System.nanoTime(); }
         if (rwxRes == 0) {
             this.rwxStagingReady = false;
-            return false;
+            { RWX_RP_GATE[7]++; return false; }
         }
         if (rwxRes < 0 && rwxRTiles > 0) {
             rwxRes = rwxBuildCorridor(rwxMoveType, rwxStartX, rwxStartY, rwxEndX, rwxEndY, 0);
             if (this.rwxFromAi) { rwxAiCorridorUsedNs += System.nanoTime() - rwxCorridorT0; rwxCorridorT0 = System.nanoTime(); }
             if (rwxRes == 0) {
                 this.rwxStagingReady = false;
-                return false;
+                { RWX_RP_GATE[8]++; return false; }
             }
         } else if (rwxRes > 0 && rwxRTiles > 0 && rwxCorridorLen > 10.0f) {
             // 链很短（<=10 格）不值得再搜一次，省掉常见短命令的双份预算
@@ -1388,7 +1410,7 @@ public class Command {
             if (this.rwxFromAi) { rwxAiCorridorUsedNs += System.nanoTime() - rwxCorridorT0; rwxCorridorT0 = System.nanoTime(); }
             if (rwxNarrow == 0) {
                 this.rwxStagingReady = false;
-                return false;
+                { RWX_RP_GATE[9]++; return false; }
             }
             // RWX：窄档 -1（超时/无路）也留宽档；>0 且明显更短才换窄链
             if (rwxNarrow > 0 && (rwxCorridorLen * 1.3f) < rwxWideLen) {
@@ -1657,7 +1679,7 @@ public class Command {
         }
         if (this.clearExistingOrders) {
             for (OrderableUnit orderableUnit4 : this.selectedUnits) {
-                orderableUnit4.clearAllWaypoints();
+                orderableUnit4.clearAllWaypoints(this.rwxFromAi);
                 orderableUnit4.attackTarget = null;
             }
         }
@@ -1667,6 +1689,22 @@ public class Command {
             formationGroupB.commandTargets = this.commandTargets;
             boolean rwxFormationActive = rwxPrepareFormation();
             boolean rwxCorridorReady = rwxPrepareCorridor();
+            // RWX：走廊规划/应用率统计（每 50 条命令一行），用来回答「为什么命令不进走廊」
+            RWX_RP_TOTAL++;
+            if (rwxCorridorReady) {
+                RWX_RP_PLANNED++;
+            }
+            if (RWX_RP_TOTAL % 50 == 0) {
+                StringBuilder rwxGates = new StringBuilder();
+                for (int rwxG = 0; rwxG < RWX_RP_GATE.length; rwxG++) {
+                    if (RWX_RP_GATE[rwxG] > 0) {
+                        rwxGates.append(' ').append(RWX_RP_GATE_NAME[rwxG]).append('=').append(RWX_RP_GATE[rwxG]);
+                    }
+                }
+                io.github.rwx.probe.RwxPerf.out("RWX_RP_STATS planned=" + RWX_RP_PLANNED + "/" + RWX_RP_TOTAL
+                    + " unitSkipClear=" + RWX_RP_SKIP_CLEAR + " ai=" + this.rwxFromAi + " gates:" + rwxGates
+                    + " blockedTypes:" + rwxBlockedTypes());
+            }
             int i = 0;
             while (i <= 1) {
                 boolean z2 = i == 1;
@@ -1675,7 +1713,7 @@ public class Command {
                         if (this.isInstantCommand) {
                             orderableUnit5.removeNonBuildRepairWaypoints();
                         } else if (!this.isQueued) {
-                            orderableUnit5.clearAllWaypoints();
+                            orderableUnit5.clearAllWaypoints(this.rwxFromAi);
                         } else if (this.isHighPriority && this.unitCommand != null && (lastWaypoint = orderableUnit5.getLastWaypoint()) != null && this.unitCommand.isApproximatelySameTarget(lastWaypoint) && (lastWaypoint.getCommandType() == UnitCommandType.attackMove || lastWaypoint.getCommandType() == UnitCommandType.move)) {
                             if (this.unitCommand.getCommandType() == UnitCommandType.attackMove || this.unitCommand.getCommandType() == UnitCommandType.move) {
                                 orderableUnit5.removeLastWaypoint();
@@ -1719,6 +1757,9 @@ public class Command {
                             rwxTFreeGen++; // 半径档变了，足迹缓存作废
                         }
                         boolean rwxUseCorridor = !rwxLineClear(rwxCorridorType, rwxUTX, rwxUTY, rwxCorridorEndTX, rwxCorridorEndTY);
+                        if (!rwxUseCorridor) {
+                            RWX_RP_SKIP_CLEAR++;
+                        }
                         int rwxFrom = 0;
                         float rwxBest = Float.MAX_VALUE;
                         boolean rwxFound = false;

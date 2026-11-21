@@ -342,6 +342,9 @@ public abstract class OrderableUnit extends UnitBase {
     public FastArrayList activeStatusEffects;
     static FastArrayList bq;
     public static boolean L = false;
+    // RWX：自测开关与计数
+    private static final boolean RWX_SELFTEST = "1".equals(System.getProperty("rwx.selftest", "0"));
+    private static int RWX_AUDIT_N = 0;
     public static final UnitCommand[] O = new UnitCommand[0];
     public static final PositionData[] at = new PositionData[0];
 
@@ -3926,13 +3929,19 @@ public abstract class OrderableUnit extends UnitBase {
     }
 
     /* JADX INFO: renamed from: az */
+    // RWX：玩家/引擎默认调用 = 全部清掉（老师口径：只有 AI 才不许取消模组行动的点）。
     public void clearAllWaypoints() {
+        clearAllWaypoints(false);
+    }
+
+    // RWX：rwxFromAi=true 时保护队首的模组行动点（WaypointAction / addWaypoint_prepend）。
+    public void clearAllWaypoints(boolean rwxFromAi) {
         // RWX：模组行动（WaypointAction）加的路径点带 isForceMove 标记。
         // 只保护「队首」那一个——模组用 addWaypoint_prepend 前插，队首就是它这次要执行的点。
         // 后面堆积的旧点必须清掉：否则模组每行动一次就前插一个，AI 永远拿不回指挥权，
         // 单位被一堆随机偏移点永久钉住（MC 模组 1043 处 addWaypoint，实测会锁死建造）。
         UnitCommand rwxHead = this.waypointCount > 0 ? this.waypoints[0] : null;
-        boolean rwxKeepHead = rwxHead != null && rwxHead.isForceMove;
+        boolean rwxKeepHead = rwxFromAi && rwxHead != null && rwxHead.isForceMove;
         if (rwxKeepHead) {
             for (int rk2 = this.waypointCount - 1; rk2 >= 1; rk2--) {
                 removeWaypointAt(rk2);
@@ -4333,6 +4342,29 @@ public abstract class OrderableUnit extends UnitBase {
             }
             if (commandTarget != null) {
                 this.aU = commandTarget.path;
+                // RWX 自测（-Drwx.selftest=1）：把「路径点落在该移动类型不可走的地形上」直接判违规。
+                // 这就是「海军路线穿过陆地」的自动检测器，不需要人盯着画面。
+                if (RWX_SELFTEST && RWX_AUDIT_N < 40 && this.aU != null && this.aU.a() != null) {
+                    java.util.LinkedList rwxPts = this.aU.a();
+                    TileMap rwxTm = gameEngine.tileMap;
+                    int rwxBad = 0;
+                    int rwxChecked = 0;
+                    for (Object rwxO : rwxPts) {
+                        PathPoint rwxPt = (PathPoint) rwxO;
+                        float rwxWX = (rwxPt.tileX * rwxTm.tileWorldSizeX) + rwxTm.halfTileWorldSizeX;
+                        float rwxWY = (rwxPt.tileY * rwxTm.tileWorldSizeY) + rwxTm.halfTileWorldSizeY;
+                        rwxChecked++;
+                        if (com.corrodinggames.rts.gameFramework.utility.GameViewUtils.b(rwxWX, rwxWY, getMovementType()) < 0) {
+                            rwxBad++;
+                        }
+                    }
+                    if (rwxBad > 0) {
+                        RWX_AUDIT_N++;
+                        io.github.rwx.probe.RwxPerf.out("RWX_PATH_AUDIT illegal unit=" + (r() == null ? "?" : r().getUnitTypeDescriptionShort())
+                            + " type=" + getMovementType() + " bad=" + rwxBad + "/" + rwxChecked
+                            + " goal=" + this.aU.endTileX + "," + this.aU.endTileY + " map=" + rwxTm.tileCountX + "x" + rwxTm.tileCountY);
+                    }
+                }
                 return;
             }
         }
