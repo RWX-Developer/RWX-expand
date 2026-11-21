@@ -281,7 +281,10 @@ class BenchRampMod : JvmMod() {
     // RWX：海军自动测试 —— 反射拿引擎的瓦片通行性，找水域刷船，然后发水域移动令。
     private fun armWaterBench(n: Int) {
         val spawned = ArrayList<UnitRuntimeRef>()
-        val rnd = java.util.Random(20261122L)
+        val rnd = java.util.Random(System.getProperty("bench.seed", "20261122").toLong())
+        val waveTicks = System.getProperty("bench.waveTicks", "600").toLong()
+        val targetRange = System.getProperty("bench.targetRange", "40").toInt()
+        val landTarget = System.getProperty("bench.landTarget", "0").toInt()
         var waves = 0
         var waterFound = 0
         var lastTX = -1.0f
