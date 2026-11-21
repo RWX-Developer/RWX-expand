@@ -192,6 +192,23 @@ public class Command {
 
     // RWX：把落点钳进地图世界坐标范围，并向内缩半格。
     // 这就是「单位一路开到地图边缘」的第一道闸：图外目标进寻路前先收回最近的可站立列。
+    // RWX：落点是否在图外（供 clampReject 使用）
+    private static boolean rwxOutOfMap(float f, float f2) {
+        try {
+            GameEngine ge = GameEngine.getInstance();
+            if (ge == null || ge.tileMap == null) {
+                return false;
+            }
+            com.corrodinggames.rts.game.map.TileMap tm = ge.tileMap;
+            if (tm.tileCountX <= 0 || tm.tileCountY <= 0) {
+                return false;
+            }
+            return f < 0 || f2 < 0 || f > tm.getWorldWidth() || f2 > tm.getWorldHeight();
+        } catch (Throwable th) {
+            return false;
+        }
+    }
+
     private static float[] rwxClampTarget(float f, float f2) {
         try {
             GameEngine ge = GameEngine.getInstance();
@@ -209,9 +226,23 @@ public class Command {
             float cx = f < hx ? hx : (f > maxX ? maxX : f);
             float cy = f2 < hy ? hy : (f2 > maxY ? maxY : f2);
             if (cx != f || cy != f2) {
-                if (RWX_CLAMP_N++ < 8) {
+                if (RWX_CLAMP_N++ < 12) {
+                    StringBuilder rwxSrc = new StringBuilder();
+                    StackTraceElement[] rwxSt = new Throwable().getStackTrace();
+                    int rwxTaken = 0;
+                    for (StackTraceElement rwxE : rwxSt) {
+                        if (rwxE.getClassName().equals("com.corrodinggames.rts.gameFramework.Command")) {
+                            continue;
+                        }
+                        rwxSrc.append(rwxE.getClassName().substring(rwxE.getClassName().lastIndexOf('.') + 1))
+                            .append('.').append(rwxE.getMethodName()).append(':').append(rwxE.getLineNumber()).append(" < ");
+                        if (++rwxTaken >= 4) {
+                            break;
+                        }
+                    }
                     io.github.rwx.probe.RwxPerf.out("RWX_CLAMP out of map: " + (int) f + "," + (int) f2
-                        + " -> " + (int) cx + "," + (int) cy + " map=" + tm.tileCountX + "x" + tm.tileCountY);
+                        + " -> " + (int) cx + "," + (int) cy + " map=" + tm.tileCountX + "x" + tm.tileCountY
+                        + " ai=" + false + " src=" + rwxSrc);
                 }
             }
             return new float[]{cx, cy};
@@ -578,6 +609,13 @@ public class Command {
 
     /* JADX INFO: renamed from: a */
     public void setMoveTarget(float f, float f2) {
+        // RWX：-Drwx.clampReject=1 时，图外落点不再被钳到边界（那是「开到地图边缘」的直接来源），改为拒令。
+        if ("1".equals(System.getProperty("rwx.clampReject", "0")) && rwxOutOfMap(f, f2)) {
+            if (RWX_CLAMP_N++ < 12) {
+                io.github.rwx.probe.RwxPerf.out("RWX_CLAMP_REJECT out of map order dropped: " + (int) f + "," + (int) f2);
+            }
+            return;
+        }
         // RWX：落点先钳进地图（半格内缩），再校正到最近的可站立点。
         // 只有 AI 的不可达命令会拿到 null；玩家命令一律照发，绝不因为落点不好而吞掉。
         float[] rwxC = rwxClampTarget(f, f2);
@@ -596,6 +634,13 @@ public class Command {
 
     /* JADX INFO: renamed from: b */
     public void setAttackMoveTarget(float f, float f2) {
+        // RWX：-Drwx.clampReject=1 时，图外落点不再被钳到边界（那是「开到地图边缘」的直接来源），改为拒令。
+        if ("1".equals(System.getProperty("rwx.clampReject", "0")) && rwxOutOfMap(f, f2)) {
+            if (RWX_CLAMP_N++ < 12) {
+                io.github.rwx.probe.RwxPerf.out("RWX_CLAMP_REJECT out of map order dropped: " + (int) f + "," + (int) f2);
+            }
+            return;
+        }
         // RWX：落点先钳进地图（半格内缩），再校正到最近的可站立点。
         // 只有 AI 的不可达命令会拿到 null；玩家命令一律照发，绝不因为落点不好而吞掉。
         float[] rwxC = rwxClampTarget(f, f2);

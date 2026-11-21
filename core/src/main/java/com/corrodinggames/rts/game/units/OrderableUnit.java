@@ -4468,7 +4468,10 @@ public abstract class OrderableUnit extends UnitBase {
                             boolean rwxTargetOnEdge = tileMap.cursorTileX <= 1 || tileMap.cursorTileY <= 1 || tileMap.cursorTileX >= tileMap.tileCountX - 2 || tileMap.cursorTileY >= tileMap.tileCountY - 2;
                             if (!rwxTargetOnEdge) {
                                 RWX_EDGE_PATH_N++;
-                                io.github.rwx.probe.RwxPerf.out("RWX_EDGE_PATH unit=" + (r() == null ? "?" : r().getUnitTypeDescriptionShort()) + " type=" + getMovementType() + " target=" + (int) this.lastPathTargetX + "," + (int) this.lastPathTargetY + " lastTile=" + rwxLTX + "," + rwxLTY + " map=" + tileMap.tileCountX + "x" + tileMap.tileCountY + " nodes=" + this.activePathCount + " unreachable=" + this.aU.endUnreachable);
+                                io.github.rwx.probe.RwxPerf.out("RWX_EDGE_PATH unit=" + (r() == null ? "?" : r().getUnitTypeDescriptionShort()) + " type=" + getMovementType() + " target=" + (int) this.lastPathTargetX + "," + (int) this.lastPathTargetY + " lastTile=" + rwxLTX + "," + rwxLTY + " map=" + tileMap.tileCountX + "x" + tileMap.tileCountY + " nodes=" + this.activePathCount + " unreachable=" + this.aU.endUnreachable
+                                    + " goalTile=" + this.aU.endTileX + "," + this.aU.endTileY
+                                    + " startTile=" + this.aU.startTileX + "," + this.aU.startTileY
+                                    + " solver=" + System.getProperty("rwx.pathing", "2"));
                             }
                         }
                     }

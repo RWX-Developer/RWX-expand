@@ -95,6 +95,17 @@ public final class PathSolver implements Runnable {
         u = 0;
     }
 
+    // RWX：默认走新求解器；-Drwx.pathing=1 回退旧实现。首次调用打一行标记，方便日志归因。
+    private static final java.util.concurrent.atomic.AtomicBoolean RWX_MODE_LOGGED = new java.util.concurrent.atomic.AtomicBoolean(false);
+    private static boolean rwxUseSolver2() {
+        String rwxMode = System.getProperty("rwx.pathing", "2");
+        boolean rwxUse2 = !"1".equals(rwxMode == null ? "" : rwxMode.trim());
+        if (RWX_MODE_LOGGED.compareAndSet(false, true)) {
+            io.github.rwx.probe.RwxPerf.out("RWX_PATH_MODE solver=" + (rwxUse2 ? "2" : "1") + " prop=" + rwxMode);
+        }
+        return rwxUse2;
+    }
+
     public void b() {
         LinkedList linkedListE;
         if (this.D instanceof DynamicUnitPath) {
@@ -102,7 +113,7 @@ public final class PathSolver implements Runnable {
             linkedListE = t;
         } else {
             // RWX：-Drwx.pathing=2 走并行新求解器（A* + 边界安全的吸附策略），默认仍用旧实现。
-            linkedListE = "2".equals(System.getProperty("rwx.pathing")) ? RwxPathSolver2.solve(this, this.D) : e();
+            linkedListE = rwxUseSolver2() ? RwxPathSolver2.solve(this, this.D) : e();
             if (PATH_STATS) {
                 solvedCount++;
             }
