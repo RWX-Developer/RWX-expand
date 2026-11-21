@@ -98,7 +98,9 @@ public final class PathSolver implements Runnable {
     // RWX：默认走新求解器；-Drwx.pathing=1 回退旧实现。首次调用打一行标记，方便日志归因。
     private static final java.util.concurrent.atomic.AtomicBoolean RWX_MODE_LOGGED = new java.util.concurrent.atomic.AtomicBoolean(false);
     private static boolean rwxUseSolver2() {
-        String rwxMode = System.getProperty("rwx.pathing", "2");
+        // RWX：默认回到旧求解器。新求解器会绕开 Command 里的走廊预规划（rwxPlanCorridor），
+        // 且在大图上单条路径平均扩展 2200 节点，实测把帧拖垮；要实验时显式 -Drwx.pathing=2。
+        String rwxMode = System.getProperty("rwx.pathing", "1");
         boolean rwxUse2 = !"1".equals(rwxMode == null ? "" : rwxMode.trim());
         if (RWX_MODE_LOGGED.compareAndSet(false, true)) {
             io.github.rwx.probe.RwxPerf.out("RWX_PATH_MODE solver=" + (rwxUse2 ? "2" : "1") + " prop=" + rwxMode);

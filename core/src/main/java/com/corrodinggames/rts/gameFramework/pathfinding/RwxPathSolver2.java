@@ -25,7 +25,7 @@ public final class RwxPathSolver2 {
     /** 起点脱困半径（格）。 */
     private static final int RWX_START_SNAP_RADIUS = 2;
     /** 单条路径最大扩展节点数，超了判定失败，避免一条烂路径拖住整帧。 */
-    private static final int RWX_MAX_EXPAND = 40000;
+    private static final int RWX_MAX_EXPAND = 6000;
 
     private static int solved;
     private static int snapped;
