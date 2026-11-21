@@ -9,7 +9,10 @@ SRC="$ROOT/desktop/build/compose/jars/$JAR"
 
 [ -f "$SRC" ] || { echo "找不到构建产物: $SRC（先跑 scripts/build.sh）"; exit 1; }
 tasklist //FI "IMAGENAME eq RWX.exe" //NH 2>/dev/null | grep -qi rwx && { echo "RWX.exe 在运行，jar 会被锁；先关掉"; exit 1; }
-tasklist //FI "IMAGENAME eq java.exe" //NH 2>/dev/null | grep -qi java && { echo "有 java.exe 在跑（台架？）；确认后再部署"; exit 1; }
+# 只拦真正的游戏/台架 JVM（命令行里带 RWX-windows 的那个 jar）；Gradle 守护进程不算。
+if powershell -NoProfile -c "Get-CimInstance Win32_Process -Filter \"Name='java.exe' OR Name='RWX.exe'\" | Where-Object { \$_.CommandLine -like '*RWX-windows*' -or \$_.Name -eq 'RWX.exe' } | Select-Object -ExpandProperty ProcessId" 2>/dev/null | grep -qiE '[0-9]'; then
+  echo "有游戏/台架 JVM 在跑（RWX-windows）；先停掉再部署"; exit 1;
+fi
 
 cd "$PACK" || exit 1
 mkdir -p logs-archive

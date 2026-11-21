@@ -111,6 +111,11 @@ public final class RwxPerf {
     public static long trigFramesTick;
     public static long trigEvalTick;
     public static long cbVisitsTick;
+    // RWX 第十二轮：同一批计数在 600-tick 窗口内的累计，用来给出「稳态窗口」的 cb / lock 数字
+    private static long trigWin;
+    private static long evalWin;
+    private static long cbWin;
+    private static long lockBase;
     private static long frameStart;
     private static int frames;
 
@@ -196,11 +201,16 @@ public final class RwxPerf {
             max[TOTAL] = total;
         }
         // RWX：单帧超 50ms 当场把本帧各段写出来——窗口 max 只说「有尖峰」，这里给「尖峰长什么样」
+        // RWX 第十二轮：窗口累计（尖峰行只有尖峰帧才有，稳态窗口也要能看到 cb / lock）
+        trigWin += trigFramesTick;
+        evalWin += trigEvalTick;
+        cbWin += cbVisitsTick;
         if (total > SPIKE_NS) {
             int worst = -1;
             long prevMax = 0;
             StringBuilder ss = new StringBuilder("RWX_SPIKE tick=").append(tick)
                     .append(" trigN=").append(trigFramesTick).append('/').append(trigEvalTick).append("/cb").append(cbVisitsTick)
+                    .append("/lock").append(com.corrodinggames.rts.game.units.custom.logicBooleans.LogicBoolean.AbstractNumberBoolean.RWX_LOCK_N)
                     .append(" objects=").append(objectCount)
                     .append(" gid=").append(gid)
                     .append(" total=").append(String.format("%.1f", total / 1000000.0)).append("ms");
@@ -227,7 +237,9 @@ public final class RwxPerf {
         StringBuilder sb = new StringBuilder("RWX_PROF tick=").append(tick)
                 .append(" objects=").append(objectCount)
                 .append(" frames=").append(frames)
-                .append(" gid=").append(gid);
+                .append(" gid=").append(gid)
+                .append(" trigWin=").append(trigWin).append('/').append(evalWin).append("/cb").append(cbWin)
+                .append("/lockWin=").append((com.corrodinggames.rts.game.units.custom.logicBooleans.LogicBoolean.AbstractNumberBoolean.RWX_LOCK_N - lockBase) / 600L);
         for (int i = 0; i < SECTIONS; i++) {
             double avg = (acc[i] / 1000000.0) / frames;
             double mx = max[i] / 1000000.0;
@@ -238,6 +250,10 @@ public final class RwxPerf {
         out(sb.toString());
         java.util.Arrays.fill(acc, 0L);
         java.util.Arrays.fill(max, 0L);
+        trigWin = 0L;
+        evalWin = 0L;
+        cbWin = 0L;
+        lockBase = com.corrodinggames.rts.game.units.custom.logicBooleans.LogicBoolean.AbstractNumberBoolean.RWX_LOCK_N;
         frames = 0;
     }
 

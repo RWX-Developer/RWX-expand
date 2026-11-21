@@ -147,6 +147,40 @@ public abstract class CompareJoinerBoolean extends LogicBoolean.JoinerBoolean {
         }
     }
 
+    // RWX 第十二轮（顾寂：「自动触发必须关……不能让他空转」）的入口：
+    // `numberOfUnitsInTeam(withinRange=400) > 999999` 把阈值写在外层，内层原来拿不到阈值，
+    // 每 tick 全范围清点。这里在求值前把字面量阈值交给计数节点（解析期克隆，每条件一份实例，
+    // 不会跨条件串味）。只在「恰好两个子节点、其中一个是字面量」时下推：链式 a > b > c 语义不同，保守不动。
+    // == 与 != 不下推：那两个比较需要精确总数。
+    static void rwxPushThreshold(LogicBoolean[] logicBooleanArr, String strOp) {
+        if (!LogicBoolean.AbstractNumberBoolean.rwxCountLock || logicBooleanArr == null || logicBooleanArr.length != 2) {
+            return;
+        }
+        LogicBoolean left = logicBooleanArr[0];
+        LogicBoolean right = logicBooleanArr[1];
+        if (right instanceof LogicBoolean.StaticValueBoolean && left instanceof LogicBoolean.AbstractNumberBoolean) {
+            ((LogicBoolean.AbstractNumberBoolean) left).rwxPushThreshold(strOp, ((LogicBoolean.StaticValueBoolean) right).getStaticValue());
+            return;
+        }
+        if (left instanceof LogicBoolean.StaticValueBoolean && right instanceof LogicBoolean.AbstractNumberBoolean) {
+            String strFlip = strOp.equals(">") ? "<" : (strOp.equals("<") ? ">" : (strOp.equals(">=") ? "<=" : ">="));
+            ((LogicBoolean.AbstractNumberBoolean) right).rwxPushThreshold(strFlip, ((LogicBoolean.StaticValueBoolean) left).getStaticValue());
+        }
+    }
+
+    // 需要精确总数的消费者（==、!=、数学运算）：解析期给计数子节点打标记，
+    // 关闭它的饱和 cap 与保护锁，否则「min(count,cap)」会改变判断结果。
+    static void rwxMarkExact(LogicBoolean[] logicBooleanArr) {
+        if (!LogicBoolean.AbstractNumberBoolean.rwxCountLock || logicBooleanArr == null) {
+            return;
+        }
+        for (LogicBoolean logicBoolean : logicBooleanArr) {
+            if (logicBoolean instanceof LogicBoolean.AbstractNumberBoolean) {
+                ((LogicBoolean.AbstractNumberBoolean) logicBoolean).rwxMarkExactNeeded();
+            }
+        }
+    }
+
     /* JADX INFO: loaded from: game-lib.jar:com/corrodinggames/rts/game/units/custom/logicBooleans/CompareJoinerBoolean$CompareNumbers.class */
     public abstract static class CompareNumbers extends CompareJoinerBoolean {
         @Override
@@ -162,6 +196,10 @@ public abstract class CompareJoinerBoolean extends LogicBoolean.JoinerBoolean {
                 }
             }
             if (z2) {
+            }
+            // == / != 需要精确总数（第十二轮）
+            if (this instanceof CompareEqualNumbers || this instanceof CompareNotEqualNumbers) {
+                rwxMarkExact(this.children);
             }
             return super.validateAndOptimize(str, str2, str3, logicBooleanContext, z);
         }
@@ -321,6 +359,7 @@ public abstract class CompareJoinerBoolean extends LogicBoolean.JoinerBoolean {
         @Override // com.corrodinggames.rts.game.units.custom.logicBooleans.LogicBoolean
         public boolean read(OrderableUnit orderableUnit) {
             LogicBoolean[] logicBooleanArr = this.children;
+            rwxPushThreshold(logicBooleanArr, ">");
             float number = logicBooleanArr[0].readNumber(orderableUnit);
             for (int i = 1; i < logicBooleanArr.length; i++) {
                 float number2 = logicBooleanArr[i].readNumber(orderableUnit);
@@ -343,6 +382,7 @@ public abstract class CompareJoinerBoolean extends LogicBoolean.JoinerBoolean {
         @Override // com.corrodinggames.rts.game.units.custom.logicBooleans.LogicBoolean
         public boolean read(OrderableUnit orderableUnit) {
             LogicBoolean[] logicBooleanArr = this.children;
+            rwxPushThreshold(logicBooleanArr, "<");
             float number = logicBooleanArr[0].readNumber(orderableUnit);
             for (int i = 1; i < logicBooleanArr.length; i++) {
                 float number2 = logicBooleanArr[i].readNumber(orderableUnit);
@@ -365,6 +405,7 @@ public abstract class CompareJoinerBoolean extends LogicBoolean.JoinerBoolean {
         @Override // com.corrodinggames.rts.game.units.custom.logicBooleans.LogicBoolean
         public boolean read(OrderableUnit orderableUnit) {
             LogicBoolean[] logicBooleanArr = this.children;
+            rwxPushThreshold(logicBooleanArr, ">=");
             float number = logicBooleanArr[0].readNumber(orderableUnit);
             for (int i = 1; i < logicBooleanArr.length; i++) {
                 float number2 = logicBooleanArr[i].readNumber(orderableUnit);
@@ -387,6 +428,7 @@ public abstract class CompareJoinerBoolean extends LogicBoolean.JoinerBoolean {
         @Override // com.corrodinggames.rts.game.units.custom.logicBooleans.LogicBoolean
         public boolean read(OrderableUnit orderableUnit) {
             LogicBoolean[] logicBooleanArr = this.children;
+            rwxPushThreshold(logicBooleanArr, "<=");
             float number = logicBooleanArr[0].readNumber(orderableUnit);
             for (int i = 1; i < logicBooleanArr.length; i++) {
                 float number2 = logicBooleanArr[i].readNumber(orderableUnit);
@@ -436,6 +478,8 @@ public abstract class CompareJoinerBoolean extends LogicBoolean.JoinerBoolean {
                     throw new BooleanParseException("Unexpected type while using " + type() + " got: " + logicBoolean2.getReturnType().name());
                 }
             }
+            // 数学运算把计数当数值用，必须精确（第十二轮）
+            rwxMarkExact(this.children);
             if (z3) {
                 return new StaticValueBoolean(readNumber(null));
             }

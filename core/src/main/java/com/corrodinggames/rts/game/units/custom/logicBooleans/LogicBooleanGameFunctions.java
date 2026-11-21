@@ -1,6 +1,6 @@
 package com.corrodinggames.rts.game.units.custom.logicBooleans;
 
-import com.corrodinggames.rts.game.PlayerTeam;
+import com.corrodinggames.rts.game.PlayerTeam;
 import com.corrodinggames.rts.game.units.*;
 import com.corrodinggames.rts.game.units.custom.*;
 import com.corrodinggames.rts.game.units.custom.condition.resources.Resource;
@@ -1551,6 +1551,17 @@ public class LogicBooleanGameFunctions {
             if (this.withinRange < 0.0f || iCanAffordResource == 0) {
                 return iCanAffordResource;
             }
+            // RWX 第十二轮（保护锁）：范围内计数 ≤ 全队总数，而总数是免费的 O(1)。总数已经决定
+            // 比较结果时直接返回总数，连扫描都不发起 —— 「f(withinRange=400) > 999999」这种恒假
+            // 条件不再空转。rwxCountVerify=1 时仍然真扫一遍做结果核对（只用于取证，慢）。
+            // allTeams / neutralTeam 扫的是全局桶与 SystemTeam 桶，颜色队求和不是它们的真上界，
+            // 改用「全局对象数」：单位是全对象的子集，size() 是 O(1) 且恒为上界。
+            int iBound = (this.allTeams || this.neutralTeam) ? com.corrodinggames.rts.gameFramework.GameObject.dK().size() : iCanAffordResource;
+            boolean blnLocked = rwxSkipLockApplies(iBound);
+            if (blnLocked && !LogicBoolean.AbstractNumberBoolean.rwxCountVerify) {
+                LogicBoolean.AbstractNumberBoolean.RWX_LOCK_N++;
+                return iBound;
+            }
             handleCallbackCount.withinRangeSq = this.withinRangeSq;
             handleCallbackCount.count = 0;
             handleCallbackCount.rwxCap = this.rwxCountCap;
@@ -1559,7 +1570,12 @@ public class LogicBooleanGameFunctions {
             handleCallbackCount.incompleteBuildings = this.incompleteBuildings;
             handleCallbackCount.targetTeam = playerTeam;
             GameEngine.getInstance().unitSpatialIndex.a(orderableUnit.posX, orderableUnit.posY, this.withinRange, orderableUnit, 0.0f, handleCallbackCount);
-            return handleCallbackCount.count;
+            int iScanned = handleCallbackCount.count;
+            if (blnLocked) {
+                rwxVerifySkipped(iBound, iScanned);
+                return iBound;
+            }
+            return iScanned;
         }
 
         /* JADX INFO: loaded from: game-lib.jar:com/corrodinggames/rts/game/units/custom/logicBooleans/LogicBooleanGameFunctions$NumberOfUnitsInTeam$HandleCallbackCount.class */
@@ -1683,6 +1699,12 @@ public class LogicBooleanGameFunctions {
             if (this.withinRange < 0.0f || iC == 0) {
                 return iC;
             }
+            // RWX 第十二轮（保护锁）：敌人/友军总数（O(1)）是扫描集合的上界，够不到阈值就不扫。
+            boolean blnLocked2 = rwxSkipLockApplies(iC);
+            if (blnLocked2 && !LogicBoolean.AbstractNumberBoolean.rwxCountVerify) {
+                LogicBoolean.AbstractNumberBoolean.RWX_LOCK_N++;
+                return iC;
+            }
             if (!this.ally) {
                 handleCallbackCountEnemies.withinRangeSq = this.withinRangeSq;
                 handleCallbackCountEnemies.count = 0;
@@ -1691,7 +1713,12 @@ public class LogicBooleanGameFunctions {
                 handleCallbackCountEnemies.tag = this._withTag;
                 handleCallbackCountEnemies.incompleteBuildings = this.incompleteBuildings;
                 GameEngine.getInstance().unitSpatialIndex.a(orderableUnit.posX, orderableUnit.posY, this.withinRange, orderableUnit, 0.0f, handleCallbackCountEnemies);
-                return handleCallbackCountEnemies.count;
+                int iEnemies = handleCallbackCountEnemies.count;
+                if (blnLocked2) {
+                    rwxVerifySkipped(iC, iEnemies);
+                    return iC;
+                }
+                return iEnemies;
             }
             handleCallbackCountAlly.withinRangeSq = this.withinRangeSq;
             handleCallbackCountAlly.count = 0;
@@ -1701,7 +1728,12 @@ public class LogicBooleanGameFunctions {
             handleCallbackCountAlly.incompleteBuildings = this.incompleteBuildings;
             handleCallbackCountAlly.ally = orderableUnit.team;
             GameEngine.getInstance().unitSpatialIndex.a(orderableUnit.posX, orderableUnit.posY, this.withinRange, orderableUnit, 0.0f, handleCallbackCountAlly);
-            return handleCallbackCountAlly.count;
+            int iAlly = handleCallbackCountAlly.count;
+            if (blnLocked2) {
+                rwxVerifySkipped(iC, iAlly);
+                return iC;
+            }
+            return iAlly;
         }
 
         /* JADX INFO: loaded from: game-lib.jar:com/corrodinggames/rts/game/units/custom/logicBooleans/LogicBooleanGameFunctions$NumberOfUnitsInEnemyOrAllyTeam$HandleCallbackCountEnemies.class */

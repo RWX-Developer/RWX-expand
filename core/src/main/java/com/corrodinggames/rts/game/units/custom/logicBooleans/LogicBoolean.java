@@ -651,11 +651,6 @@ public abstract class LogicBoolean implements Cloneable {
         }
 
         @Override // com.corrodinggames.rts.game.units.custom.logicBooleans.LogicBoolean
-        public float readNumber(OrderableUnit orderableUnit) {
-            return getValue(orderableUnit);
-        }
-
-        @Override // com.corrodinggames.rts.game.units.custom.logicBooleans.LogicBoolean
         public String getMatchFailReasonForPlayer(OrderableUnit orderableUnit) {
             String str = getName() + "=" + Utility.padString(getValue(orderableUnit), 3) + VariableScope.nullOrMissingString;
             if (this.full) {
@@ -681,35 +676,166 @@ public abstract class LogicBoolean implements Cloneable {
         // RWX 第十轮：本次 getValue 的计数上限；默认 MAX 表示要求精确值。
         protected int rwxCountCap = Integer.MAX_VALUE;
 
+        // RWX 第十二轮（顾寂：「自动触发必须关……不能让他空转」）：
+        // `numberOfUnitsInTeam(withinRange=400) > 999999` 这种把阈值写在外层的写法，内层原来拿不到
+        // 阈值，每 tick 全范围清点（4000 兵实测 180 万回调访问/tick）。现在两条锁，全部保持真值表不变：
+        //   1) 饱和 cap（第十/十一轮）：扫描数到 阈值+1 就收手；饱和值 min(count,cap) 与真值在
+        //      「与阈值±ε 比较」下结果恒等，所以 readNumber 也照设 cap（外层字面量比较拿到的
+        //      是饱和值，判断仍正确）。纯数值读取（f(...) 当数用）保持精确，cap=MAX 时不动。
+        //   2) 保护锁（本方法）：全队总数是免费的 O(1) 上界，范围计数 ≤ 总数；总数够不到阈值时
+        //      连扫描都不发起，直接返回总数（如 `f(withinRange=400) > 999999` 恒假 → 空转条件秒判）。
+        // 阈值必须严格在外层比较里才用保护锁；带 == 的比较会跨子表达式污染阈值，一律退回精确值。
+        // -Drwx.countLock=0 整体退回原行为；-Drwx.countVerify=1 影子扫描对账（慢，仅调试）。
+        // RWX 第十二轮（顾寂：「自动触发必须关……不能让他空转」）：
+        // `numberOfUnitsInTeam(withinRange=400) > 999999` 这种把阈值写在外层的写法，内层原来拿不到
+        // 阈值，每 tick 全范围清点（4000 兵实测 180 万回调访问/tick）。现在两条锁，真值表保持不变：
+        //   1) 饱和 cap：解析期把外层字面量阈值下推进计数函数（rwxPushedGt/rwxPushedLt），扫描数到
+        //      阈值+1 就收手；min(count,cap) 与真值在「与该阈值比较」下结果恒等，所以数值读取
+        //      （readNumber）也照样设 cap。
+        //   2) 保护锁：全队总数是免费的 O(1) 上界，范围计数 ≤ 总数；总数够不到阈值 → 连扫描都不发起，
+        //      直接返回总数（`> 999999` 恒假的空转条件秒判）。仅在 targetTeam 为普通颜色队或
+        //      敌/友军求和时启用——SystemTeam(TEAM_ALL/UNKNOWN) 的统计与索引桶不保证同步，保守不锁。
+        // == / != / full / empty / 无阈值纯读取一律保持精确。-Drwx.countLock=0 整体退回原行为。
+        public static final boolean rwxCountLock = !"0".equals(System.getProperty("rwx.countLock", "1"));
+        // -Drwx.countVerify=1：跳过时仍然真扫一遍并核对两种答案的比较结果，只用于取证（很慢）。
+        public static final boolean rwxCountVerify = "1".equals(System.getProperty("rwx.countVerify", "0"));
+        public static int RWX_LOCK_N = 0;
+        public static int RWX_LOCK_MISMATCH = 0;
+        // 本节点的结果必须精确：被 == / != 或数学运算消费时，饱和值与总数都会改变判断，
+        // 于是 cap 与保护锁一起关闭（解析期标记，见 CompareJoinerBoolean）。
+        private boolean rwxExactNeeded;
+
+        public void rwxMarkExactNeeded() {
+            this.rwxExactNeeded = true;
+        }
+        private float rwxPushedGt = -1.0f;
+        private float rwxPushedLt = -1.0f;
+
+        // 解析期由字面量比较节点调用：把外层阈值下推给「计数 与字面量」的计数函数。
+        // strOp ∈ {">", ">=", "<", "<="}；==/!= 不调用这里。
+        public void rwxPushThreshold(String strOp, float f) {
+            if (!rwxCountLock || this.rwxExactNeeded || !rwxCountOnly() || this.full || this.empty) {
+                return;
+            }
+            if (strOp.equals(">")) {
+                this.rwxPushedGt = Math.max(this.rwxPushedGt, f);
+            } else if (strOp.equals(">=")) {
+                this.rwxPushedGt = Math.max(this.rwxPushedGt, f - 1.0E-4f);
+            } else if (strOp.equals("<")) {
+                this.rwxPushedLt = this.rwxPushedLt < 0.0f ? f : Math.min(this.rwxPushedLt, f);
+            } else if (strOp.equals("<=")) {
+                this.rwxPushedLt = this.rwxPushedLt < 0.0f ? f + 1.0E-4f : Math.min(this.rwxPushedLt, f + 1.0E-4f);
+            }
+        }
+
+        private float rwxMergedGt() {
+            return Math.max(this.greaterThan, this.rwxPushedGt);
+        }
+
+        private float rwxMergedLt() {
+            if (this.lessThan == -1.0f) {
+                return this.rwxPushedLt;
+            }
+            if (this.rwxPushedLt == -1.0f) {
+                return this.lessThan;
+            }
+            return Math.min(this.lessThan, this.rwxPushedLt);
+        }
+
+        // 保护锁：全队总数 total 已决定比较结果（不用再扫）时返回 true。
+        // 调用方保证 total 是扫描集合的真上界（普通颜色队 / 敌友军求和）。
+        public boolean rwxSkipLockApplies(int total) {
+            if (!rwxCountLock || this.rwxExactNeeded || !rwxCountOnly() || this.full || this.empty) {
+                return false;
+            }
+            float g = rwxMergedGt();
+            float l = rwxMergedLt();
+            if (g != -1.0f && l == -1.0f) {
+                return total <= (int) Math.floor((double) g); // count ≤ total ≤ g → 「> g」必假
+            }
+            if (l != -1.0f && g == -1.0f) {
+                return total < (int) Math.ceil((double) l);   // count ≤ total < l → 「< l」必真，total 即答案
+            }
+            return false; // 两侧夹逼或纯精确读取：不锁
+        }
+
+        // 保护锁用得对不对，只有「总数是不是扫描集合的真上界」这一个前提。rwxCountVerify 打开时，
+        // 跳过之前仍真扫一遍，比较两种值代入阈值后的结果；不一致就留痕（最多 3 条）。
+        public void rwxVerifySkipped(int skipped, int scanned) {
+            RWX_LOCK_N++;
+            if (!rwxCountVerify) {
+                return;
+            }
+            if (rwxOutcomeFromCount(skipped) != rwxOutcomeFromCount(scanned)) {
+                if (RWX_LOCK_MISMATCH++ < 3) {
+                    io.github.rwx.probe.RwxPerf.out("RWX_LOCK_MISMATCH skipped=" + skipped + " scanned=" + scanned + " cond=" + getClass().getSimpleName() + " gt=" + rwxMergedGt() + " lt=" + rwxMergedLt());
+                }
+            }
+        }
+
+        private boolean rwxOutcomeFromCount(int i) {
+            float g = rwxMergedGt();
+            float l = rwxMergedLt();
+            if (this.full || this.empty) {
+                return false; // 这两种本来就不走锁
+            }
+            if (g != -1.0f && i <= g) {
+                return false;
+            }
+            if (l != -1.0f && i >= l) {
+                return false;
+            }
+            return true;
+        }
+
         private int rwxCapForThreshold() {
-            // RWX 第十一轮：显式阈值（numberOfUnits(...)>20 这种写法）也要参与 cap。
-            // 原来 full（==/数值读取）直接要精确值 —— 但比较只需要「阈值±1」就能定真假，
-            // 计数饱和到 cap 后 min(count,cap) 与真值在比较结果上恒等，扫描提前收手。
-            int need = 1; // min(count,need) 至少要能区分的最小数：>g 需要 g+1，<l 需要 l，empty 需要 1
+            // RWX 第十一轮：显式阈值也参与 cap。第十二轮：外层字面量阈值（下推值）同样参与。
+            // min(count,need) 至少要能区分的最小数：>g 需要 g+1，<l 需要 l，empty 需要 1
+            float g = rwxCountLock ? rwxMergedGt() : this.greaterThan;
+            float l = rwxCountLock ? rwxMergedLt() : this.lessThan;
+            int need = 1;
             if (this.empty) {
                 need = Math.max(need, 1);
             }
-            if (this.greaterThan != -1.0f) {
-                need = Math.max(need, (int) Math.floor((double) this.greaterThan) + 1);
+            if (g != -1.0f) {
+                need = Math.max(need, (int) Math.floor((double) g) + 1);
             }
-            if (this.lessThan != -1.0f) {
+            if (l != -1.0f) {
                 // 判「count < l」需要 l 以下精确：cap 取 l 时 min(count,l) 两侧都不会误判
-                need = Math.max(need, (int) Math.ceil((double) this.lessThan));
+                need = Math.max(need, (int) Math.ceil((double) l));
             }
             if (this.full) {
                 return Integer.MAX_VALUE; // ==maxValue 需要精确总数
             }
             int cap = Math.max(need, 1);
-            if (cap == 1 && !this.empty && this.greaterThan == -1.0f && this.lessThan == -1.0f) {
+            if (cap == 1 && !this.empty && g == -1.0f && l == -1.0f) {
                 return Integer.MAX_VALUE; // 没带阈值的纯计数：要精确值
             }
             return cap;
         }
 
         @Override // com.corrodinggames.rts.game.units.custom.logicBooleans.LogicBoolean
+        public float readNumber(OrderableUnit orderableUnit) {
+            // RWX 第十二轮：`f(...) > N` 走的是数值读取，原来完全不设 cap、永远全扫描。
+            // 现在与布尔读法同样：有阈值（含下推值）就按 min(count,cap) 交给外层比较，结果恒等。
+            if (rwxCountLock && !this.rwxExactNeeded && rwxCountOnly()) {
+                int cap = rwxCapForThreshold();
+                if (cap != Integer.MAX_VALUE) {
+                    this.rwxCountCap = cap;
+                    try {
+                        return getValue(orderableUnit);
+                    } finally {
+                        this.rwxCountCap = Integer.MAX_VALUE;
+                    }
+                }
+            }
+            return getValue(orderableUnit);
+        }
+
+        @Override // com.corrodinggames.rts.game.units.custom.logicBooleans.LogicBoolean
         public boolean read(OrderableUnit orderableUnit) {
             float value;
-            if (rwxCountOnly()) {
+            if (rwxCountOnly() && !this.rwxExactNeeded) {
                 this.rwxCountCap = rwxCapForThreshold();
                 try {
                     value = getValue(orderableUnit);
@@ -720,16 +846,18 @@ public abstract class LogicBoolean implements Cloneable {
                 value = getValue(orderableUnit);
             }
             boolean z = true;
+            float g = rwxCountLock ? rwxMergedGt() : this.greaterThan;
+            float l = rwxCountLock ? rwxMergedLt() : this.lessThan;
             if (this.full && value < getMaxValue(orderableUnit)) {
                 z = false;
             }
             if (this.empty && value > 0.0f) {
                 z = false;
             }
-            if (this.greaterThan != -1.0f && value <= this.greaterThan) {
+            if (g != -1.0f && value <= g) {
                 z = false;
             }
-            if (this.lessThan != -1.0f && value >= this.lessThan) {
+            if (l != -1.0f && value >= l) {
                 z = false;
             }
             return z;

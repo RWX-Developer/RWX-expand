@@ -105,6 +105,26 @@ class BenchRampMod : JvmMod() {
                 "if numberOfUnitsInTeam(withinRange=" + r0(800) + ") > 999999",
                 "if (numberOfUnitsInTeam(withTag=\"rwx_no_such_tag\", withinRange=" + r0(600) + ") > 0) or (numberOfUnitsInEnemyTeam(withinRange=" + r0(600) + ") > 0)",
             )
+            // RWX 第十二轮（顾寂：「保护锁」）：bench.trigForm=lock 时用一组「阈值刚好落在总数附近」的条件，
+            // 让保护锁有的命中、有的必须回落到真扫；配 -Drwx.countVerify=1 由引擎逐条核对
+            // 「跳过时返回的总数」与「真扫计数」代入阈值后的判断是否一致（MISMATCH 应为 0）。
+            val lockConds = arrayOf(
+                "if numberOfUnitsInTeam(withinRange=" + r0(400) + ") > 999999",
+                "if numberOfUnitsInAllTeams(withinRange=" + r0(400) + ") > 999999",
+                "if numberOfUnitsInTeam(withinRange=" + r0(400) + ") >= 999999",
+                "if numberOfUnitsInTeam(withinRange=" + r0(400) + ") < 999999",
+                "if numberOfUnitsInAllTeams(withinRange=" + r0(300) + ") <= 999999",
+                "if numberOfUnitsInTeam(withinRange=" + r0(400) + ") < 3000",
+                "if numberOfUnitsInTeam(withinRange=" + r0(400) + ") >= 3000",
+                "if numberOfUnitsInTeam(withinRange=" + r0(400) + ") == 3000",
+                "if numberOfUnitsInEnemyTeam(withinRange=" + r0(600) + ") > 999999",
+                "if (numberOfUnitsInTeam(withinRange=" + r0(400) + ") > 999999) and (self.hp > 0)",
+            )
+            if (System.getProperty("bench.trigForm", "cmp").trim() == "lock") {
+                for ((gi, cond) in lockConds.withIndex()) {
+                    rawSection("action_l$gi", mapOf("text" to "l$gi", "resetCustomTimer" to true, "autoTrigger" to cond))
+                }
+            }
             for ((gi, cond) in trigConds.withIndex()) {
                 rawSection("action_t$gi", mapOf("text" to "t$gi", "resetCustomTimer" to true, "autoTrigger" to cond))
             }
