@@ -243,8 +243,13 @@ public final class RwxPerf {
     public static final int RD_FX = 5;       // effectManager 各层
     public static final int RD_UI = 6;       // drawUI
     public static final int RD_TAIL = 7;     // 收尾/其余
+    public static final int RD_SDRAW = 8;    // var26.d 需要重绘的单位
+    public static final int RD_EDRAW = 9;    // var27.e 主绘制
+    public static final int RD_LAYER = 10;   // var28.c 分层
+    public static final int RD_ADRAW = 11;   // var29.a 附加层
     private static final String[] RD_NAMES = {
-            "lock", "collect", "sort", "map", "units", "fx", "ui", "tail"};
+            "lock", "collect", "sort", "map", "units", "fx", "ui", "tail",
+            "u_sdraw", "u_edraw", "u_layer", "u_adraw"};
     private static final long[] racc = new long[RD_NAMES.length];
     private static final long[] rmax = new long[RD_NAMES.length];
     private static long rLast;

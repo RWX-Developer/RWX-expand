@@ -1964,7 +1964,8 @@ public class GameLogic extends GameEngine {
                     var26.d(float2);
                 }
 
-                for (int var20 = 0; var20 < var5; var20++) {
+                io.github.rwx.probe.RwxPerf.rendSection(io.github.rwx.probe.RwxPerf.RD_SDRAW);
+            for (int var20 = 0; var20 < var5; var20++) {
                     GameObject var27 = var4[var20];
                     if (!var27.shouldDraw) {
                         if (!(var27 instanceof BaseUnit)) {
@@ -1983,20 +1984,23 @@ public class GameLogic extends GameEngine {
                     }
                 }
 
-                for (int var21 = 0; var21 < var15; var21++) {
+                io.github.rwx.probe.RwxPerf.rendSection(io.github.rwx.probe.RwxPerf.RD_EDRAW);
+            for (int var21 = 0; var21 < var15; var21++) {
                     GameObject var28 = var14[var21];
                     if (var28.drawLayer != 0 && var28.drawLayer != 10) {
                         var28.c(float2);
                     }
                 }
 
-                for (int var22 = 0; var22 < var15; var22++) {
+                io.github.rwx.probe.RwxPerf.rendSection(io.github.rwx.probe.RwxPerf.RD_LAYER);
+            for (int var22 = 0; var22 < var15; var22++) {
                     GameObject var29 = var14[var22];
                     var29.a(float2, false);
                     var29.p(float2);
                 }
 
-                PlayerTeam.h(float2);
+                io.github.rwx.probe.RwxPerf.rendSection(io.github.rwx.probe.RwxPerf.RD_ADRAW);
+            PlayerTeam.h(float2);
             }
 
             this.shouldDrawSmallUnitShadows = true;
