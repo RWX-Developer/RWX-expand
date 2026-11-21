@@ -256,6 +256,9 @@ public final class RwxPerf {
     private static long rPrevBegin;
     private static boolean rActive = false;
 
+    public static String uMode = "A_base";
+    public static int renderObjects;
+
     public static long beginRender() {
         if (!ON) {
             return 0L;
@@ -315,7 +318,7 @@ public final class RwxPerf {
             rmax[i] = 0L;
         }
         Runtime rt = Runtime.getRuntime();
-        sb.append(" heap=").append((rt.totalMemory() - rt.freeMemory()) >> 20).append("MB");
+        sb.append(" objs=").append(renderObjects).append(" umode=").append(uMode).append(" heap=").append((rt.totalMemory() - rt.freeMemory()) >> 20).append("MB");
         out(sb.toString());
         renderAcc = 0L;
         renderMax = 0L;

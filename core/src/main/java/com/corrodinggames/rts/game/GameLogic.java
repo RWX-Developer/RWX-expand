@@ -187,6 +187,34 @@ public class GameLogic extends GameEngine {
 
     /* JADX INFO: renamed from: W */
     GameObjectArrayList renderList;
+    // RWX：同局 A/B —— 跨轮比大小全是噪声（兵数每轮都不同）。
+    // 这里每 300 帧切一次模式，渲染段每 600 帧输出一行，正好一行属于一个模式。
+    private static long rwxABFrames;
+    public static boolean rwxABSkipNoop;
+    private static final java.util.concurrent.ConcurrentHashMap<Class<?>, Boolean> RWX_NOOP_C = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static boolean rwxNoopC(com.corrodinggames.rts.gameFramework.GameObject rwxObj) {
+        Class<?> rwxCls = rwxObj.getClass();
+        Boolean rwxHit = RWX_NOOP_C.get(rwxCls);
+        if (rwxHit != null) {
+            return rwxHit.booleanValue();
+        }
+        Class<?> rwxDecl = rwxCls;
+        while (rwxDecl != null) {
+            try {
+                rwxDecl.getDeclaredMethod("c", float.class);
+                break;
+            } catch (NoSuchMethodException rwxMiss) {
+                rwxDecl = rwxDecl.getSuperclass();
+            } catch (Throwable rwxErr) {
+                rwxDecl = null;
+            }
+        }
+        boolean rwxNoop = rwxDecl != null
+                && rwxDecl.getName().equals("com.corrodinggames.rts.game.units.BaseUnit");
+        RWX_NOOP_C.put(rwxCls, Boolean.valueOf(rwxNoop));
+        return rwxNoop;
+    }
 
     /* JADX INFO: renamed from: X */
     GameObjectArrayList renderListBuffer;
@@ -1803,7 +1831,10 @@ public class GameLogic extends GameEngine {
         To view partially-correct code enable 'Show inconsistent code' option in preferences
     */
 
-    public void drawGame(float float2) {
+    public void drawGame(float float2) {        // RWX：A/B 相位（300 帧一换，600 帧一输出刚好一行一个模式）
+        rwxABFrames++;
+        rwxABSkipNoop = false; // A/B 结论：跳过空实现无收益（2.67 vs 2.64 µs/obj），默认关闭
+        io.github.rwx.probe.RwxPerf.uMode = rwxABSkipNoop ? "B_skip" : "A_base";
         if (this.hasLoadedLevel) {
             this.performanceProfiler.a(ProfilerSection.update_game_shouldDraw);
             this.renderListBuffer.b();
@@ -1987,7 +2018,8 @@ public class GameLogic extends GameEngine {
                 io.github.rwx.probe.RwxPerf.rendSection(io.github.rwx.probe.RwxPerf.RD_EDRAW);
             for (int var21 = 0; var21 < var15; var21++) {
                     GameObject var28 = var14[var21];
-                    if (var28.drawLayer != 0 && var28.drawLayer != 10) {
+                    if (var28.drawLayer != 0 && var28.drawLayer != 10
+                            && !(rwxABSkipNoop && rwxNoopC(var28))) {
                         var28.c(float2);
                     }
                 }
@@ -2009,6 +2041,7 @@ public class GameLogic extends GameEngine {
             this.performanceProfiler.a(ProfilerSection.draw_game_effects);
             // RWX 渲染剖析：RD_UNITS
             io.github.rwx.probe.RwxPerf.rendSection(io.github.rwx.probe.RwxPerf.RD_UNITS);
+            io.github.rwx.probe.RwxPerf.renderObjects = var15;
             this.effectManager.drawEffect(float2, 2);
             this.performanceProfiler.b(ProfilerSection.draw_game_effects);
 
