@@ -920,6 +920,10 @@ public class Command {
     private static final boolean RWX_RP_DEBUG = !("0".equals((System.getenv("RWX_RP_DEBUG") == null ? "" : System.getenv("RWX_RP_DEBUG").trim())));
     private static final int RWX_RP_MAX_WAYPOINTS = 16;
     // RWX：走廊探测跑在命令派发线程上，必须给它硬上限，宁可退回原行为也不能卡帧。
+    // RWX：老师的设计 —— 走廊参数跟着「体积 + 距离 + 起终点」走，不再是一个固定公式。
+    // 这两个字段每次规划前按路线长度填，rwxBuildCorridor 读它们。
+    private int rwxPlanNodeBudget = RWX_RP_NODE_BUDGET;
+    private long rwxPlanTimeMs = RWX_RP_TIME_MS;
     private static final int RWX_RP_NODE_BUDGET = 60000;
     private static final long RWX_RP_TIME_MS = 16;
     // RWX：单位足迹膨胀系数（相对 radius），越大越远离障碍/越不容易蹭撞；1.0=旧版 0.8
@@ -1116,7 +1120,7 @@ public class Command {
         rwxOpen.add(new long[]{rwxStartIdx, rwxHeuristic(rwxStartIdx, rwxH, i3, i4)});
         int rwxNodes = 0;
         boolean rwxReached = false;
-        long rwxDeadline = System.nanoTime() + (RWX_RP_TIME_MS * 1000000L);
+        long rwxDeadline = System.nanoTime() + (this.rwxPlanTimeMs * 1000000L);
         boolean rwxTimeout = false;
         while (!rwxOpen.isEmpty()) {
             long[] rwxTop = rwxOpen.poll();
@@ -1129,7 +1133,7 @@ public class Command {
                 continue;
             }
             rwxNodes++;
-            if (rwxNodes > RWX_RP_NODE_BUDGET || System.nanoTime() > rwxDeadline) {
+            if (rwxNodes > this.rwxPlanNodeBudget || System.nanoTime() > rwxDeadline) {
                 rwxTimeout = true;
                 break;
             }
@@ -1166,7 +1170,7 @@ public class Command {
             // 超时或无路：都返回 -1 让上层换档；最后一档还不行就退回原行为
             return -1;
         }
-        int[] rwxCells = new int[RWX_RP_NODE_BUDGET];
+        int[] rwxCells = new int[Math.min(this.rwxPlanNodeBudget, 40000)];
         int rwxCellCount = 0;
         for (int rwxK = rwxEndIdx; rwxK >= 0 && rwxCellCount < rwxCells.length; rwxK = this.rwxPathFrom[rwxK]) {
             rwxCells[rwxCellCount++] = rwxK;
@@ -1347,9 +1351,29 @@ public class Command {
             { RWX_RP_GATE[3]++; return false; }
         }
         int rwxTileSize = Math.max(1, rwxTileMap.tileWorldSizeX);
-        // RWX：老师要求「寻路过程中避免碰撞、离不可通行地形远一些」。
-        // 原来 0.8 倍半径等于允许船头船尾蹭着岸走；这里提到 1.15 倍，并要求整圈通航。
-        float rwxRTiles = rwxLead.radius * RWX_FOOTPRINT_SCALE;
+        // RWX：老师的设计 —— 走廊按「一群单位里最大的那个体积」算，不是只看排头兵。
+        float rwxMaxRadius = rwxLead.radius;
+        int rwxGroupLive = 0;
+        for (OrderableUnit rwxU : this.selectedUnits) {
+            if (!rwxU.isDead && !rwxU.isTransportAttached) {
+                rwxGroupLive++;
+                if (rwxU.radius > rwxMaxRadius) {
+                    rwxMaxRadius = rwxU.radius;
+                }
+            }
+        }
+        // RWX：距离要参与 —— 起点、终点、路线长度都在这里落地。
+        // 路越长，沿线蹭岸的累计误差越大，所以安全边距随距离小幅放大（最多 +0.45 倍半径）。
+        float rwxTgtX = this.unitCommand.getTargetX();
+        float rwxTgtY = this.unitCommand.getTargetY();
+        float rwxRouteTiles = (float) Math.sqrt(
+                (double) ((rwxTgtX - rwxFromX) * (rwxTgtX - rwxFromX))
+                        + (double) ((rwxTgtY - rwxFromY) * (rwxTgtY - rwxFromY))) / (float) rwxTileSize;
+        float rwxDistScale = Math.min(0.45f, rwxRouteTiles / 240.0f);
+        float rwxRTiles = rwxMaxRadius * (RWX_FOOTPRINT_SCALE + rwxDistScale);
+        // RWX：预算按路线长度分配，长路多给点、短路不浪费（节点 / 毫秒都跟着走）。
+        this.rwxPlanNodeBudget = (int) Math.max(12000.0f, Math.min(90000.0f, rwxRouteTiles * 120.0f));
+        this.rwxPlanTimeMs = (long) Math.max(8.0f, Math.min(24.0f, 8.0f + rwxRouteTiles / 30.0f));
         float rwxRMin = rwxTileSize * 0.75f;
         if (rwxRTiles < rwxRMin) { rwxRTiles = rwxRMin; }
         float rwxRCap = rwxTileSize * 3.0f;
