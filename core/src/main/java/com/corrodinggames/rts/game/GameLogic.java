@@ -1833,7 +1833,7 @@ public class GameLogic extends GameEngine {
 
     public void drawGame(float float2) {        // RWX：A/B 相位（300 帧一换，600 帧一输出刚好一行一个模式）
         rwxABFrames++;
-        rwxABSkipNoop = false; // A/B 结论：跳过空实现无收益（2.67 vs 2.64 µs/obj），默认关闭
+        rwxABSkipNoop = false; // A/B 实测：台架 2.67→2.64 µs/obj、真实存档 0.37→0.39 ms，均在噪声内，默认关闭
         io.github.rwx.probe.RwxPerf.uMode = rwxABSkipNoop ? "B_skip" : "A_base";
         if (this.hasLoadedLevel) {
             this.performanceProfiler.a(ProfilerSection.update_game_shouldDraw);

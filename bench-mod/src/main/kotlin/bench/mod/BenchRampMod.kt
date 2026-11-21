@@ -35,6 +35,7 @@ class BenchRampMod : JvmMod() {
 
     override fun init() {
         val api = this.api
+        val fodderId = UnitId(System.getProperty("bench.fodder", "bench:fodder"))
         val fodder = UnitId("bench:fodder")
         api.units.unit(fodder) {
             core {
@@ -178,6 +179,20 @@ class BenchRampMod : JvmMod() {
                 }
             })
         }
+        if ("1" == System.getProperty("bench.tryIds", "0").trim()) {
+            api.game.repeat(1, ModTask { a ->
+                if (a.game.tick == 60L) {
+                    val team = a.game.localTeam() ?: a.game.team(0)
+                    val tid = team?.teamId ?: 0
+                    for (raw in System.getProperty("bench.tryList", "c:builder,base:builder,core:builder,vanilla:builder,rw:builder").split(",")) {
+                        val ok = try {
+                            a.unitWorld.spawn(UnitSpawnRequest(UnitId(raw.trim()), tid, WorldPosition(1500f, 1500f))) != null
+                        } catch (t: Throwable) { false }
+                        a.game.log(LogLevel.INFO, "BENCH_ID ok=" + ok + " id=" + raw.trim())
+                    }
+                }
+            })
+        }
         val pathN = System.getProperty("bench.path", "0").toInt()
         if (pathN > 0) armPathBench(pathN)
         if (target <= 0 && trigTarget <= 0) return
@@ -225,7 +240,7 @@ class BenchRampMod : JvmMod() {
                 val pos = WorldPosition(cx + r * kotlin.math.cos(th), cy + r * kotlin.math.sin(th))
                 tried++
                 val useTrig = trigLive < trigTarget
-                val spawnId = if (useTrig) { if (trigCheapMode) trigCheap else trig } else fodder
+                val spawnId = if (useTrig) { if (trigCheapMode) trigCheap else trig } else fodderId
                 val ref = a.unitWorld.spawn(UnitSpawnRequest(spawnId, teamId, pos))
                 if (ref != null) { ok++; if (useTrig) trigLive++ else { live++; ownFodder++ } }
             }
@@ -245,7 +260,7 @@ class BenchRampMod : JvmMod() {
         while (spawned.size < n) {
             val x = 500f + rnd.nextFloat() * 900f
             val y = 500f + rnd.nextFloat() * 900f
-            val ref = a.unitWorld.spawn(UnitSpawnRequest(UnitId("bench:fodder"), teamId, WorldPosition(x, y)))
+            val ref = a.unitWorld.spawn(UnitSpawnRequest(UnitId(System.getProperty("bench.fodder", "bench:fodder")), teamId, WorldPosition(x, y)))
             if (ref == null) break
             spawned.add(ref.instanceId)
         }
