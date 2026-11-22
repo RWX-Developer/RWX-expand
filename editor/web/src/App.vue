@@ -31,6 +31,13 @@ async function open(pkg) {
   try {
     state.value = await api.open(pkg)
     const entries = state.value.entries || []
+    // 支持 ?entry=<条目名> 深链：命令行 --entry 会把地址带过来
+    const wanted = new URLSearchParams(location.search).get('entry')
+    if (wanted && entries.some((e) => e.name === wanted)) {
+      await select(wanted)
+      status.value = '已打开 ' + wanted
+      return
+    }
     const first = entries.find((e) => e.kind === 'ini') || entries.find((e) => e.kind !== 'binary') || entries[0]
     await select(first ? first.name : '')
     status.value = '已打开 ' + pkg.split(/[\\/]/).pop()
@@ -47,6 +54,8 @@ async function select(name) {
   if (!name) { detail.value = null; return }
   try {
     detail.value = await api.entry(name)
+    // 选中的条目如果不在当前过滤里（比如 class 出现在「源码」视图外），切到能看见它的过滤器
+    if (!files.value.some((e) => e.name === name)) filter.value = 'all'
     tab.value = ['ini', 'toml'].includes(detail.value.kind) ? 'modules' : 'text'
     if (detail.value.kind === 'class') decompile()
   } catch (e) {

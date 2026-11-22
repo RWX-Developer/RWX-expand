@@ -1,5 +1,7 @@
 package io.github.rwx.editor
 
+import java.io.File
+
 /**
  * 条目分类：决定前端拿它怎么办。
  *
@@ -7,15 +9,17 @@ package io.github.rwx.editor
  * 剩下的二进制给十六进制预览——一律不当文本硬解。
  */
 
-fun isTextEntry(name: String): Boolean {
-    if (name.endsWith("/")) return false
-    val ext = name.substringAfterLast('.', "").lowercase()
-    return ext in setOf("ini", "template", "toml", "kt", "java", "txt", "md", "json", "xml", "cfg", "properties", "gradle", "kts", "sh", "bat", "ps1", "yml", "yaml")
-}
-
-fun isEditableSource(name: String): Boolean {
-    val ext = name.substringAfterLast('.', "").lowercase()
-    return ext in setOf("ini", "template", "toml", "kt", "java", "txt", "md")
+/** 工作区里的模组包：.jar/.zip/.rwmod 归档，或含 mod-info.txt / mod.toml 的目录。 */
+fun listPackages(root: File): List<File> {
+    if (!root.isDirectory) return emptyList()
+    val out = ArrayList<File>()
+    root.listFiles()?.forEach { f ->
+        when {
+            f.isFile && f.extension.lowercase() in setOf("jar", "zip", "rwmod") -> out.add(f)
+            f.isDirectory && (File(f, "mod-info.txt").isFile || File(f, "mod.toml").isFile) -> out.add(f)
+        }
+    }
+    return out.sortedBy { it.name.lowercase() }
 }
 
 /** ini / toml / kt / text / class / dex / binary */

@@ -49,6 +49,9 @@ public abstract class OrderableUnit extends UnitBase {
     // RWX：越界寻路目标取证（只打前 20 条）
     private static int RWX_TARGET_CLAMP_N = 0;
     private static int RWX_EDGE_PATH_N = 0;
+    // RWX：路径全量跟踪（-Drwx.pathTrace=1），每条路径打一行航点清单。
+    static final boolean RWX_PATH_TRACE = "1".equals(System.getProperty("rwx.pathTrace", "0").trim());
+    private static int RWX_PATH_TRACE_N = 0;
 
     /* JADX INFO: renamed from: M */
     protected Texture baseTexture;
@@ -4489,6 +4492,42 @@ public abstract class OrderableUnit extends UnitBase {
                 }
                 // RWX：终点落在图边 = 典型「奔边界」。记下真实目标与末点，用来分辨是目标本身在边界，
                 // 还是求解器把终点搬到了边界（fake-end）。mapSize 一并记，防止钳制范围算错。
+                // RWX：路径落点探针。只记录「可疑」的路径：航点里有一个贴到地图边缘（1 格内），
+                // 或者最后一个航点不是命令目标，或者判定不可达。目的：老师再遇到「跑向西北角」时，
+                // 不用猜，直接从 logs/rwx-prof.log 里读整条航点清单。默认开启，最多 200 行。
+                if (RWX_PATH_TRACE && RWX_PATH_TRACE_N < 200) {
+                    StringBuilder rwxSb = new StringBuilder();
+                    int rwxEdge = 0;
+                    int rwxLastX = -1;
+                    int rwxLastY = -1;
+                    int rwxW = tileMap.tileCountX;
+                    int rwxH = tileMap.tileCountY;
+                    for (int rwxI = 0; rwxI < this.activePathCount; rwxI++) {
+                        PositionData rwxPd = this.pathPositions[rwxI];
+                        if (rwxPd == null) { continue; }
+                        int rwxTx = (int) (rwxPd.posX * tileMap.tileScaleX);
+                        int rwxTy = (int) (rwxPd.posY * tileMap.tileScaleY);
+                        if (rwxTx <= 1 || rwxTy <= 1 || rwxTx >= rwxW - 2 || rwxTy >= rwxH - 2) { rwxEdge++; }
+                        rwxLastX = rwxTx;
+                        rwxLastY = rwxTy;
+                        rwxSb.append(rwxTx).append(",").append(rwxTy).append(" ");
+                    }
+                    boolean rwxSuspicious = rwxEdge > 0 || this.aU.endUnreachable
+                        || (rwxLastX >= 0 && (rwxLastX != this.aU.endTileX || rwxLastY != this.aU.endTileY));
+                    if (rwxSuspicious) {
+                        RWX_PATH_TRACE_N++;
+                        io.github.rwx.probe.RwxPerf.out("RWX_PATHTRACE unit=" + (r() == null ? "?" : r().getUnitTypeDescriptionShort())
+                            + " mtype=" + getMovementType()
+                            + " targetTile=" + this.aU.endTileX + "," + this.aU.endTileY
+                            + " startTile=" + this.aU.startTileX + "," + this.aU.startTileY
+                            + " map=" + rwxW + "x" + rwxH
+                            + " nodes=" + this.activePathCount
+                            + " edgeTouches=" + rwxEdge
+                            + " unreachable=" + this.aU.endUnreachable
+                            + " lastWp=" + rwxLastX + "," + rwxLastY
+                            + " wps=[" + rwxSb.toString().trim() + "]");
+                    }
+                }
                 if (!this.isPathIncomplete && this.activePathCount > 0 && RWX_EDGE_PATH_N < 30) {
                     PositionData rwxLast = this.pathPositions[this.activePathCount - 1];
                     if (rwxLast != null) {
