@@ -1514,6 +1514,16 @@ public class GameLogic extends GameEngine {
 
     /** RWX：整轮扫描分批错频总开关。-Drwx.phaseSplit=1 开启，默认关闭。 */
     static final boolean RWX_PHASE_SPLIT = !"0".equals(rwxPropTrimmed("rwx.phaseSplit", "1"));
+
+    /**
+     * RWX：单位对象更新「隔帧 + 补偿」。-Drwx.unitStride=N（默认 1＝每个单位每帧都更新）。
+     *
+     * 白话：把单位按编号分成 N 组，每帧只让其中一组更新，并且把这一帧的时长乘 N 补回去，
+     * 所以单位速度、武器节奏在平均意义上不变，只是每个单位变成「每 N 帧动一次、动得远一点」。
+     * 好处是每帧要跑的单位从 10000 降到 10000/N；代价是移动观感可能有一点顿,而且这是
+     * 会改变模拟结果的开关（确定性仍在：只看 tick，不随机）。
+     */
+    static final int RWX_UNIT_STRIDE = rwxPropInt("rwx.unitStride", 1);
     static final int RWX_SPATIAL_STRIDE = rwxPropInt("rwx.spatialStride", 2);
     static final int RWX_COLLISION_STRIDE = rwxPropInt("rwx.collisionStride", 2);
     static final int RWX_CUSTOM_STRIDE = rwxPropInt("rwx.customStride", 2);
@@ -1599,7 +1609,17 @@ public class GameLogic extends GameEngine {
                 f = this.lastDelta;
             }
             if (!(gameObject instanceof BaseUnit) || !((BaseUnit) gameObject).isTransferUnavailable()) {
-                gameObject.update(f);
+                if (RWX_UNIT_STRIDE > 1) {
+                    // RWX：按 (对象编号 + 当前帧) 取模分组。同一个对象每 N 帧轮到一次，
+                    // 不同对象错开在不同的帧，于是每帧只处理 1/N。
+                    // delta 乘 N 是为了让「每 N 帧挪一次」的总位移和原来一致。
+                    if (((int) (((long) this.currentTick) + gameObject.objectId)) % RWX_UNIT_STRIDE != 0) {
+                        continue;
+                    }
+                    gameObject.update(f * RWX_UNIT_STRIDE);
+                } else {
+                    gameObject.update(f);
+                }
             }
         }
         if (isInNetworkOrReplay() && f < 0.1f) {

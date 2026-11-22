@@ -1,0 +1,684 @@
+package com.corrodinggames.rts.gameFramework.path;
+
+import com.corrodinggames.rts.game.PlayerTeam;
+import com.corrodinggames.rts.game.map.MapLayer;
+import com.corrodinggames.rts.game.map.TileMap;
+import com.corrodinggames.rts.game.units.BaseUnit;
+import com.corrodinggames.rts.game.units.OrderableUnit;
+import com.corrodinggames.rts.game.units.UnitMovementType;
+import com.corrodinggames.rts.gameFramework.GameEngine;
+import com.corrodinggames.rts.gameFramework.Utility;
+import com.corrodinggames.rts.gameFramework.pathfinding.DynamicUnitPath;
+import com.corrodinggames.rts.gameFramework.pathfinding.Path;
+import com.corrodinggames.rts.gameFramework.pathfinding.PathCostMap;
+import com.corrodinggames.rts.gameFramework.pathfinding.PathSolver;
+import io.github.rwx.geometry.Rect;
+import io.github.rwx.render.canvas.Paint;
+
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.LinkedList;
+
+/* JADX INFO: renamed from: com.corrodinggames.rts.gameFramework.k.l */
+/* JADX INFO: loaded from: game-lib.jar:com/corrodinggames/rts/gameFramework/k/l.class */
+public final class PathEngine {
+    public static final boolean a = false;
+    static boolean b;
+    static boolean c;
+    static boolean d;
+    public static DynamicUnitPath e;
+    static boolean f;
+    static boolean g;
+    static boolean h;
+    static int i;
+    static boolean j;
+    static ArrayList<Path> k;
+    public static boolean l;
+    public static final boolean m;
+    /* JADX INFO: renamed from: q */
+    public TileMap tileMap;
+    /* JADX INFO: renamed from: r */
+    int mapSignature;
+    /* JADX INFO: renamed from: s */
+    public short widthTiles;
+    /* JADX INFO: renamed from: t */
+    public short heightTiles;
+    /* JADX INFO: renamed from: x */
+    // RWX：寻路时间预算下限（毫秒），由环境变量 RWX_PATH_BUDGET_MS 控制，0 = 不启用
+    static final float RWX_PATH_BUDGET_MS;
+    static {
+        float rwxBudget = 0.0f;
+        try {
+            String rwxEnv = System.getenv("RWX_PATH_BUDGET_MS");
+            if (rwxEnv != null) {
+                rwxBudget = Float.parseFloat(rwxEnv.trim());
+            }
+        } catch (Exception ignored) {
+        }
+        RWX_PATH_BUDGET_MS = rwxBudget;
+    }
+
+    public PathCostMap noneCostMap;
+    /* JADX INFO: renamed from: y */
+    public PathCostMap landCostMap;
+    /* JADX INFO: renamed from: z */
+    public PathCostMap buildingCostMap;
+    /* JADX INFO: renamed from: A */
+    public PathCostMap airCostMap;
+    public PathCostMap B;
+    public PathCostMap C;
+    public PathCostMap D;
+    public PathCostMap E;
+    public boolean n = true;
+    PathSolver o = new PathSolver(this);
+    boolean p = true;
+    public ArrayList u = new ArrayList();
+    public PathCostMap[] v = new PathCostMap[0];
+    public Paint w = new Paint();
+    Paint F = new Paint();
+    public Object G = new Object();
+    LinkedList<Path> I = new LinkedList();
+    LinkedList<Path> J = new LinkedList();
+    Object K = new Object();
+    ArrayList<PathSolver> H = new ArrayList();
+
+    static {
+        b = !GameEngine.isGameBeta;
+        c = false;
+        d = false;
+        f = false;
+        g = false;
+        h = false;
+        i = 20;
+        j = false;
+        k = new ArrayList();
+        l = false;
+        m = false;
+    }
+
+    public PathCostMap a(UnitMovementType unitMovementType) {
+        for (PathCostMap pathCostMap : this.v) {
+            if (pathCostMap.a == unitMovementType) {
+                return pathCostMap;
+            }
+        }
+        return null;
+    }
+
+    public boolean isTileBlockedForMovement(UnitMovementType unitMovementType, int i2, int i3) {
+        return a(a(unitMovementType), i2, i3);
+    }
+
+    public boolean b(UnitMovementType unitMovementType, int i2, int i3) {
+        return a(a(unitMovementType), i2, i3, true);
+    }
+
+    public boolean a(PathCostMap pathCostMap, int i2, int i3) {
+        return a(pathCostMap, i2, i3, false);
+    }
+
+    public boolean a(PathCostMap pathCostMap, int i2, int i3, boolean z) {
+        if (!this.tileMap.isInBounds(i2, i3)) {
+            return true;
+        }
+        if (pathCostMap.a == UnitMovementType.AIR) {
+            return false;
+        }
+        int i4 = (i2 * this.heightTiles) + i3;
+        if ((!z && pathCostMap.e[i4] == -1) || pathCostMap.d[i4] == -1 || pathCostMap.f[i4] == -1) {
+            return true;
+        }
+        return false;
+    }
+
+    public final int b(PathCostMap pathCostMap, int i2, int i3) {
+        if (!this.tileMap.isInBounds(i2, i3)) {
+            return -1;
+        }
+        if (pathCostMap.a == UnitMovementType.AIR) {
+            return 0;
+        }
+        int i4 = (i2 * this.heightTiles) + i3;
+        if (pathCostMap.d[i4] == -1 || pathCostMap.e[i4] == -1 || pathCostMap.f[i4] == -1) {
+            return -1;
+        }
+        return pathCostMap.d[i4] + pathCostMap.e[i4] + (pathCostMap.f[i4] * 10);
+    }
+
+    public final int c(PathCostMap pathCostMap, int i2, int i3) {
+        if (!this.tileMap.isInBounds(i2, i3)) {
+            return -1;
+        }
+        if (pathCostMap.a == UnitMovementType.AIR) {
+            return 4;
+        }
+        if (pathCostMap.j == null) {
+            return -1;
+        }
+        return pathCostMap.j[(i2 * this.heightTiles) + i3];
+    }
+
+    public boolean a(int i2, int i3) {
+        if (!this.tileMap.isInBounds(i2, i3)) {
+            return true;
+        }
+        int i4 = (i2 * this.heightTiles) + i3;
+        if (this.D.d[i4] != -1 || this.airCostMap.d[i4] == -1) {
+            return false;
+        }
+        return true;
+    }
+
+    public boolean b(int i2, int i3) {
+        if (!this.tileMap.isInBounds(i2, i3)) {
+            return true;
+        }
+        int i4 = (i2 * this.heightTiles) + i3;
+        if (this.C.d[i4] != -1 || this.E.d[i4] == -1) {
+            return false;
+        }
+        return true;
+    }
+
+    public synchronized void a(TileMap tileMap, boolean z) {
+        d();
+        GameEngine.log("PathEngine: Setting up map costs");
+        boolean z2 = false;
+        if (z && this.tileMap != null && this.tileMap == tileMap && this.widthTiles == tileMap.groundLayer.widthTiles && this.heightTiles == tileMap.groundLayer.heightTiles) {
+            if (this.mapSignature == PathCostMap.a(tileMap)) {
+                GameEngine.log("PathEngine: Keeping existing map costs");
+                z2 = true;
+            } else {
+                GameEngine.log("PathEngine: Error: Map checksum does not match!!!");
+            }
+        }
+        if (z2) {
+        }
+        this.tileMap = tileMap;
+        this.mapSignature = PathCostMap.a(tileMap);
+        this.widthTiles = (short) tileMap.groundLayer.widthTiles;
+        this.heightTiles = (short) tileMap.groundLayer.heightTiles;
+        e = null;
+        this.u.clear();
+        this.v = new PathCostMap[0];
+        this.noneCostMap = new PathCostMap(this, UnitMovementType.NONE, this.widthTiles, this.heightTiles);
+        this.landCostMap = new PathCostMap(this, UnitMovementType.LAND, this.widthTiles, this.heightTiles);
+        this.landCostMap.b();
+        this.landCostMap.a((OrderableUnit) null);
+        this.buildingCostMap = new PathCostMap(this, UnitMovementType.BUILDING, this.widthTiles, this.heightTiles);
+        this.airCostMap = new PathCostMap(this, UnitMovementType.WATER, this.widthTiles, this.heightTiles);
+        this.airCostMap.b();
+        this.airCostMap.a((OrderableUnit) null);
+        this.B = new PathCostMap(this, UnitMovementType.AIR, this.widthTiles, this.heightTiles);
+        this.C = new PathCostMap(this, UnitMovementType.HOVER, this.widthTiles, this.heightTiles);
+        this.C.b();
+        this.C.a((OrderableUnit) null);
+        this.D = new PathCostMap(this, UnitMovementType.OVER_CLIFF, this.widthTiles, this.heightTiles);
+        this.D.b();
+        this.D.a((OrderableUnit) null);
+        this.E = new PathCostMap(this, UnitMovementType.OVER_CLIFF_WATER, this.widthTiles, this.heightTiles);
+        this.E.b();
+        this.E.a((OrderableUnit) null);
+        Iterator it = this.H.iterator();
+        while (it.hasNext()) {
+            ((PathSolver) it.next()).a(tileMap);
+        }
+        this.o.a(tileMap);
+        GameEngine.log("PathEngine: Ready");
+    }
+
+    public void a() {
+        int i2;
+        int i3;
+        int i4;
+        GameEngine gameEngine = GameEngine.getInstance();
+        PathCostMap pathCostMap = this.landCostMap;
+        Rect rect = new Rect();
+        float f2 = gameEngine.viewpointXSnapped;
+        float f3 = gameEngine.viewpointYSnapped;
+        float f4 = gameEngine.visibleWorldWidth;
+        float f5 = gameEngine.visibleWorldHeight;
+        MapLayer mapLayer = gameEngine.tileMap.groundLayer;
+        int i5 = (int) ((f2 * this.tileMap.tileScaleX) - 1.0f);
+        if (i5 < 0) {
+            i5 = 0;
+        }
+        int i6 = (int) ((f3 * this.tileMap.tileScaleY) - 1.0f);
+        if (i6 < 0) {
+            i6 = 0;
+        }
+        int i7 = (int) (((f2 + f4) * this.tileMap.tileScaleX) + 1.0f);
+        if (i7 > this.widthTiles - 1) {
+            i7 = this.widthTiles - 1;
+        }
+        int i8 = (int) (((f3 + f5) * this.tileMap.tileScaleY) + 1.0f);
+        if (i8 > this.heightTiles - 1) {
+            i8 = this.heightTiles - 1;
+        }
+        for (int i9 = i5; i9 < i7 + 1; i9++) {
+            for (int i10 = i6; i10 < i8 + 1; i10++) {
+                if (mapLayer.getTileAt(i9, i10) != null) {
+                    int i11 = i9 * this.tileMap.tileWorldSizeX;
+                    int i12 = i10 * this.tileMap.tileWorldSizeY;
+                    rect.a(i11, i12, i11 + this.tileMap.tileWorldSizeX, i12 + this.tileMap.tileWorldSizeY);
+                    rect.a((int) (-f2), (int) (-f3));
+                    boolean zB = rect.b((int) (gameEngine.gameUI.selectionBoxStartX / gameEngine.zoom), (int) (gameEngine.gameUI.selectionBoxStartY / gameEngine.zoom));
+                    if (!g || zB) {
+                        byte b2 = pathCostMap.d[(i9 * this.heightTiles) + i10];
+                        byte b3 = pathCostMap.e[(i9 * this.heightTiles) + i10];
+                        int i13 = pathCostMap.f[(i9 * this.heightTiles) + i10];
+                        if (b2 == -1) {
+                            i2 = 255;
+                        } else {
+                            i2 = b2 * 2;
+                        }
+                        if (b3 == -1) {
+                            i3 = 255;
+                        } else {
+                            i3 = b3 * 2;
+                        }
+                        if (i13 == -1) {
+                            i4 = 255;
+                        } else {
+                            if (i13 != 0) {
+                                i13 += 30;
+                            }
+                            i4 = i13 * 2;
+                        }
+                        this.F.a(128, i2, i3, i4);
+                        gameEngine.renderGraphicsEngine.b(rect, this.F);
+                        if (zB && pathCostMap.f != null) {
+                            gameEngine.renderGraphicsEngine.a("o:" + ((int) pathCostMap.f[(i9 * this.heightTiles) + i10]), rect.d(), rect.e(), gameEngine.loadingPaint);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    public void a(OrderableUnit orderableUnit) {
+        if (orderableUnit != null) {
+            PlayerTeam.b(orderableUnit);
+        }
+        for (PathCostMap pathCostMap : this.v) {
+            pathCostMap.c(orderableUnit);
+        }
+        this.landCostMap.a(orderableUnit);
+        this.C.a(orderableUnit);
+        this.D.a(orderableUnit);
+        this.E.a(orderableUnit);
+    }
+
+    public void b() {
+        for (PathCostMap pathCostMap : this.v) {
+            pathCostMap.e();
+        }
+    }
+
+    public PathEngine() {
+        this.H.add(new PathSolver(this));
+        int iDoubleToString = Utility.getCpuCoreCount();
+        if (iDoubleToString > 1) {
+            GameEngine.log("PathEngine", "We have " + iDoubleToString + " cores, creating extra solvers");
+            this.H.add(new PathSolver(this));
+        } else {
+            GameEngine.log("PathEngine", "We only have one core, using single solver");
+        }
+        Iterator it = this.H.iterator();
+        while (it.hasNext()) {
+            ((PathSolver) it.next()).c();
+        }
+    }
+
+    public void c() {
+        Iterator it = this.I.iterator();
+        while (it.hasNext()) {
+            ((Path) it.next()).w = true;
+        }
+        this.I.clear();
+        h();
+    }
+
+    public void d() {
+        Iterator it = this.I.iterator();
+        while (it.hasNext()) {
+            a((Path) it.next());
+        }
+        this.I.clear();
+        h();
+    }
+
+    public void a(PathCostMap pathCostMap, boolean z) {
+        GameEngine gameEngine = GameEngine.getInstance();
+        if (!z) {
+            if (pathCostMap.k + 50 < gameEngine.currentTick) {
+                pathCostMap.k = gameEngine.currentTick - 40;
+                pathCostMap.e();
+            }
+            pathCostMap.a(z);
+            return;
+        }
+        if (pathCostMap.k + 30 < gameEngine.currentTick) {
+            pathCostMap.k = gameEngine.currentTick;
+            pathCostMap.e();
+        }
+        pathCostMap.a(z);
+    }
+
+    // RWX：O(1) 地形可达性预判。与 PathSolver.e() 里「end is blocked on isolated groups」的判定读同一份
+    // 静态分组表 PathCostMap.g（纯地形+建筑洪水分组，锁步各端一致），判定语义完全一致：
+    // 起点组有效（!= -1）且终点半径窗口内没有任何同组格 → 求解器一定会走「假节点/最近可达点」退化分支，
+    // 也就是老师说的「没有任何可以通行的地形抵达目的地」。窗口用请求给的半径（可能大于求解器实际用的），
+    // 大窗口找不到同组格 ⇒ 小窗口同样找不到，方向保守，不会误判可达为不可达。
+    // 没有分组表（如 AIR 图没调 b()）时返回 false，等于不做预判，行为不变。
+    public boolean isEndOnSeparateIsland(UnitMovementType unitMovementType, int i, int i2, int i3, int i4, int i5) {
+        PathCostMap pathCostMap = a(unitMovementType);
+        if (pathCostMap == null || pathCostMap.g == null) {
+            return false;
+        }
+        short[] sArr = pathCostMap.g;
+        int n = pathCostMap.width;
+        int n2 = pathCostMap.height;
+        if (i < 0 || i2 < 0 || i >= n || i2 >= n2) {
+            return false;
+        }
+        // 终点钳边与 Path.a(short,short,short) 一致
+        if (i3 < 0) {
+            i3 = 0;
+        }
+        if (i4 < 0) {
+            i4 = 0;
+        }
+        if (i3 > n - 1) {
+            i3 = n - 1;
+        }
+        if (i4 > n2 - 1) {
+            i4 = n2 - 1;
+        }
+        short s = sArr[(i * n2) + i2];
+        if (s == -1) {
+            return false;
+        }
+        int i6 = i5 < 0 ? 0 : i5;
+        for (int i7 = i3 - i6; i7 <= i3 + i6; i7++) {
+            for (int i8 = i4 - i6; i8 <= i4 + i6; i8++) {
+                if (i7 < 0 || i8 < 0 || i7 >= n || i8 >= n2) {
+                    continue;
+                }
+                if (sArr[(i7 * n2) + i8] == s) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    public Path a(boolean z) {
+        Path path;
+        if (OrderableUnit.L) {
+            path = new DynamicUnitPath(this, z);
+        } else {
+            path = new Path(this, z);
+        }
+        return path;
+    }
+
+    public void a(Path path, boolean z) {
+        a(path, z, false);
+    }
+
+    public void a(Path path, boolean z, boolean z2) {
+        if (!this.p) {
+            GameEngine.log("PathEngine", "Cannot start new path, not running");
+            return;
+        }
+        GameEngine gameEngine = GameEngine.getInstance();
+        a(a(path.movementType), z);
+        path.e();
+        path.remainingTimeMs = 300.0f;
+        int iAbs = Utility.abs(path.startTileX - path.endTileX);
+        int iAbs2 = Utility.abs(path.startTileY - path.endTileY);
+        if (iAbs < 15 && iAbs2 < 15) {
+            path.remainingTimeMs = 12.0f;
+        } else if (iAbs < 50 && iAbs2 < 50) {
+            path.remainingTimeMs = 16.0f;
+        } else if (iAbs < 200 && iAbs2 < 200) {
+            path.remainingTimeMs = 24.0f;
+        } else if (iAbs < 400 && iAbs2 < 400) {
+            path.remainingTimeMs = 50.0f;
+        } else if (iAbs < 1000 && iAbs2 < 1000) {
+            path.remainingTimeMs = 100.0f;
+        } else if (iAbs < 2000 && iAbs2 < 2000) {
+            path.remainingTimeMs = 200.0f;
+        }
+        if (!gameEngine.networkEngine.networkGameActive && !gameEngine.replayEngine.i()) {
+            if (iAbs < 1000 && iAbs2 < 1000) {
+                path.remainingTimeMs = 180.0f;
+            } else {
+                path.remainingTimeMs = 360.0f;
+            }
+            // RWX：大图长距离寻路默认只给 360ms，绕远路时经常算不完，
+            // 失败后单位会退化成「走到最近可达点」看起来像卡在岸边。
+            // 设 RWX_PATH_BUDGET_MS 可抬高下限做验证，默认 0 = 保持原行为。
+            if (RWX_PATH_BUDGET_MS > 0.0f && path.remainingTimeMs < RWX_PATH_BUDGET_MS) {
+                path.remainingTimeMs = RWX_PATH_BUDGET_MS;
+            }
+        }
+        if (path.isLowPriority) {
+            path.remainingTimeMs *= 2.0f;
+            path.remainingTimeMs += 50.0f;
+        }
+        path.allowedDelayMs = path.remainingTimeMs;
+        if (!this.n || z2) {
+            this.o.a(path);
+            this.o.b();
+            this.I.add(path);
+        } else {
+            b(path);
+            this.I.add(path);
+        }
+    }
+
+    public void a(float f2) {
+        i();
+    }
+
+    public void b(float f2) {
+        for (PathCostMap pathCostMap : this.v) {
+            pathCostMap.p = 0;
+            if (pathCostMap.o) {
+                pathCostMap.o = false;
+                pathCostMap.c(null);
+            }
+        }
+        i();
+        d(f2);
+    }
+
+    public void c(float f2) {
+        if (j) {
+            for (Path path : k) {
+                path.h();
+                path.g();
+            }
+        }
+        if (d) {
+            boolean z = true;
+            GameEngine gameEngine = GameEngine.getInstance();
+            if (gameEngine.gameUI.selectedUnitsList.b > 0) {
+                BaseUnit baseUnitA = gameEngine.gameUI.selectedUnitsList.get(0);
+                if (baseUnitA instanceof OrderableUnit) {
+                    OrderableUnit orderableUnit = (OrderableUnit) baseUnitA;
+                    if (orderableUnit.pathPositionProvider != null) {
+                        orderableUnit.pathPositionProvider.d(orderableUnit);
+                        z = false;
+                    }
+                }
+            }
+            if (z) {
+            }
+        }
+        if (f) {
+            a();
+        }
+        if (h) {
+        }
+    }
+
+    public boolean e() {
+        for (Path path : this.I) {
+            if (path.remainingTimeMs <= 0.0f && !path.c()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public String f() {
+        String str = null;
+        int i2 = 0;
+        for (Path path : this.I) {
+            if (path.remainingTimeMs <= 0.0f && !path.c()) {
+                if (str == null) {
+                    str = "[distance:" + Utility.distance(path.startTileX, path.startTileY, path.endTileX, path.endTileY) + ", allowedDelay:" + path.allowedDelayMs + " lowPriority:" + path.isLowPriority + "]";
+                }
+                i2++;
+            }
+        }
+        String str2 = "(total:" + i2 + ") ";
+        if (str != null) {
+            str2 = str2 + str;
+        }
+        return str2;
+    }
+
+    private void d(float f2) {
+        Iterator it = this.I.iterator();
+        while (it.hasNext()) {
+            Path path = (Path) it.next();
+            if (path.remainingTimeMs <= 0.0f) {
+                path.remainingTimeMs = 0.0f;
+                path.isTimedOut = true;
+                if (j) {
+                    k.add(path);
+                    if (k.size() > 10) {
+                        k.remove(0);
+                    }
+                }
+                if (!path.c()) {
+                    if (GameEngine.getInstance().isInNetworkOrReplay()) {
+                        GameEngine.log("PathEngine", "updateUnfinishedPaths: path wasn't solved, isGoingToBlockThisFrame did not protect");
+                    }
+                    a(path);
+                }
+                if (path.c()) {
+                    it.remove();
+                }
+            } else {
+                path.remainingTimeMs -= f2;
+            }
+        }
+    }
+
+    private Path g() {
+        Path path = null;
+        for (Path path2 : this.J) {
+            if (path == null || path.remainingTimeMs > path2.remainingTimeMs) {
+                path = path2;
+            }
+        }
+        if (path == null) {
+            throw new RuntimeException("Failed to find any paths");
+        }
+        if (!this.J.remove(path)) {
+            throw new RuntimeException("Failed remove found path");
+        }
+        return path;
+    }
+
+    private void b(Path path) {
+        synchronized (this.K) {
+            this.J.add(path);
+        }
+    }
+
+    private void h() {
+        synchronized (this.K) {
+            this.J.clear();
+        }
+    }
+
+    private void i() {
+        PathSolver pathSolverJ;
+        LinkedList linkedList = this.J;
+        if (linkedList.size() > 0) {
+            synchronized (this.K) {
+                while (linkedList.size() > 0 && (pathSolverJ = j()) != null) {
+                    Path pathG = g();
+                    if (!pathG.isSolved) {
+                        a(pathSolverJ, pathG);
+                    }
+                }
+            }
+        }
+    }
+
+    private PathSolver j() {
+        for (PathSolver pathSolver : this.H) {
+            if (pathSolver.s) {
+                return pathSolver;
+            }
+        }
+        return null;
+    }
+
+    public void a(Path path) {
+        PathSolver pathSolverJ;
+        if (!path.isSolved) {
+            while (true) {
+                synchronized (this.G) {
+                    pathSolverJ = j();
+                    if (pathSolverJ != null) {
+                        break;
+                    } else {
+                        try {
+                            this.G.wait(2000L);
+                        } catch (InterruptedException e2) {
+                        }
+                    }
+                }
+            }
+            a(pathSolverJ, path);
+        }
+        boolean z = false;
+        long currentTimeMillis = GameEngine.getCurrentTimeMillis();
+        while (true) {
+            synchronized (this.G) {
+                if (path.c()) {
+                    break;
+                }
+                z = true;
+                i();
+                try {
+                    this.G.wait(2000L);
+                } catch (InterruptedException e3) {
+                }
+            }
+            if (!z && b) {
+                GameEngine.log("PathEngine", "We were blocked path(" + path.pathId + ") for:" + (GameEngine.getCurrentTimeMillis() - currentTimeMillis));
+                return;
+            }
+        }
+        if (!z) {
+        }
+    }
+
+    private void a(PathSolver pathSolver, Path path) {
+        synchronized (path) {
+            if (!path.isSolved) {
+                pathSolver.a(path);
+                pathSolver.a();
+            }
+        }
+    }
+}
