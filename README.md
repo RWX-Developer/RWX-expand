@@ -42,6 +42,7 @@ English, [简体中文](README_zh.md)
 - **Area Control** mode: capture zones, continuous scoring, new win conditions
 - **Linked Maps**: connect multiple maps with portals and transfer units between them
 - **JVM modding** for deeper gameplay extensions
+- **[Mod editor](editor/README.md)**: a standalone app for editing ini / JVM mods, with class inspection and Java decompilation
 
 ## Roadmap
 
