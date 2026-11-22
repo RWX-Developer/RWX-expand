@@ -1512,6 +1512,33 @@ public class GameLogic extends GameEngine {
     /** RWX：全局对象列表在更新途中被压缩的次数（应为 0；非 0 说明有直接 remove 的旁路） */
     public static long RWX_OBJECT_NULL_TAIL = 0;
 
+    /** RWX：整轮扫描分批错频总开关。-Drwx.phaseSplit=1 开启，默认关闭。 */
+    static final boolean RWX_PHASE_SPLIT = !"0".equals(rwxPropTrimmed("rwx.phaseSplit", "1"));
+    static final int RWX_SPATIAL_STRIDE = rwxPropInt("rwx.spatialStride", 2);
+    static final int RWX_COLLISION_STRIDE = rwxPropInt("rwx.collisionStride", 2);
+    static final int RWX_CUSTOM_STRIDE = rwxPropInt("rwx.customStride", 2);
+
+    private static String rwxPropTrimmed(String rwxKey, String rwxDef) {
+        String rwxVal = System.getProperty(rwxKey, rwxDef);
+        return rwxVal == null ? rwxDef : rwxVal.trim();
+    }
+
+    private static int rwxPropInt(String rwxKey, int rwxDef) {
+        int rwxVal = rwxDef;
+        try {
+            rwxVal = Integer.parseInt(rwxPropTrimmed(rwxKey, Integer.toString(rwxDef)));
+        } catch (NumberFormatException rwxErr) {
+            rwxVal = rwxDef;
+        }
+        if (rwxVal < 1) {
+            rwxVal = 1;
+        }
+        if (rwxVal > 16) {
+            rwxVal = 16;
+        }
+        return rwxVal;
+    }
+
     public void update(float deltaSpeed) throws IOException {
         long rwxT = io.github.rwx.probe.RwxPerf.beginFrame();
         if (isInNetworkOrReplay() && deltaSpeed < 0.1f) {
@@ -1589,12 +1616,26 @@ public class GameLogic extends GameEngine {
             }
         }
         rwxT = io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.OBJECTS, rwxT);
-        this.unitSpatialIndex.a();
+        // RWX：三个整轮扫描（空间索引 / 碰撞 / 自定义单位）分批错频。
+        // 背景：这三段每 tick 全量重算，1 万单位时 objects/spatial/collision/custom 一起压在同一帧。
+        // 做法：按 (tick + 0) % N 只在命中的帧跑，并把 delta 乘 N 补回时间尺度（不是简单丢弃）。
+        // 默认开启；-Drwx.phaseSplit=0 关闭，三个 stride 旋钮单独调（1..16）。
+        // 注意：这是「降频+delta 补偿」，碰撞/索引会短暂滞后；多人锁步下仍确定（只看 tick）。
+        boolean rwxPhaseOn = RWX_PHASE_SPLIT;
+        int rwxTick = this.currentTick;
+        if (!rwxPhaseOn || (rwxTick % RWX_SPATIAL_STRIDE) == 0) {
+            this.unitSpatialIndex.a();
+        }
         rwxT = io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.SPATIAL, rwxT);
-        OrderableUnit.updateAllUnitCollisions(f);
+        if (!rwxPhaseOn || (rwxTick % RWX_COLLISION_STRIDE) == 0) {
+            OrderableUnit.updateAllUnitCollisions(rwxPhaseOn ? f * RWX_COLLISION_STRIDE : f);
+        }
         rwxT = io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.COLLISION, rwxT);
-        CustomUnit.s(f);
-        CustomUnit.a(f, 0);
+        if (!rwxPhaseOn || (rwxTick % RWX_CUSTOM_STRIDE) == 0) {
+            float rwxCustomDelta = rwxPhaseOn ? f * RWX_CUSTOM_STRIDE : f;
+            CustomUnit.s(rwxCustomDelta);
+            CustomUnit.a(rwxCustomDelta, 0);
+        }
         UnitEventRuntime.drain();
         this.cleanupCounter++;
         if (this.cleanupCounter >= 1000) {
