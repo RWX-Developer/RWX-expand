@@ -695,6 +695,14 @@ public class Command {
 
     /* JADX INFO: renamed from: a */
     public void setAttackMoveTarget(float f, float f2, boolean z) {
+        // RWX：图外落点直接拒令（和 setMoveTarget 一致）。右键默认就是攻击移动，
+        // 之前只有普通移动加了这道检查，所以实测仍然会被钳到地图边缘。
+        if (!"0".equals(System.getProperty("rwx.clampReject", "1").trim()) && rwxOutOfMap(f, f2)) {
+            if (RWX_CLAMP_N++ < 12) {
+                io.github.rwx.probe.RwxPerf.out("RWX_CLAMP_REJECT attack-move out of map dropped: " + (int) f + "," + (int) f2);
+            }
+            return;
+        }
         // RWX：落点先钳进地图（半格内缩），再校正到最近的可站立点。
         // 只有 AI 的不可达命令会拿到 null；玩家命令一律照发，绝不因为落点不好而吞掉。
         float[] rwxC = rwxClampTarget(f, f2);

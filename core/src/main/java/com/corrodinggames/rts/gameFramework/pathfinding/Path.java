@@ -215,17 +215,15 @@ public class Path {
             RWX_BOUNDS_LOG_N++;
             io.github.rwx.probe.RwxPerf.out("RWX_BOUNDS target out of map -> clamped:" + s + "," + s2 + " map=" + this.a.widthTiles + "x" + this.a.heightTiles);
         }
-        if (s < 0) {
-            s = 0;
-        }
-        if (s2 < 0) {
-            s2 = 0;
-        }
-        if (s > this.a.widthTiles - 1) {
-            s = (short) (this.a.widthTiles - 1);
-        }
-        if (s2 > this.a.heightTiles - 1) {
-            s2 = (short) (this.a.heightTiles - 1);
+        // RWX：终点格子不再钳进地图（老师要求）。原样保留坐标；
+        // 图外的情况已经在上面记成 rwxTargetOutOfMap，由求解器直接判不可达。
+        // 想恢复旧的钳制行为：-Drwx.clampEdge=1。
+        boolean rwxClampEnd = "1".equals(System.getProperty("rwx.clampEdge", "0").trim());
+        if (rwxClampEnd) {
+            if (s < 0) { s = 0; }
+            if (s2 < 0) { s2 = 0; }
+            if (s > this.a.widthTiles - 1) { s = (short) (this.a.widthTiles - 1); }
+            if (s2 > this.a.heightTiles - 1) { s2 = (short) (this.a.heightTiles - 1); }
         }
         this.endTileX = s;
         this.endTileY = s2;

@@ -669,52 +669,11 @@ public final class PathSolver implements Runnable {
             if (PathEngine.a) {
                 Log.d("RustedWarfare", "could not find end node");
             }
-            long l2 = System.currentTimeMillis();
-            // RWX：假终点（「最近的能站格」）不再全图扫，改成只在单位自己周围找。
-            // 原因 1：全图扫描从左上角开始、同距离先到先得，结果被系统性地导向西北边界，
-            //         表现就是「路径中途必有一处落在边界，而且每次重算落点还不一样」。
-            // 原因 2：一万单位时每条失败路径都扫一遍全图，代价跟地图面积成正比。
-            // 规则：范围＝单位周围 RWX_FAKE_END_MAX_TILES 格，绝不越出地图；
-            //       先比离真目标近不近，平手时取离地图中心更近的那格（可复现，不看扫描顺序）。
-            float f = -1.0f;
-            PathPoint pathPoint5 = new PathPoint();
-            int rwxStartTx = path.startTileX;
-            int rwxStartTy = path.startTileY;
-            int rwxX0 = rwxStartTx - RWX_FAKE_END_MAX_TILES;
-            int rwxY0 = rwxStartTy - RWX_FAKE_END_MAX_TILES;
-            int rwxX1 = rwxStartTx + RWX_FAKE_END_MAX_TILES;
-            int rwxY1 = rwxStartTy + RWX_FAKE_END_MAX_TILES;
-            if (rwxX0 < 0) { rwxX0 = 0; }
-            if (rwxY0 < 0) { rwxY0 = 0; }
-            if (rwxX1 > n8 - 1) { rwxX1 = n8 - 1; }
-            if (rwxY1 > s2 - 1) { rwxY1 = s2 - 1; }
-            int rwxCenterX = n8 / 2;
-            int rwxCenterY = s2 / 2;
-            int rwxBestScore = Integer.MAX_VALUE;
-            for (int rwxX = rwxX0; rwxX <= rwxX1; rwxX++) {
-                for (int rwxY = rwxY0; rwxY <= rwxY1; rwxY++) {
-                    pathPoint5.a((short) rwxX, (short) rwxY);
-                    if (!pathPoint5.e(this, (byte) 0)) {
-                        continue;
-                    }
-                    int rwxDdx = rwxX - n9;
-                    int rwxDdy = rwxY - n10;
-                    int rwxDist = rwxDdx * rwxDdx + rwxDdy * rwxDdy;
-                    int rwxCenterDist = Math.abs(rwxX - rwxCenterX) + Math.abs(rwxY - rwxCenterY);
-                    int rwxScore = rwxDist * 1024 + rwxCenterDist;
-                    if (rwxScore >= rwxBestScore) {
-                        continue;
-                    }
-                    rwxBestScore = rwxScore;
-                    n4 = (short) rwxX;
-                    s8 = (short) rwxY;
-                    f = Utility.distanceSq(rwxX, rwxY, n9, n10);
-                }
-            }
-            if (PathEngine.a) {
-                long l3 = System.currentTimeMillis() - l2;
-                Log.d("RustedWarfare", "got closest node in:" + l3);
-            }
+            // RWX：假终点流程整体取消（老师决定）。目标走不到就是走不到，
+            // 不再「改成最近的能站格」——那正是单位莫名开去地图边缘的来源。
+            linkedList.clear();
+            path.endUnreachable = true;
+            return linkedList;
         }
         linkedList.clear();
         if (n4 != -1 && s8 != -1) {
