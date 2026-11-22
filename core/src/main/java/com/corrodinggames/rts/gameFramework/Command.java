@@ -642,18 +642,20 @@ public class Command {
             }
             return;
         }
-        // RWX：落点先钳进地图（半格内缩），再校正到最近的可站立点。
-        // 只有 AI 的不可达命令会拿到 null；玩家命令一律照发，绝不因为落点不好而吞掉。
-        float[] rwxC = rwxClampTarget(f, f2);
-        f = rwxC[0];
-        f2 = rwxC[1];
-        float[] rwxP = rwxWalkableTarget(f, f2);
-        if (rwxP == null) {
-            // RWX：AI 命令落点不可达 —— 不建 unitCommand，这道命令不下（拒发）
-            return;
+        // RWX：落点原样下发，不钳制、也不搬到「最近可站格」。（老师要求：移动、攻击移动一致）
+        // 走不到就由寻路判不可达，单位不动；不再出现「命令在角落、单位却开到地图边缘」。
+        // 想要旧的钳制+校正：-Drwx.targetFix=1。
+        if ("1".equals(System.getProperty("rwx.targetFix", "0").trim())) {
+            float[] rwxC = rwxClampTarget(f, f2);
+            f = rwxC[0];
+            f2 = rwxC[1];
+            float[] rwxP = rwxWalkableTarget(f, f2);
+            if (rwxP == null) {
+                return;
+            }
+            f = rwxP[0];
+            f2 = rwxP[1];
         }
-        f = rwxP[0];
-        f2 = rwxP[1];
         this.unitCommand = new UnitCommand();
         this.unitCommand.setMoveTarget(f, f2);
     }
@@ -667,18 +669,20 @@ public class Command {
             }
             return;
         }
-        // RWX：落点先钳进地图（半格内缩），再校正到最近的可站立点。
-        // 只有 AI 的不可达命令会拿到 null；玩家命令一律照发，绝不因为落点不好而吞掉。
-        float[] rwxC = rwxClampTarget(f, f2);
-        f = rwxC[0];
-        f2 = rwxC[1];
-        float[] rwxP = rwxWalkableTarget(f, f2);
-        if (rwxP == null) {
-            // RWX：AI 命令落点不可达 —— 不建 unitCommand，这道命令不下（拒发）
-            return;
+        // RWX：落点原样下发，不钳制、也不搬到「最近可站格」。（老师要求：移动、攻击移动一致）
+        // 走不到就由寻路判不可达，单位不动；不再出现「命令在角落、单位却开到地图边缘」。
+        // 想要旧的钳制+校正：-Drwx.targetFix=1。
+        if ("1".equals(System.getProperty("rwx.targetFix", "0").trim())) {
+            float[] rwxC = rwxClampTarget(f, f2);
+            f = rwxC[0];
+            f2 = rwxC[1];
+            float[] rwxP = rwxWalkableTarget(f, f2);
+            if (rwxP == null) {
+                return;
+            }
+            f = rwxP[0];
+            f2 = rwxP[1];
         }
-        f = rwxP[0];
-        f2 = rwxP[1];
         this.unitCommand = new UnitCommand();
         this.unitCommand.setAttackMoveTarget(f, f2);
     }
@@ -703,18 +707,20 @@ public class Command {
             }
             return;
         }
-        // RWX：落点先钳进地图（半格内缩），再校正到最近的可站立点。
-        // 只有 AI 的不可达命令会拿到 null；玩家命令一律照发，绝不因为落点不好而吞掉。
-        float[] rwxC = rwxClampTarget(f, f2);
-        f = rwxC[0];
-        f2 = rwxC[1];
-        float[] rwxP = rwxWalkableTarget(f, f2);
-        if (rwxP == null) {
-            // RWX：AI 命令落点不可达 —— 不建 unitCommand，这道命令不下（拒发）
-            return;
+        // RWX：落点原样下发，不钳制、也不搬到「最近可站格」。（老师要求：移动、攻击移动一致）
+        // 走不到就由寻路判不可达，单位不动；不再出现「命令在角落、单位却开到地图边缘」。
+        // 想要旧的钳制+校正：-Drwx.targetFix=1。
+        if ("1".equals(System.getProperty("rwx.targetFix", "0").trim())) {
+            float[] rwxC = rwxClampTarget(f, f2);
+            f = rwxC[0];
+            f2 = rwxC[1];
+            float[] rwxP = rwxWalkableTarget(f, f2);
+            if (rwxP == null) {
+                return;
+            }
+            f = rwxP[0];
+            f2 = rwxP[1];
         }
-        f = rwxP[0];
-        f2 = rwxP[1];
         this.unitCommand = new UnitCommand();
         this.unitCommand.setAttackMoveTarget(f, f2);
         this.unitCommand.isQueued = z;
