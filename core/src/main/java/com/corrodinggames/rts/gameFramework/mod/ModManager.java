@@ -267,6 +267,26 @@ public class ModManager {
                 modInfo.disabled = true;
             }
         }
+
+        // RWX：台架/自动测试用的强制启用开关。-Drwx.forceMods=MCvsMN,foo
+        // 为什么需要：modSettings 按 modInfo.uuid 精确匹配，uuid 由模组内容算出，
+        // 改过内容的模组会被判成「新模组」而禁用。默认行为不变，只有显式传参才生效。
+        String rwxForceMods = System.getProperty("rwx.forceMods", "").trim();
+        if (rwxForceMods.length() > 0) {
+            for (ModInfo modInfo : this.mods) {
+                if (modInfo.isBuiltIn || modInfo.isCoreMod || !modInfo.disabled) {
+                    continue;
+                }
+                for (String rwxWant : rwxForceMods.split(",")) {
+                    rwxWant = rwxWant.trim();
+                    if (rwxWant.length() > 0 && modInfo.dirName != null && modInfo.dirName.contains(rwxWant)) {
+                        GameEngine.log("loadSelection: rwx.forceMods enabled:" + modInfo.getDisplayTitle() + " (" + modInfo.dirName + ")");
+                        modInfo.disabled = false;
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     /* JADX INFO: renamed from: c */

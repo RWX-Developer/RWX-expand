@@ -199,6 +199,29 @@ class BenchRampMod : JvmMod() {
                 }
             })
         }
+        // RWX：打印引擎里实际加载的自定义兵种（INI 模组），用来确认模组是否真的读完。
+        // -Dbench.dumpConfigs=1
+        if ("1" == System.getProperty("bench.dumpConfigs", "0").trim()) {
+            api.game.repeat(1, ModTask { a ->
+                if (a.game.tick == 90L) {
+                    try {
+                        val cc = Class.forName("com.corrodinggames.rts.game.units.custom.CustomUnitConfig")
+                        val active = cc.getField("activeConfigs").get(null) as java.util.ArrayList<*>
+                        a.game.log(LogLevel.INFO, "BENCH_DUMP count=" + active.size)
+                        var shown = 0
+                        for (o in active) {
+                            if (o == null || shown >= 25) break
+                            val nm = try { o.javaClass.getField("name").get(o) as? String } catch (_: Throwable) { null }
+                            val cp = try { o.javaClass.getField("configPath").get(o) as? String } catch (_: Throwable) { null }
+                            a.game.log(LogLevel.INFO, "BENCH_DUMP item name=" + nm + " path=" + cp)
+                            shown++
+                        }
+                    } catch (t: Throwable) {
+                        a.game.log(LogLevel.WARN, "BENCH_DUMP failed: " + t)
+                    }
+                }
+            })
+        }
         if ("1" == System.getProperty("bench.tryIds", "0").trim()) {
             api.game.repeat(1, ModTask { a ->
                 if (a.game.tick == 60L) {
@@ -237,7 +260,7 @@ class BenchRampMod : JvmMod() {
             if (a.game.tick - loggedAt >= 300) {
                 loggedAt = a.game.tick
                 val mean = if (n > 0) sumMs / n else 0.0
-                a.game.log(LogLevel.INFO, "BENCH tick=" + a.game.tick + " units=" + live + " trig=" + trigLive + " meanMs=" + String.format("%.2f", mean) + " maxMs=" + String.format("%.1f", maxMs) + " over17=" + over17 + "/" + n + " tried=" + tried + " ok=" + ok + " spread=" + spread + " trigTarget=" + trigTarget)
+                a.game.log(LogLevel.INFO, "BENCH tick=" + a.game.tick + " units=" + live + " trig=" + trigLive + " meanMs=" + String.format("%.2f", mean) + " maxMs=" + String.format("%.1f", maxMs) + " over17=" + over17 + "/" + n + " tried=" + tried + " ok=" + ok + " spread=" + spread + " trigTarget=" + trigTarget + " customOk=" + customOk + " customMissNames=" + customMiss)
                 n = 0; sumMs = 0.0; maxMs = 0.0; over17 = 0
             }
             if (ownFodder >= target && trigLive >= trigTarget) return@ModTask
@@ -253,6 +276,17 @@ class BenchRampMod : JvmMod() {
             val team = a.game.localTeam() ?: a.game.team(teamId) ?: a.game.team(0)
             teamId = team?.teamId ?: 0
             val (cx, cy) = center ?: return@ModTask
+            // RWX：INI 模组兵种模式。MCvsMN 这类 657 个 ini 的兵走不了 unitWorld.spawn——
+            // nativeUnits 表只收 JVM mod 注册的兵种。这里反射走引擎自己的地图加载路径：
+            // CustomUnitConfig.findConfigByName → a(false,config) → setUnitTeam → PlayerTeam.c。
+            // -Dbench.customList=<UTF-8 文件> 每行一个 name: 字段（中文名可用）
+            // -Dbench.customNames=a,b           逗号分隔（ASCII 名）
+            // -Dbench.customPattern=MC          从 activeConfigs 按名字包含筛
+            // -Dbench.customTeams=0,1           轮流分到两队，让它们真打
+            if (rwxCustomMode) {
+                spawnCustom(cx, cy, rnd, target, batch, spread)
+                return@ModTask
+            }
             val cnt = minOf(batch, (target - ownFodder + trigTarget - trigLive).toInt())
             for (i in 0 until cnt) {
                 val r = spread * kotlin.math.sqrt((live + trigLive + i).toFloat()) + spread
@@ -266,6 +300,88 @@ class BenchRampMod : JvmMod() {
             }
         })
         api.game.log(LogLevel.INFO, "BENCH ramp armed target=" + target + " trig=" + trigTarget + " batch=" + batch + " interval=" + interval + " spread=" + spread + " trigTarget=" + trigTarget)
+    }
+
+    private val rwxCustomMode: Boolean = run {
+        val l = System.getProperty("bench.customList", "").trim()
+        val n = System.getProperty("bench.customNames", "").trim()
+        val p = System.getProperty("bench.customPattern", "").trim()
+        l.isNotEmpty() || n.isNotEmpty() || p.isNotEmpty()
+    }
+    private var customTried = 0L
+    private var customOk = 0L
+    private var customMiss = 0L
+    private var customPending = 0L
+    private var customConfigs: List<Any>? = null
+    private var customIdx = 0
+
+    private fun loadCustomConfigs(): List<Any> {
+        customConfigs?.let { return it }
+        val list = ArrayList<Any>()
+        try {
+            val cc = Class.forName("com.corrodinggames.rts.game.units.custom.CustomUnitConfig")
+            val listPath = System.getProperty("bench.customList", "").trim()
+            val names = if (listPath.isNotEmpty()) {
+                java.io.File(listPath).readLines(Charsets.UTF_8).map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("#") }
+            } else System.getProperty("bench.customNames", "").split(",").map { it.trim() }.filter { it.isNotEmpty() }
+            val pattern = System.getProperty("bench.customPattern", "").trim()
+            if (names.isNotEmpty()) {
+                val find = cc.getDeclaredMethod("findConfigByName", String::class.java)
+                for (nm in names) {
+                    val cfg = find.invoke(null, nm)
+                    if (cfg != null) list.add(cfg) else customMiss++
+                }
+            } else if (pattern.isNotEmpty()) {
+                val active = cc.getField("activeConfigs").get(null) as java.util.ArrayList<*>
+                for (o in active) {
+                    if (o == null) continue
+                    val nm = o.javaClass.getField("name").get(o) as? String ?: continue
+                    if (nm.contains(pattern, ignoreCase = true)) list.add(o)
+                }
+            }
+        } catch (t: Throwable) {
+            try { api.game.log(LogLevel.WARN, "BENCH custom load failed: " + t) } catch (_: Throwable) {}
+        }
+        customConfigs = list
+        return list
+    }
+
+    /** 每批刷 min(cnt, 剩余) 只自定义兵；返回新增计数在 customOk 里 */
+    private fun spawnCustom(cx: Float, cy: Float, rnd: java.util.Random, target: Long, batch: Int, spread: Float): Int {
+        val cfgs = loadCustomConfigs()
+        if (cfgs.isEmpty()) return 0
+        val want = (target - ownFodder).coerceAtLeast(0L).toInt()
+        if (want <= 0) return 0
+        val n = minOf(want, batch)
+        var made = 0
+        try {
+            val cc = Class.forName("com.corrodinggames.rts.game.units.custom.CustomUnitConfig")
+            val ctor = cc.getDeclaredMethod("a", java.lang.Boolean.TYPE, cc)
+            val teamCls = Class.forName("com.corrodinggames.rts.game.PlayerTeam")
+            val teamK = teamCls.getDeclaredMethod("k", java.lang.Integer.TYPE)
+            val addC = teamCls.getDeclaredMethod("c", Class.forName("com.corrodinggames.rts.game.units.BaseUnit"))
+            val bu = Class.forName("com.corrodinggames.rts.game.units.BaseUnit")
+            val fX = bu.getField("posX"); val fY = bu.getField("posY")
+            val setTeam = bu.getDeclaredMethod("setUnitTeam", teamCls)
+            val teamIds = System.getProperty("bench.customTeams", "").split(",").map { it.trim() }.filter { it.isNotEmpty() }.map { it.toInt() }
+            val teams = if (teamIds.isEmpty()) arrayOf(teamK.invoke(null, teamId)) else teamIds.map { teamK.invoke(null, it) }.toTypedArray()
+            for (i in 0 until n) {
+                val cfg = cfgs[(++customIdx) % cfgs.size]
+                val unit = ctor.invoke(null, false, cfg) ?: continue
+                val r2 = spread * kotlin.math.sqrt((live + i).toFloat()) + spread
+                val th = rnd.nextFloat() * 2f * kotlin.math.PI.toFloat()
+                fX.setFloat(unit, cx + r2 * kotlin.math.cos(th))
+                fY.setFloat(unit, cy + r2 * kotlin.math.sin(th))
+                setTeam.invoke(unit, teams[i % teams.size])
+                addC.invoke(null, unit)
+                made++; customOk++
+            }
+        } catch (t: Throwable) {
+            if (customTried == 0L) { try { api.game.log(LogLevel.WARN, "BENCH custom spawn failed: " + t) } catch (_: Throwable) {} }
+        }
+        customTried += n
+        ownFodder += made; live += made
+        return made
     }
 
     private fun armPathBench(n: Int) {
