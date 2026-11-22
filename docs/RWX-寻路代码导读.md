@@ -105,6 +105,55 @@ profiler 里对应 `pathing=` 那一段。你们的 1 万单位局里，这一�
 
 ---
 
+---
+
+## 八、起点 / 终点 / 两个预算（老师问的两件事）
+
+### 1. 起点和终点确实是「单位坐标 → 命令坐标」
+
+代码在 `OrderableUnit.createPathToTarget()`（约 4406 行），实际就两行：
+
+```java
+tileMap.setCursorTileIndexFromWorldPoint(this.posX, this.posY);   // 起点＝单位自己现在的位置
+pathA.a(getMovementType(), (short) tileMap.cursorTileX, (short) tileMap.cursorTileY, ...);
+tileMap.setCursorTileIndexFromWorldPoint(f, f2);                  // 终点＝命令落点
+pathA.a((short) tileMap.cursorTileX, (short) tileMap.cursorTileY, (short) i);
+```
+
+两个坐标都会被**钳进地图边界**（`Path.a()` 里 0..宽-1）。另外新求解器有两处「吸附」：
+起点格子不能走时，在 **2 格**半径内找一个能站的；终点不能走/在图外时，在 **4 格**半径内找一个能站的，
+找不到就判定「去不了」（`endUnreachable=true`），不再扫全图。
+
+### 2. 6000 是「一条路径」的探索上限，不是每个路径点
+
+```java
+int expanded = 0;                          // 每次 solve 开头归零 → 一条路径一个计数器
+...
+if (++expanded > RWX_MAX_EXPAND) {         // 每弹出一个格子 +1
+    break;
+}
+```
+
+按 8 邻接算，最坏 6000×8 ≈ 4.8 万次邻接检查，单条路径通常几十到几百微秒。
+实测 1 万单位局里 `pathing=` 只有 0.0–0.1ms，**这个上限现在不是瓶颈**。
+
+### 3. 其实有两个预算，都按「一条路径」算
+
+| 预算 | 在哪 | 值 | 超了会怎样 |
+| --- | --- | --- | --- |
+| 节点数上限 | `RwxPathSolver2`（默认求解器） | 6000 | 判定失败，单位当成去不了 |
+| 时间预算 | `PathEngine.a(path,...)` | 12/16/24/50/100/200ms，单人 180/360ms | 算不完就这一帧先不算，留着下一帧继续 |
+
+注意：节点数上限只在**新求解器**里。旧求解器（`-Drwx.pathing=1` 才回退）没有节点上限，
+失败时还会**整张地图扫一遍**找最近可站格——那才是真正的长帧隐患。默认已经不用它了。
+
+### 4. 可以想的一条
+
+6000 是固定值，短距离路径用不到这么多，长距离路径可能不够。可以按距离缩放，比如
+`min(6000, 500 + 2 × 直线距离格数)`，短路径少给、长路径多给。这是「可以试」，没量过。
+
+---
+
 ## 七、必须说清楚的边界
 
 - `pathing=` 在实测的 1 万单位局里只占 0.0–0.1ms，**先优化它收益有限**。
