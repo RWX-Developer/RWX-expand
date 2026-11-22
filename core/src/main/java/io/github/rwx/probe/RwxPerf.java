@@ -9,7 +9,12 @@ import com.corrodinggames.rts.gameFramework.GameEngine;
  */
 public final class RwxPerf {
 
-    private static boolean isEnv0(String name) {
+    private static String trimmedEnv(String name) {
+        String v = System.getenv(name);
+        return v == null ? "" : v.trim();
+    }
+
+    static boolean isEnv0(String name) {
         String v = System.getenv(name);
         return v != null && "0".equals(v.trim());
     }
@@ -98,7 +103,13 @@ public final class RwxPerf {
 
     // RWX：剖析默认开启（老师双击 RWX.exe 时没有环境变量，上一局数据就是这么丢的）；
     // 关掉用 RWX_PROF=0。每 600 tick/帧各写一行到 logs\rwx-prof.log，尖峰帧多一行，量很小。
-    private static final boolean ON = !isEnv0("RWX_PROF");
+    // RWX：修正默认值（第八轮写反了）：launch.bat 的约定是「RWX_PROF=1 才剖析」，
+// 但旧写法 ON = !isEnv0(...) 让不设环境变量的玩家也一路记账：
+// 每帧 now()/mark()/aiHit()、超 50ms 的尖峰行做 ~20 次 String.format + MXBean
+// 遍历 + synchronized 文件 flush。实测（bench 4000 单位 A/B）平均帧时看不出
+// 差别（16.3 vs 18.6ms，两局不同世界、噪声内），但这是白送的成本，且尖峰
+// 写盘落在最不该写盘的帧上。现在与环境变量约定一致：默认关。
+private static final boolean ON = "1".equals(trimmedEnv("RWX_PROF"));
 
     // 逻辑线程
     private static final long[] acc = new long[SECTIONS];
