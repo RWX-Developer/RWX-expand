@@ -4385,6 +4385,30 @@ public class CustomUnit extends MovableUnit implements TransportUnitInterface, U
 
     // RWX：RWX_TRIGGER_STATS=1 时统计自动触发条件的求值次数，默认零开销（静态字段在无触发器单位上也不访问）
     static final boolean RWX_TRIGGER_STATS = System.getenv("RWX_TRIGGER_STATS") != null;
+
+    // RWX：每帧触发桶的相位错开。-Drwx.trigStride=N（默认 1＝原行为，传 2..16 才生效）。
+    // 背景：every4/every8 两档本来就按 (tick + objectId) % N 错开，只有 everyFrame 桶是每 tick 全量求值。
+    // 成批入场时几千个单位挤在同一帧求值，就是长帧的主要来源。改成每个单位固定周期、相位随 objectId 分散，
+    // 每帧只跑 1/N 的单位。代价：单个单位的触发延迟上限从 1 tick 变成 N tick。
+    // 实测（10k MCvsMN 混编 + bench 触发器台架）本项没有可测收益，所以默认关闭、保留作旋钮。
+    static final int RWX_TRIG_STRIDE = rwxTrigStrideInit();
+
+    private static int rwxTrigStrideInit() {
+        String rwxStrideProp = System.getProperty("rwx.trigStride", "1");
+        int rwxStrideVal = 1;
+        try {
+            rwxStrideVal = Integer.parseInt(rwxStrideProp == null ? "1" : rwxStrideProp.trim());
+        } catch (NumberFormatException rwxStrideErr) {
+            rwxStrideVal = 2;
+        }
+        if (rwxStrideVal < 1) {
+            rwxStrideVal = 1;
+        }
+        if (rwxStrideVal > 16) {
+            rwxStrideVal = 16;
+        }
+        return rwxStrideVal;
+    }
     static long rwConditionsEvaluated = 0;
     static long rwTriggerFrames = 0;
 
@@ -4408,7 +4432,9 @@ public class CustomUnit extends MovableUnit implements TransportUnitInterface, U
             }
         }
         CustomUnitCondition[] customUnitConditionArr = customUnitConfig.autoTriggerConditionsEveryFrame;
-        if (customUnitConditionArr != null) {
+        // RWX：everyFrame 桶按相位分帧（见 RWX_TRIG_STRIDE）。z=1 表示冷却刚结束，保持立即求值。
+        if (customUnitConditionArr != null && (RWX_TRIG_STRIDE == 1
+                || ((((int) (((long) GameEngine.getInstance().currentTick) + this.objectId)) % RWX_TRIG_STRIDE) == 0) || z)) {
             a(f, customUnitConditionArr);
             if (customUnitConfig != this.unitConfig) {
                 return;
