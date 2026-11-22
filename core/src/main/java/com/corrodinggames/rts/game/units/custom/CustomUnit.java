@@ -4399,7 +4399,7 @@ public class CustomUnit extends MovableUnit implements TransportUnitInterface, U
         try {
             rwxStrideVal = Integer.parseInt(rwxStrideProp == null ? "1" : rwxStrideProp.trim());
         } catch (NumberFormatException rwxStrideErr) {
-            rwxStrideVal = 2;
+            rwxStrideVal = 1;
         }
         if (rwxStrideVal < 1) {
             rwxStrideVal = 1;
