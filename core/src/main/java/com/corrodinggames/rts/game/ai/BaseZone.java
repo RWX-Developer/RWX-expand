@@ -342,6 +342,10 @@ public class BaseZone extends AIStrategyNode {
         this.rwxFactoryUnits.clear();
         this.rwxIdleCandidateUnits.clear();
         this.rwxHarvesterUnits.clear();
+        // 兵种表：清空每条名单但保留对象复用
+        for (Object o : this.rwxTypeBuckets.values()) {
+            ((UnitList) o).clear();
+        }
     }
 
     private void rwxBucketAdd(BaseUnit baseUnit) {
@@ -363,6 +367,7 @@ public class BaseZone extends AIStrategyNode {
         if (baseUnit.r().n()) {
             this.rwxHarvesterUnits.add(baseUnit);
         }
+        this.rwxTypeBucket(baseUnit.unitType).add(baseUnit);
     }
 
     private void rwxBucketRemove(BaseUnit baseUnit) {
@@ -372,6 +377,10 @@ public class BaseZone extends AIStrategyNode {
         this.rwxFactoryUnits.remove(baseUnit);
         this.rwxIdleCandidateUnits.remove(baseUnit);
         this.rwxHarvesterUnits.remove(baseUnit);
+        Object rwxTypeBucket = this.rwxTypeBuckets.get(baseUnit.unitType);
+        if (rwxTypeBucket != null) {
+            ((UnitList) rwxTypeBucket).remove(baseUnit);
+        }
     }
 
     // RWX：等价性自检（-Drwx.zoneVerify=1，默认关）。
@@ -432,6 +441,27 @@ public class BaseZone extends AIStrategyNode {
         }
     }
 
+    // RWX：「一个区域里同兵种共用一条名单」（老师提的合批方向）。
+    // GBB 每调一次就对本模组 ~120 个建筑型各调一次 countUnitsOfType，
+    // 而后者每次把整份 unitsInZone 从头扫到尾——同兵种之间、跨类型之间全是重复。
+    // 实测 type1385 访问/tick（bench 4000+600 单位, tick=1200 窗口）。
+    // 现在 unitsInZone 每次重建时顺手按 baseUnit.unitType 建一张「兵种 → 保序名单」表，
+    // countUnitsOfType 只走自己兵种那一条。表只是「原名单按兵种的分组视图」，
+    // 消费循环里的整条谓词链（team/unitType/countUnitsForStrategy）照旧逐字重跑，
+    // 所以不缓存任何会随移动改变的判定：unitType 在单位存活期间不变 ⇒
+    // 候选集合与原循环严格相同 ⇒ 结果逐位一致。
+    // 名单对象跨 tick 复用（只 clear 不丢），避免每帧给每个兵种分配数组。
+    private final HashMap rwxTypeBuckets = new HashMap();
+
+    private UnitList rwxTypeBucket(UnitType unitType) {
+        Object o = this.rwxTypeBuckets.get(unitType);
+        if (o == null) {
+            o = new UnitList(8);
+            this.rwxTypeBuckets.put(unitType, o);
+        }
+        return (UnitList) o;
+    }
+
     private UnitList rwxFactories() {
         return rwxZoneBuckets ? this.rwxFactoryUnits : this.unitsInZone;
     }
@@ -450,6 +480,45 @@ public class BaseZone extends AIStrategyNode {
             rwxVerifyBucket(bucket, kind, name);
         }
         return bucket;
+    }
+
+    // RWX：兵种表校验——桶必须等于 unitsInZone 按「unitType 同一对象」现筛的保序子序列。
+    // UnitType/CustomUnitConfig 都没重写 equals，== 就是身份比较，与消费链一致。
+    private void rwxVerifyTypeBucket(UnitType unitType, UnitList bucket) {
+        if (!rwxZoneVerify) {
+            return;
+        }
+        RWX_ZB_CHECKS++;
+        if ((RWX_ZB_CHECKS & 4095L) == 1L) {
+            io.github.rwx.probe.RwxPerf.out("RWX_ZB checks=" + RWX_ZB_CHECKS + " mismatch=" + RWX_ZB_MISMATCH
+                    + " tick=" + GameEngine.getInstance().currentTick);
+        }
+        BaseUnit[] src = this.unitsInZone.a();
+        int n = this.unitsInZone.size();
+        BaseUnit[] got = bucket.a();
+        int m = bucket.size();
+        int k = 0;
+        for (int i = 0; i < n; i++) {
+            if (src[i].unitType != unitType) {
+                continue;
+            }
+            if (k >= m || got[k] != src[i]) {
+                RWX_ZB_MISMATCH++;
+                if (RWX_ZB_MISMATCH <= 3) {
+                    io.github.rwx.probe.RwxPerf.out("RWX_ZB_MISMATCH bucket=type idx=" + k + " m=" + m + " n=" + n
+                            + " tick=" + GameEngine.getInstance().currentTick);
+                }
+                return;
+            }
+            k++;
+        }
+        if (k != m) {
+            RWX_ZB_MISMATCH++;
+            if (RWX_ZB_MISMATCH <= 3) {
+                io.github.rwx.probe.RwxPerf.out("RWX_ZB_MISMATCH bucket=type length " + k + "!=" + m
+                        + " tick=" + GameEngine.getInstance().currentTick);
+            }
+        }
     }
 
     private int rwxCanBTick = -1;
@@ -771,11 +840,16 @@ public class BaseZone extends AIStrategyNode {
     /* JADX INFO: renamed from: c */
     public int countUnitsOfType(UnitType unitType) {
         int i = 0;
-        UnitList unitList = this.unitsInZone;
+        // RWX：同兵种共用一条名单；桶是 unitsInZone 按 unitType 的分组视图，
+        // 下面的谓词链与整表扫时逐字相同（unitType 不变 ⇒ 候选集相同 ⇒ 结果相同）。
+        UnitList unitList = rwxZoneBuckets ? rwxTypeBucket(unitType) : this.unitsInZone;
         BaseUnit[] baseUnitArrA = unitList.a();
         int size = unitList.size();
         io.github.rwx.probe.RwxPerf.aiHitAdd(io.github.rwx.probe.RwxPerf.HIT_LIST, size);
         io.github.rwx.probe.RwxPerf.aiHitAdd(io.github.rwx.probe.RwxPerf.HIT_TYPE, size);
+        if (rwxZoneBuckets) {
+            rwxVerifyTypeBucket(unitType, unitList);
+        }
         for (int i2 = 0; i2 < size; i2++) {
             BaseUnit baseUnit = baseUnitArrA[i2];
             if (baseUnit.team == this.aiController && baseUnit.unitType == unitType && countUnitsForStrategy(baseUnit)) {
