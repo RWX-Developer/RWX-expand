@@ -359,41 +359,13 @@ public final class PathSolver implements Runnable {
                 }
                 // RWX：目标落在另一个孤立地形组 = 这个 movementType 没有任何地形能抵达目的地，
                 // 下面只是「走到最近的地方」，不是真的到了。标记出来让单位别再无限重寻路。
+                // RWX：目标落在另一个孤立地形组＝这个兵种根本到不了。
+                // 原逻辑会在这里找「最近的同组格子」当假终点，而且找不到时从全图 (0,0) 开始扫，
+                // 同距离先到先得——落点因此被系统性推到地图西北角（老师实测到的现象）。
+                // 现在直接判不可达，返回空路径，不再改终点。
                 path.endUnreachable = true;
-                n14 = n12;
-                n3 = n13;
-                float f2 = -1.0f;
-                for (n15 = (int) (n9 - 25); n15 <= n9 + 25; n15 = (short) (n15 + 1)) {
-                    for (n2 = (int) (n10 - 25); n2 <= n10 + 25; n2 = (short) (n2 + 1)) {
-                        if (n15 < 0 || n15 >= n8 || n2 < 0 || n2 >= s2 || n5 != sArray[n15 * s2 + n2] && sArray[n15 * s2 + n2] != 0)
-                            continue;
-                        f = Utility.distanceSq(n15, n2, n9, n10);
-                        if (f2 != -1.0f && !(f < f2)) continue;
-                        f2 = f;
-                        n14 = n15;
-                        n3 = n2;
-                        s6 = 0;
-                    }
-                }
-                if (f2 == -1.0f) {
-                    for (n15 = 0; n15 < n8; n15 = (short) (n15 + 1)) {
-                        for (n2 = 0; n2 < s2; n2 = (int) ((short) (n2 + 1))) {
-                            if (n5 != sArray[n15 * s2 + n2] && sArray[n15 * s2 + n2] != 0) continue;
-                            f = Utility.distanceSq(n15, n2, n9, n10);
-                            if (f2 != -1.0f && !(f < f2)) continue;
-                            f2 = f;
-                            n14 = n15;
-                            n3 = n2;
-                            s6 = 0;
-                        }
-                    }
-                }
-                n12 = n14;
-                n13 = n3;
-                if (PathEngine.a) {
-                    long l = System.currentTimeMillis() - this.y;
-                    Log.d("RustedWarfare", "fakeNode search was:" + l);
-                }
+                linkedList.clear();
+                return linkedList;
             }
         }
         boolean bl2 = true;
@@ -407,43 +379,12 @@ public final class PathSolver implements Runnable {
         }
         if (bl2) {
             // RWX：目标半径内一格都过不去（同上，走的是最近可达点，不是目的地）
+            // RWX：目标半径内一格都走不过去＝这里到不了。原逻辑在这里 ±9 格找最近的能走格，
+            // 兜底还会从 (0,0) 全图扫一遍，同距离先到先得——落点于是被推到西北角。
+            // 现在直接判不可达，返回空路径。
             path.endUnreachable = true;
-            n5 = n12;
-            n4 = n13;
-            float f = -1.0f;
-            if (PathEngine.a) {
-                Log.d("RustedWarfare", "end is blocked on non isolated groups");
-            }
-            for (n3 = (short) (n12 - 9); n3 <= n12 + 9; n3 = (short) (n3 + 1)) {
-                for (int n16 = (int) (n13 - 9); n16 <= n13 + 9; n16 = (short) (n16 + 1)) {
-                    if (n3 < 0 || n3 >= n8 || n16 < 0 || n16 >= s2 || this.a(n3, n16) == -1) continue;
-                    float f3 = Utility.distanceSq(n3, n16, n12, n13);
-                    if (f != -1.0f && !(f3 < f)) continue;
-                    f = f3;
-                    n5 = n3;
-                    n4 = n16;
-                    s6 = 0;
-                }
-            }
-            if (f == -1.0f) {
-                for (n3 = 0; n3 < n8; n3 = (short) (n3 + 1)) {
-                    for (short s7 = 0; s7 < s2; s7 = (short) ((short) (s7 + 1))) {
-                        if (this.a(n3, s7) == -1) continue;
-                        float f4 = Utility.distanceSq(n3, s7, n12, n13);
-                        if (f != -1.0f && !(f4 < f)) continue;
-                        f = f4;
-                        n5 = n3;
-                        n4 = s7;
-                        s6 = 0;
-                    }
-                }
-            }
-            n12 = n5;
-            n13 = n4;
-            if (PathEngine.a) {
-                long l = System.currentTimeMillis() - this.y;
-                Log.d("RustedWarfare", "fakeNode search was:" + l);
-            }
+            linkedList.clear();
+            return linkedList;
         }
         if (PathEngine.a && (n12 != n9 || n13 != n10)) {
             Log.d("RustedWarfare", "Moved end to fakeEndX:" + n12 + " fakeEndY:" + n13);

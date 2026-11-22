@@ -1,10 +1,7 @@
-import org.jetbrains.compose.desktop.application.dsl.TargetFormat
-
-// RWX 编辑器：独立程序。不依赖 core/desktop，启动时不需要游戏引擎。
+// RWX 编辑器：本地 Web 程序。前端 Vue（web/ 目录构建进 resources/web），后端纯 JDK。
 plugins {
     alias(libs.plugins.kotlin.jvm)
-    alias(libs.plugins.kotlin.compose)
-    alias(libs.plugins.compose)
+    application
 }
 
 kotlin {
@@ -20,23 +17,18 @@ java {
     }
 }
 
-dependencies {
-    implementation(compose.desktop.currentOs)
-    implementation(libs.compose.material3)
+application {
+    mainClass.set("io.github.rwx.editor.MainKt")
 }
 
-compose {
-    desktop {
-        application {
-            mainClass = "io.github.rwx.editor.MainKt"
-            jvmArgs.addAll(listOf("-Dfile.encoding=UTF-8", "--enable-native-access=ALL-UNNAMED"))
-            nativeDistributions {
-                packageName = "RWX-Editor"
-                vendor = "RWX"
-                description = "RWX client editor"
-                packageVersion = "0.1.0"
-                targetFormats(TargetFormat.Msi)
-            }
-        }
+// 单 jar：main class + 运行时依赖（目前只有 kotlin-stdlib）+ 前端资源
+tasks.jar {
+    manifest {
+        attributes("Main-Class" to "io.github.rwx.editor.MainKt")
     }
+    from({
+        configurations.runtimeClasspath.get().map { if (it.isDirectory) it else zipTree(it) }
+    })
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    archiveFileName.set("RWX-Editor-0.2.0.jar")
 }

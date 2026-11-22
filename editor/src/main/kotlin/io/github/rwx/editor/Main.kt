@@ -1,19 +1,18 @@
 package io.github.rwx.editor
 
-import androidx.compose.ui.unit.DpSize
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Window
-import androidx.compose.ui.window.WindowState
-import androidx.compose.ui.window.application
 import java.io.File
+import java.net.URI
+import java.net.URLEncoder
 
 /**
- * RWX 编辑器：独立程序入口。
+ * RWX 编辑器：本地 Web 程序。
  *
- * 不启动游戏、不依赖引擎：只读工作区文件 + 自己的 Compose UI。
- * 需要用到游戏内能力时（预览、校验），以子进程或本地服务的方式接。
+ * 前端是 Vue（editor/web），后端是这个进程里的 HTTP 服务。
+ * 起一个只监听 127.0.0.1 的端口，浏览器打开即可用；不启动游戏、不依赖引擎。
  *
- * 无界面自检：--selftest <模组路径>，用于验证 jar 读取 / ini 分节 / 打包回环。
+ * 无界面模式：
+ *   --selftest <模组路径>   读包 / ini 分节 / 打包回环自检
+ *   --decompile <jar> [条目] 反编译某个 class
  */
 fun main(args: Array<String>) {
     val dIdx = args.indexOf("--decompile")
@@ -25,21 +24,32 @@ fun main(args: Array<String>) {
         runSelfTest(args.last())
         return
     }
+
+    val port = args.firstOrNull { it.startsWith("--port=") }
+        ?.substringAfter("=")?.toIntOrNull() ?: 8765
     val eIdx = args.indexOf("--entry")
     val initialEntry = if (eIdx >= 0) args.getOrNull(eIdx + 1) else null
     val positional = args.filterIndexed { i, a -> !a.startsWith("-") && (i == 0 || args[i - 1] != "--entry") }
     val workspace = positional.firstOrNull()
         ?: System.getenv("RWX_WORKSPACE")
         ?: detectDefaultWorkspace()
-    application {
-        Window(
-            onCloseRequest = ::exitApplication,
-            title = "RWX 编辑器 v1 — " + workspace,
-            state = WindowState(size = DpSize(1440.dp, 900.dp)),
-        ) {
-            EditorRoot(workspaceRoot = File(workspace), initialEntry = initialEntry)
-        }
+
+    EditorServer(File(workspace), port).start()
+    val url = "http://127.0.0.1:" + port + "/" +
+        (initialEntry?.let { "?entry=" + URLEncoder.encode(it, "UTF-8") } ?: "")
+    println("RWX 编辑器（Web）已启动: " + url)
+    println("工作区: " + File(workspace).absolutePath)
+    println("Ctrl+C 结束。")
+    if (!args.contains("--no-open")) runCatching { openBrowser(url) }
+    Thread.sleep(Long.MAX_VALUE)
+}
+
+private fun openBrowser(url: String) {
+    if (java.awt.Desktop.isDesktopSupported()) {
+        java.awt.Desktop.getDesktop().browse(URI(url))
+        return
     }
+    ProcessBuilder("rundll32", "url.dll,FileProtocolHandler", url).start()
 }
 
 /** 无界面反编译：--decompile <模组jar> <条目名>（条目省略则取第一个 class）。 */
