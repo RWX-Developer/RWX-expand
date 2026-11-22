@@ -154,6 +154,76 @@ if (++expanded > RWX_MAX_EXPAND) {         // 每弹出一个格子 +1
 
 ---
 
+---
+
+## 九、钳进地图边界的代码到底在哪（四处，按执行顺序）
+
+命令从按下到变成路径，中间过了四道钳制，顺序如下：
+
+### 第一道：世界坐标钳制 —— `Command.rwxClampTarget()`，Command.java:238
+
+```java
+float hx = tm.halfTileWorldSizeX;
+float maxX = tm.getWorldWidth() - hx;
+float cx = f < hx ? hx : (f > maxX ? maxX : f);   // 夹在 [半格, 地图宽-半格]
+```
+
+**白话**：把「世界上真实的像素坐标」夹进地图内，还往里缩半格，免得落在最外面的半格上。
+钳到过会有 `RWX_CLAMP` 日志（前 12 次，带调用栈）。
+
+被谁调用：`Command.setMoveTarget()`（Command.java:647 / 672 / 700），也就是玩家点地图下命令的地方。
+
+### 第二道：可站立点校正 —— `Command.rwxWalkableTarget()`
+
+紧跟在第一道后面。**白话**：钳完还在墙里/水里就校正到最近能站的位置；AI 的命令校正不了就整条拒发，
+玩家的命令一定发出去（不吞指令）。
+
+想直接拒掉图外命令而不是钳：`-Drwx.clampReject=1`，会打 `RWX_CLAMP_REJECT`。
+
+### 第三道：起点格子钳制 —— `Path.a(movementType, sx, sy, ...)`，Path.java:186
+
+```java
+if (this.startTileX < 0) this.startTileX = 0;
+if (this.startTileY < 0) this.startTileY = 0;
+if (this.startTileX > this.a.widthTiles - 1)  this.startTileX = (short) (widthTiles - 1);
+if (this.startTileY > this.a.heightTiles - 1) this.startTileY = (short) (heightTiles - 1);
+```
+
+**白话**：起点的「格子编号」也要在地图内。这道是静默的，没有日志。
+
+### 第四道：终点格子钳制 —— `Path.a(sx, sy, cameraId)`，Path.java:205
+
+```java
+if ((s < 0 || s2 < 0 || s > this.a.widthTiles - 1 || s2 > this.a.heightTiles - 1) && RWX_BOUNDS_LOG_N < 20) {
+    RWX_BOUNDS_LOG_N++;
+    io.github.rwx.probe.RwxPerf.out("RWX_BOUNDS target out of map -> clamped:" + s + "," + s2 + " map=" + ...);
+}
+if (s < 0) s = 0;
+...
+this.endTileX = s;
+```
+
+**白话**：终点格子越界就夹回边界，并且 RWX 加了日志（前 20 次）留证据。
+**这就是「单位一路开到地图边缘停住」的那个钳制。**
+
+### 顺带说明：`TileMap.setCursorTileIndexFromWorldPoint()`（TileMap.java:622）不钳
+
+```java
+this.cursorTileX = (int) (f * this.tileScaleX);
+```
+
+它只是把世界坐标换算成格子编号，**不做边界检查**。所以上层必须先钳，否则这里会算出负数或超大值。
+
+### 小结（要动边界行为的话，改前两道就够）
+
+| 想达到的效果 | 改哪里 |
+| --- | --- |
+| 图外命令直接拒掉，不钳 | `-Drwx.clampReject=1`（已经做好） |
+| 钳的范围改成「少缩半格」或别的 | `Command.rwxClampTarget()`（238 行） |
+| 路径终点不再贴边 | `Path.a()`（205 行）改成拒令或留空 |
+
+---
+
 ## 七、必须说清楚的边界
 
 - `pathing=` 在实测的 1 万单位局里只占 0.0–0.1ms，**先优化它收益有限**。
