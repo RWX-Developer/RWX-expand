@@ -201,6 +201,13 @@ class BenchRampMod : JvmMod() {
         }
         // RWX：打印引擎里实际加载的自定义兵种（INI 模组），用来确认模组是否真的读完。
         // -Dbench.dumpConfigs=1
+// RWX：AI 接口台架。用作者留下的 ai.* 接口（registerAgent / configurePlayer /
+        // currentObservation / submitActions）下真实命令——走的是和玩家点击同一套命令路径，
+        // 不是 spawn 完站着不动。-Dbench.agent=1 开；-Dbench.agentTeam=0 选队；
+        // -Dbench.agentMoveTick=300 每隔多少 tick 换目标；-Dbench.agentMax=20 每次最多几台。
+        if ("1" == System.getProperty("bench.agent", "0").trim()) {
+            armAgentBench()
+        }
         if ("1" == System.getProperty("bench.dumpConfigs", "0").trim()) {
             api.game.repeat(1, ModTask { a ->
                 if (a.game.tick == 90L) {
@@ -382,6 +389,87 @@ class BenchRampMod : JvmMod() {
         customTried += n
         ownFodder += made; live += made
         return made
+    }
+
+private fun armAgentBench() {
+        val agentId = "rwx-test-agent"
+        val teamId = System.getProperty("bench.agentTeam", "0").toInt()
+        try {
+            api.ai.registerAgent(AiAgentDefinition(id = agentId, displayName = LocalizedText.literal("RWX Test Agent")))
+            api.ai.configurePlayer(
+                AiPlayerConfig(
+                    teamId = teamId,
+                    enabled = true,
+                    mode = AiPlayerMode.EXTERNAL_AGENT,
+                    agentId = agentId,
+                    scope = AiControlScope(teamIds = setOf(teamId))
+                )
+            )
+            api.ai.bindAgent(AiAgentBinding(agentId = agentId, scope = AiControlScope(teamIds = setOf(teamId))))
+            api.game.log(LogLevel.INFO, "BENCH_AGENT armed agent=" + agentId + " team=" + teamId)
+        } catch (t: Throwable) {
+            api.game.log(LogLevel.WARN, "BENCH_AGENT setup failed: " + t)
+        }
+        val every = System.getProperty("bench.agentMoveTick", "300").toLong()
+        val maxUnits = System.getProperty("bench.agentMax", "20").toInt()
+        val rnd = java.util.Random(20261123L)
+        var acceptedAll = 0
+        var rejectedAll = 0
+        val firstSeen = HashMap<Long, FloatArray>()
+        api.game.repeat(every, ModTask { a ->
+            val obs = a.ai.currentObservation(AiObservationScope(teamIds = setOf(teamId)))
+            // 只指挥自己队的单位：观察默认 includeEnemies=true，不过滤就会拿到敌方单位，
+            // 引擎会回 "Unit X is not on team Y" 拒绝掉（这是正确的防护）。
+            val units = obs.units.filter { it.orderable && !it.isBuilding && !it.destroyed && it.ref.teamId == teamId }
+            if (units.isEmpty()) {
+                a.game.log(LogLevel.INFO, "BENCH_AGENT tick=" + a.game.tick + " no-orderable-units")
+                return@ModTask
+            }
+            for (u in units) {
+                val id = u.ref.instanceId.value
+                if (!firstSeen.containsKey(id)) firstSeen[id] = floatArrayOf(u.position.x, u.position.y)
+            }
+            var moved = 0.0
+            var cnt = 0
+            for (u in units) {
+                val p = firstSeen[u.ref.instanceId.value] ?: continue
+                val dx = u.position.x - p[0]
+                val dy = u.position.y - p[1]
+                moved += kotlin.math.sqrt(dx * dx + dy * dy)
+                cnt++
+            }
+            val tx = 300f + rnd.nextFloat() * 700f
+            val ty = 300f + rnd.nextFloat() * 700f
+            val cmds = units.take(maxUnits).map { u ->
+                UnitCommandRequest(
+                    teamId = teamId,
+                    unitIds = listOf(u.ref.instanceId),
+                    type = UnitCommandType.MOVE,
+                    target = UnitCommandTarget.Point(WorldPosition(tx, ty))
+                )
+            }
+            val results = a.ai.submitActions(cmds)
+            val acc = results.count { it.accepted }
+            val rej = results.count { !it.accepted }
+            acceptedAll += acc
+            rejectedAll += rej
+            val reasons = results.filter { !it.accepted }.mapNotNull { it.message }.distinct().take(3).joinToString(" | ")
+            if (reasons.isNotEmpty()) {
+                a.game.log(LogLevel.INFO, "BENCH_AGENT_REJECT tick=" + a.game.tick + " reasons=" + reasons)
+            }
+            val arrived = units.count { u ->
+                val dx = u.position.x - tx
+                val dy = u.position.y - ty
+                dx * dx + dy * dy < 1600f
+            }
+            a.game.log(
+                LogLevel.INFO,
+                "BENCH_AGENT tick=" + a.game.tick + " units=" + units.size + " issued=" + cmds.size +
+                    " acc=" + acc + " rej=" + rej + " accAll=" + acceptedAll + " rejAll=" + rejectedAll +
+                    " arrived=" + arrived + " avgMovedFromFirstSeen=" + String.format("%.1f", if (cnt > 0) moved / cnt else 0.0) +
+                    " target=" + tx.toInt() + "," + ty.toInt()
+            )
+        })
     }
 
     private fun armPathBench(n: Int) {
