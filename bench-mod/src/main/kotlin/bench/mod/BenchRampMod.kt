@@ -438,8 +438,11 @@ private fun armAgentBench() {
                 moved += kotlin.math.sqrt(dx * dx + dy * dy)
                 cnt++
             }
-            val tx = 300f + rnd.nextFloat() * 700f
-            val ty = 300f + rnd.nextFloat() * 700f
+            // bench.agentOutOfMap=1：故意把目标丢到地图外面（-2500 或 +9000），
+            // 验证「图外目标」是否被拒绝或判不可达，而不是开去边界。
+            val outOfMap = "1" == System.getProperty("bench.agentOutOfMap", "0").trim()
+            val tx = if (outOfMap) (if (rnd.nextBoolean()) -2500f else 9000f) else 300f + rnd.nextFloat() * 700f
+            val ty = if (outOfMap) (if (rnd.nextBoolean()) -2500f else 9000f) else 300f + rnd.nextFloat() * 700f
             val cmds = units.take(maxUnits).map { u ->
                 UnitCommandRequest(
                     teamId = teamId,
