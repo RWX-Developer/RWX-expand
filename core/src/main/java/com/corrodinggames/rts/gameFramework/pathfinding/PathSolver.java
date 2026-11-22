@@ -311,6 +311,12 @@ public final class PathSolver implements Runnable {
         LinkedList linkedList = new LinkedList();
         // RWX：本次尝试重置不可达标记（超时重排队后可能地形已通，不能沿用上次的结论）
         path.endUnreachable = false;
+        // RWX：目标在图外——直接判不可达，不做「钳到边界再走过去」的补救。
+        if (path.rwxTargetOutOfMap) {
+            path.endUnreachable = true;
+            linkedList.clear();
+            return linkedList;
+        }
         if (s3 == n9 && s4 == n10) {
             if (PathEngine.a) {
                 Log.d("RustedWarfare", "no point pathing when start=end");
@@ -664,17 +670,45 @@ public final class PathSolver implements Runnable {
                 Log.d("RustedWarfare", "could not find end node");
             }
             long l2 = System.currentTimeMillis();
+            // RWX：假终点（「最近的能站格」）不再全图扫，改成只在单位自己周围找。
+            // 原因 1：全图扫描从左上角开始、同距离先到先得，结果被系统性地导向西北边界，
+            //         表现就是「路径中途必有一处落在边界，而且每次重算落点还不一样」。
+            // 原因 2：一万单位时每条失败路径都扫一遍全图，代价跟地图面积成正比。
+            // 规则：范围＝单位周围 RWX_FAKE_END_MAX_TILES 格，绝不越出地图；
+            //       先比离真目标近不近，平手时取离地图中心更近的那格（可复现，不看扫描顺序）。
             float f = -1.0f;
             PathPoint pathPoint5 = new PathPoint();
-            for (n = 0; n < n8; n = (short) (n + 1)) {
-                for (s = 0; s < s2; s = (short) (s + 1)) {
-                    pathPoint5.a((short) n, s);
-                    if (!pathPoint5.e(this, (byte) 0)) continue;
-                    float f5 = Utility.distanceSq(n, s, n9, n10);
-                    if (f != -1.0f && !(f5 < f)) continue;
-                    f = f5;
-                    n4 = n;
-                    s8 = s;
+            int rwxStartTx = path.startTileX;
+            int rwxStartTy = path.startTileY;
+            int rwxX0 = rwxStartTx - RWX_FAKE_END_MAX_TILES;
+            int rwxY0 = rwxStartTy - RWX_FAKE_END_MAX_TILES;
+            int rwxX1 = rwxStartTx + RWX_FAKE_END_MAX_TILES;
+            int rwxY1 = rwxStartTy + RWX_FAKE_END_MAX_TILES;
+            if (rwxX0 < 0) { rwxX0 = 0; }
+            if (rwxY0 < 0) { rwxY0 = 0; }
+            if (rwxX1 > n8 - 1) { rwxX1 = n8 - 1; }
+            if (rwxY1 > s2 - 1) { rwxY1 = s2 - 1; }
+            int rwxCenterX = n8 / 2;
+            int rwxCenterY = s2 / 2;
+            int rwxBestScore = Integer.MAX_VALUE;
+            for (int rwxX = rwxX0; rwxX <= rwxX1; rwxX++) {
+                for (int rwxY = rwxY0; rwxY <= rwxY1; rwxY++) {
+                    pathPoint5.a((short) rwxX, (short) rwxY);
+                    if (!pathPoint5.e(this, (byte) 0)) {
+                        continue;
+                    }
+                    int rwxDdx = rwxX - n9;
+                    int rwxDdy = rwxY - n10;
+                    int rwxDist = rwxDdx * rwxDdx + rwxDdy * rwxDdy;
+                    int rwxCenterDist = Math.abs(rwxX - rwxCenterX) + Math.abs(rwxY - rwxCenterY);
+                    int rwxScore = rwxDist * 1024 + rwxCenterDist;
+                    if (rwxScore >= rwxBestScore) {
+                        continue;
+                    }
+                    rwxBestScore = rwxScore;
+                    n4 = (short) rwxX;
+                    s8 = (short) rwxY;
+                    f = Utility.distanceSq(rwxX, rwxY, n9, n10);
                 }
             }
             if (PathEngine.a) {

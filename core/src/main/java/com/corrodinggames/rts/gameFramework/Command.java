@@ -636,7 +636,7 @@ public class Command {
     /* JADX INFO: renamed from: a */
     public void setMoveTarget(float f, float f2) {
         // RWX：-Drwx.clampReject=1 时，图外落点不再被钳到边界（那是「开到地图边缘」的直接来源），改为拒令。
-        if ("1".equals(System.getProperty("rwx.clampReject", "0")) && rwxOutOfMap(f, f2)) {
+        if (!"0".equals(System.getProperty("rwx.clampReject", "1").trim()) && rwxOutOfMap(f, f2)) {
             if (RWX_CLAMP_N++ < 12) {
                 io.github.rwx.probe.RwxPerf.out("RWX_CLAMP_REJECT out of map order dropped: " + (int) f + "," + (int) f2);
             }
@@ -661,7 +661,7 @@ public class Command {
     /* JADX INFO: renamed from: b */
     public void setAttackMoveTarget(float f, float f2) {
         // RWX：-Drwx.clampReject=1 时，图外落点不再被钳到边界（那是「开到地图边缘」的直接来源），改为拒令。
-        if ("1".equals(System.getProperty("rwx.clampReject", "0")) && rwxOutOfMap(f, f2)) {
+        if (!"0".equals(System.getProperty("rwx.clampReject", "1").trim()) && rwxOutOfMap(f, f2)) {
             if (RWX_CLAMP_N++ < 12) {
                 io.github.rwx.probe.RwxPerf.out("RWX_CLAMP_REJECT out of map order dropped: " + (int) f + "," + (int) f2);
             }

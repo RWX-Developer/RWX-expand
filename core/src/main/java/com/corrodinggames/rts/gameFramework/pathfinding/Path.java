@@ -200,7 +200,16 @@ public class Path {
         }
     }
 
+    /** RWX：本次目标点是否落在图外（钳制前记录）。求解器看到它就直判不可达。 */
+    public boolean rwxTargetOutOfMap;
     public void a(short s, short s2, short s3) {
+        // RWX：图外目标不再被钳成边界格。以前钳完之后单位会「一路开到地图边缘停住」，
+        // 看起来像它自己往墙上撞。-Drwx.clampEdge=1 可恢复旧行为（钳回边界）。
+        if (s < 0 || s2 < 0 || s > this.a.widthTiles - 1 || s2 > this.a.heightTiles - 1) {
+            if (!"1".equals(System.getProperty("rwx.clampEdge", "0").trim())) {
+                this.rwxTargetOutOfMap = true;
+            }
+        }
         // RWX：目标落在图外会被静默钳到边缘列，单位就一路开到游戏边界停住。这里留证据。
         if ((s < 0 || s2 < 0 || s > this.a.widthTiles - 1 || s2 > this.a.heightTiles - 1) && RWX_BOUNDS_LOG_N < 20) {
             RWX_BOUNDS_LOG_N++;
