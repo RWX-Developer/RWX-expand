@@ -279,7 +279,11 @@ public final class PathSolver implements Runnable {
     // RWX：clearance 惩罚倍数（越大越远离障碍；1=原版）
     private static final int RWX_CLEARANCE_WEIGHT = 6;
     private static int RWX_FAKEEND_LOG_N = 0;
+    private static int rwxSolverLogE = 0;
+    private static int rwxSolverLogG = 0;
+
     public LinkedList e() {
+        if (rwxSolverLogE < 20) { rwxSolverLogE++; io.github.rwx.probe.RwxPerf.out("RWX_SOLVER e #" + rwxSolverLogE + " " + this.g + "x" + this.h); }
         short s;
         int n;
         int n2;
@@ -770,6 +774,7 @@ public final class PathSolver implements Runnable {
     }
 
     public void g() {
+        if (rwxSolverLogG < 20) { rwxSolverLogG++; io.github.rwx.probe.RwxPerf.out("RWX_SOLVER g #" + rwxSolverLogG + " " + this.g + "x" + this.h); }
         final DynamicUnitPath e = (DynamicUnitPath) this.D;
         final FlowField b = new FlowField(this.g, this.h);
         if (PathEngine.l && !GameEngine.getInstance().isMenuBackgroundMap) {

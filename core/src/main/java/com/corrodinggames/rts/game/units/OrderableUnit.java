@@ -57,6 +57,27 @@ public abstract class OrderableUnit extends UnitBase {
     private int rwxRefineCount = 0;
     private float rwxRefineGoalX = -1.0f;
     private float rwxRefineGoalY = -1.0f;
+    /** RWX：逐格校验两点之间的直线是否全程可走（每半个格子采样一次）。 */
+    private boolean rwxStraightLineClear(float x0, float y0, float x1, float y1) {
+        com.corrodinggames.rts.game.map.TileMap rwxTmL = GameEngine.getInstance().tileMap;
+        if (rwxTmL == null) { return true; }
+        com.corrodinggames.rts.gameFramework.path.PathEngine rwxPeL = GameEngine.getInstance().pathfindingEngine;
+        float rwxDxL = x1 - x0;
+        float rwxDyL = y1 - y0;
+        float rwxLenL = (float) Math.sqrt(rwxDxL * rwxDxL + rwxDyL * rwxDyL);
+        float rwxStepL = Math.max(4.0f, Math.min(rwxTmL.tileWorldSizeX, rwxTmL.tileWorldSizeY) * 0.5f);
+        int rwxN = (int) (rwxLenL / rwxStepL);
+        if (rwxN < 1) { rwxN = 1; }
+        for (int rwxI = 0; rwxI <= rwxN; rwxI++) {
+            float rwxF = rwxI / (float) rwxN;
+            int rwxTxL = (int) ((x0 + rwxDxL * rwxF) * rwxTmL.tileScaleX);
+            int rwxTyL = (int) ((y0 + rwxDyL * rwxF) * rwxTmL.tileScaleY);
+            if (rwxTxL < 0 || rwxTyL < 0 || rwxTxL >= rwxTmL.tileCountX || rwxTyL >= rwxTmL.tileCountY) { return false; }
+            if (rwxPeL != null && rwxPeL.isTileBlockedForMovement(getMovementType(), rwxTxL, rwxTyL)) { return false; }
+        }
+        return true;
+    }
+
     // RWX：移动途中的路径合理性检查（不合格就改路）
     private int rwxMoveRepathCount = 0;
     // RWX：移动途中路径检查（独立分支）用的状态
@@ -4427,7 +4448,11 @@ public abstract class OrderableUnit extends UnitBase {
         if (z) {
             i4 = 3;
         }
-        if (PathfindingUtils.a(getMovementType(), this.posX, this.posY, f, f2, 80, i4, 1)) {
+        // RWX：这条是引擎的「直线捷径」——判定能直着走就绕开求解器，直接用每 20px 一个点拼路径。
+        // 老师实测单位会走到边界/拐角才发现不对，根源就在这里：它只做一次粗略可达判定，
+        // 不逐格确认。现在加一道逐格校验，任何一个格子不可走就放弃捷径，交给真求解器。
+        if (PathfindingUtils.a(getMovementType(), this.posX, this.posY, f, f2, 80, i4, 1)
+            && this.rwxStraightLineClear(this.posX, this.posY, f, f2)) {
             this.isPathIncomplete = false;
             this.activePathCount = 0;
             this.pathPositionProvider = null;
