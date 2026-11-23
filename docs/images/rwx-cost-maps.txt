@@ -1,0 +1,9 @@
+map=230x230 costMaps=8
+type=NONE len=52900 d:-1=0,0=52900,>0=0
+type=LAND len=52900 d:-1=20523,0=32377,>0=0
+type=BUILDING len=52900 d:-1=20477,0=32423,>0=0
+type=WATER len=52900 d:-1=34853,0=18047,>0=0
+type=AIR len=52900 d:-1=0,0=52900,>0=0
+type=HOVER len=52900 d:-1=620,0=52280,>0=0
+type=OVER_CLIFF len=52900 d:-1=18047,0=34853,>0=0
+type=OVER_CLIFF_WATER len=52900 d:-1=0,0=52900,>0=0
