@@ -49,6 +49,10 @@ public abstract class OrderableUnit extends UnitBase {
     // RWX：越界寻路目标取证（只打前 20 条）
     private static int RWX_TARGET_CLAMP_N = 0;
     private static int RWX_EDGE_PATH_N = 0;
+    // RWX：边界航点直接丢弃（不去走过去）时的计数与目标记忆，防止同一条目标反复丢弃。
+    private int rwxBorderDropCount = 0;
+    private float rwxBorderDropLastX = -1.0f;
+    private float rwxBorderDropLastY = -1.0f;
     // RWX：路径全量跟踪（-Drwx.pathTrace=1），每条路径打一行航点清单。
     static final boolean RWX_PATH_TRACE = "1".equals(System.getProperty("rwx.pathTrace", "0").trim());
     private static int RWX_PATH_TRACE_N = 0;
@@ -4543,6 +4547,21 @@ public abstract class OrderableUnit extends UnitBase {
                                     + " goalTile=" + this.aU.endTileX + "," + this.aU.endTileY
                                     + " startTile=" + this.aU.startTileX + "," + this.aU.startTileY
                                     + " solver=" + System.getProperty("rwx.pathing", "2"));
+                            }
+                            // RWX：老师要求——路径末点落在边界、真正的目标又不在边界时，不要走到那个边界点再重算，
+                            // 直接把这条路径丢掉，让单位立刻重新寻路到目的地。原来会先走过去再停下重算，
+                            // 看起来就是一卡一顿（要等 pathRetryTimer 的 40/200/600ms 阈值）。
+                            if (this.lastPathTargetX != this.rwxBorderDropLastX || this.lastPathTargetY != this.rwxBorderDropLastY) {
+                                this.rwxBorderDropLastX = this.lastPathTargetX;
+                                this.rwxBorderDropLastY = this.lastPathTargetY;
+                                this.rwxBorderDropCount = 0;
+                            }
+                            if (this.rwxBorderDropCount < 3) {
+                                this.rwxBorderDropCount++;
+                                io.github.rwx.probe.RwxPerf.out("RWX_BORDER_DROP unit=" + (r() == null ? "?" : r().getUnitTypeDescriptionShort())
+                                    + " lastTile=" + rwxLTX + "," + rwxLTY + " goal=" + this.aU.endTileX + "," + this.aU.endTileY
+                                    + " map=" + tileMap.tileCountX + "x" + tileMap.tileCountY + " drop#" + this.rwxBorderDropCount);
+                                clearPathData();
                             }
                         }
                     }
