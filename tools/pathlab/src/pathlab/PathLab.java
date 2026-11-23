@@ -105,6 +105,7 @@ public class PathLab {
 
         Random rnd = new Random(20261123L);
         int n = 300, ok = 0, failUnreachable = 0, failAstar = 0, totalNodes = 0, totalBorder = 0, pairsEndNearBorder = 0;
+        int innerBorder = 0, innerPaths = 0;
         double worstDev = 0;
         int wsx = 0, wsy = 0, wex = 0, wey = 0;
         List<PathPoint> worstPath = null;
@@ -135,11 +136,12 @@ public class PathLab {
                 }
             }
             totalBorder += bh;
+            if (!endNear) { innerPaths++; innerBorder += bh; }
             if (bh > 0 && !endNear && borderCase == null) { borderCase = path; bcx = sx; bcy = sy; bcEx = ex; bcEy = ey; }
             if (md > worstDev) { worstDev = md; wsx = sx; wsy = sy; wex = ex; wey = ey; worstPath = path; }
         }
         System.out.println("cases=" + n + " ok=" + ok + " fail_unreachable=" + failUnreachable + " fail_astar=" + failAstar
-            + " avgNodes=" + (ok == 0 ? 0 : totalNodes / ok) + " borderHitsTotal=" + totalBorder + " pairsEndNearBorder=" + pairsEndNearBorder);
+            + " avgNodes=" + (ok == 0 ? 0 : totalNodes / ok) + " borderHitsTotal=" + totalBorder + " pairsEndNearBorder=" + pairsEndNearBorder + " innerPaths=" + innerPaths + " innerBorderHits=" + innerBorder);
         System.out.println("worstDeviation=" + String.format("%.1f", worstDev) + " case=" + wsx + "," + wsy + " -> " + wex + "," + wey);
         writePpm("out/worst.ppm", solver, worstPath, wsx, wsy, wex, wey);
         System.out.println("worstOverlay=out/worst.ppm");
