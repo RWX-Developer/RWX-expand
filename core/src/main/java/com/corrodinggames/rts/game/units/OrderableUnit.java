@@ -85,6 +85,10 @@ public abstract class OrderableUnit extends UnitBase {
     private float rwxPreMoveGoalX = -1.0f;
     private float rwxPreMoveGoalY = -1.0f;
     private int rwxPreMoveCount = 0;
+    // RWX：直线捷径观测计数（实验台用）
+    private static int RWX_STRAIGHT_TAKE_N = 0;
+    private static int RWX_STRAIGHT_REJECT_N = 0;
+    private static int RWX_STRAIGHT_ILLEGAL_N = 0;
     private float rwxMoveCheckGoalX = -1.0f;
     private float rwxMoveCheckGoalY = -1.0f;
     // RWX：路径全量跟踪（-Drwx.pathTrace=1），每条路径打一行航点清单。
@@ -4451,8 +4455,20 @@ public abstract class OrderableUnit extends UnitBase {
         // RWX：这条是引擎的「直线捷径」——判定能直着走就绕开求解器，直接用每 20px 一个点拼路径。
         // 老师实测单位会走到边界/拐角才发现不对，根源就在这里：它只做一次粗略可达判定，
         // 不逐格确认。现在加一道逐格校验，任何一个格子不可走就放弃捷径，交给真求解器。
-        if (PathfindingUtils.a(getMovementType(), this.posX, this.posY, f, f2, 80, i4, 1)
-            && this.rwxStraightLineClear(this.posX, this.posY, f, f2)) {
+        // RWX：给实验台用的观测点——记录直线捷径被采用/被逐格校验否掉的比例。
+        boolean rwxStraightOk = PathfindingUtils.a(getMovementType(), this.posX, this.posY, f, f2, 80, i4, 1);
+        boolean rwxStraightLegal = rwxStraightOk && this.rwxStraightLineClear(this.posX, this.posY, f, f2);
+        if (rwxStraightOk && !rwxStraightLegal && RWX_STRAIGHT_REJECT_N < 20) {
+            RWX_STRAIGHT_REJECT_N++;
+            io.github.rwx.probe.RwxPerf.out("RWX_STRAIGHT rejected from=" + (int) this.posX + "," + (int) this.posY
+                + " to=" + (int) f + "," + (int) f2 + " mtype=" + getMovementType());
+        }
+        if (rwxStraightLegal && RWX_STRAIGHT_TAKE_N < 20) {
+            RWX_STRAIGHT_TAKE_N++;
+            io.github.rwx.probe.RwxPerf.out("RWX_STRAIGHT taken from=" + (int) this.posX + "," + (int) this.posY
+                + " to=" + (int) f + "," + (int) f2 + " mtype=" + getMovementType());
+        }
+        if (rwxStraightLegal) {
             this.isPathIncomplete = false;
             this.activePathCount = 0;
             this.pathPositionProvider = null;
@@ -4495,6 +4511,27 @@ public abstract class OrderableUnit extends UnitBase {
                 } else {
                     this.isPathIncomplete = true;
                 }
+            }
+            // RWX：捷径产出的航点逐点核对，落点若在不可走格上就记一行（上限 20）
+            int rwxIllegal = 0;
+            int rwxFirstBadTx = -1, rwxFirstBadTy = -1;
+            if (pathEngine != null) {
+                for (int rwxI2 = 0; rwxI2 < this.activePathCount; rwxI2++) {
+                    PositionData rwxPd3 = this.pathPositions[rwxI2];
+                    if (rwxPd3 == null) { continue; }
+                    int rwxTx3 = (int) (rwxPd3.posX * tileMap.tileScaleX);
+                    int rwxTy3 = (int) (rwxPd3.posY * tileMap.tileScaleY);
+                    if (rwxTx3 < 0 || rwxTy3 < 0 || rwxTx3 >= tileMap.tileCountX || rwxTy3 >= tileMap.tileCountY
+                        || pathEngine.isTileBlockedForMovement(getMovementType(), rwxTx3, rwxTy3)) {
+                        rwxIllegal++;
+                        if (rwxFirstBadTx < 0) { rwxFirstBadTx = rwxTx3; rwxFirstBadTy = rwxTy3; }
+                    }
+                }
+            }
+            if (rwxIllegal > 0 && RWX_STRAIGHT_ILLEGAL_N < 20) {
+                RWX_STRAIGHT_ILLEGAL_N++;
+                io.github.rwx.probe.RwxPerf.out("RWX_STRAIGHT illegal points=" + rwxIllegal + " first=" + rwxFirstBadTx + "," + rwxFirstBadTy
+                    + " nodes=" + this.activePathCount + " to=" + (int) f + "," + (int) f2);
             }
             this.totalPathPositions = this.activePathCount;
             return;
