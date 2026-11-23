@@ -1390,6 +1390,23 @@ public abstract class GameEngine {
     }
 
     /* JADX INFO: renamed from: af */
+    /** RWX：模拟点击（JVM 内注入，不经过操作系统，不受窗口焦点影响）。测试用。 */
+    public boolean rwxInjectPointerPress(float screenX, float screenY) {
+        if (this.activeGameView == null || this.activeGameView.getSettings() == null) { return false; }
+        io.github.rwx.input.MultiTouchPointerState.rwxInjectedX = screenX;
+        io.github.rwx.input.MultiTouchPointerState.rwxInjectedY = screenY;
+        io.github.rwx.input.MultiTouchPointerState.rwxInjectedDown = true;
+        this.activeGameView.getSettings().rwxPress(screenX, screenY);
+        return true;
+    }
+
+    public boolean rwxInjectPointerRelease() {
+        if (this.activeGameView == null || this.activeGameView.getSettings() == null) { return false; }
+        io.github.rwx.input.MultiTouchPointerState.rwxInjectedDown = false;
+        this.activeGameView.getSettings().rwxRelease();
+        return true;
+    }
+
     public float getTouchX() {
         return getTouchX(0);
     }

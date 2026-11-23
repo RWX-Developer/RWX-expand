@@ -201,6 +201,14 @@ class SlickGame(
     private val onLoadingStatus: (String) -> Unit = {},
 ) : BasicGame("RWX") {
     private val view = SlickCoreGameView(gameSession.inGameMenuController)
+
+    init {
+        // RWX：把「截图」暴露给测试桥，等价于按 F12（走同一条 saveScreenshot 路径）。
+        RwxInputBridge.screenshotAction = { screenshotRequested = true }
+        RwxInputBridge.screenshotDirProvider = {
+            runCatching { screenshotDirectory.absolutePath }.getOrDefault("")
+        }
+    }
     private val debugSlickMenuInput = System.getenv("RWX_DEBUG_SLICK_MENU") == "1"
     private val keyStates = BooleanArray(SLICK_KEY_COUNT)
     private var engine: GameEngine? = null
@@ -1358,6 +1366,12 @@ class SlickGame(
 
         override fun getSettings(): MultiTouchPointerState = pointerState
 
+        init {
+            // RWX：把平台层真实的指针入口暴露给测试注入，走的是和 AWT 事件同一条路。
+            RwxInputBridge.injector = { x, y, down -> pointerState.processEvent(x, y, down, 0) }
+            RwxInputBridge.stateProbe = { "isDown=" + pointerState.rwxIsDown() + " numPointers=" + pointerState.rwxNumPointers() + " wasDown=" + pointerState.wasDown() + " lastNum=" + pointerState.getLastNumPointers() }
+        }
+
         override fun onSizeChanged() = Unit
 
         override fun stopRender() {
@@ -1438,3 +1452,46 @@ data class SlickFrameSnapshot(
     val pixels: IntArray,
     val sequence: Long,
 )
+
+/**
+ * RWX：平台层输入注入桥（测试用）。
+ * 走的是 SlickInputEvent.PointerButton 同一条链路（pointerState.processEvent），
+ * 不经过操作系统，所以窗口在后台也能生效。
+ */
+object RwxInputBridge {
+    @Volatile
+    var injector: ((Float, Float, Boolean) -> Unit)? = null
+
+    @Volatile
+    var stateProbe: (() -> String)? = null
+
+    @Volatile
+    var screenshotAction: (() -> Unit)? = null
+
+    @Volatile
+    var screenshotDirProvider: (() -> String)? = null
+
+    fun screenshot(): Boolean {
+        val a = screenshotAction ?: return false
+        a()
+        return true
+    }
+
+    fun screenshotDir(): String = screenshotDirProvider?.invoke() ?: ""
+
+    fun probe(): String = stateProbe?.invoke() ?: "no-probe"
+
+    fun isReady(): Boolean = injector != null
+
+    fun press(x: Float, y: Float): Boolean {
+        val f = injector ?: return false
+        f(x, y, true)
+        return true
+    }
+
+    fun release(x: Float, y: Float): Boolean {
+        val f = injector ?: return false
+        f(x, y, false)
+        return true
+    }
+}

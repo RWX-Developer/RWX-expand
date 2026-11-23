@@ -53,6 +53,11 @@ public class MultiTouchPointerState {
         }
     }
 
+    /** RWX：测试用只读探针。 */
+    public boolean rwxIsDown() { return this.isDown; }
+
+    public int rwxNumPointers() { return this.numPointers; }
+
     public int getLastNumPointers() {
         return this.lastNumPointers;
     }
@@ -61,7 +66,18 @@ public class MultiTouchPointerState {
         return this.wasDown;
     }
 
+    // RWX：测试注入开关。每次 updateState 时把注入的指针强行写回，否则会被真实输入（0 个指针）覆盖。
+    public static volatile boolean rwxInjectedDown = false;
+    public static volatile float rwxInjectedX = 0.0f;
+    public static volatile float rwxInjectedY = 0.0f;
+
     public void updateState() {
+        if (rwxInjectedDown) {
+            this.x[0] = rwxInjectedX;
+            this.y[0] = rwxInjectedY;
+            this.isDown = true;
+            this.numPointers = 1;
+        }
         boolean previousWasDown = this.wasDown;
         this.wasDown = this.isDown;
         this.lastNumPointers = this.numPointers;
@@ -82,6 +98,26 @@ public class MultiTouchPointerState {
                     + " y0=" + this.y[0]
                     + " pointer0=" + MultiTouchController.pointerIndices[0]);
         }
+    }
+
+    /**
+     * RWX：给测试用的指针注入。按下一帧后由调用方在若干帧后调 rwxRelease()。
+     * 不走操作系统，所以不依赖窗口焦点——窗口在后台也能生效。
+     */
+    public void rwxPress(float px, float py) {
+        this.x[0] = px;
+        this.y[0] = py;
+        this.startX = px;
+        this.startY = py;
+        this.isDown = true;
+        this.numPointers = 1;
+        this.updateState();
+    }
+
+    public void rwxRelease() {
+        this.isDown = false;
+        this.numPointers = 0;
+        this.updateState();
     }
 
     public void setStart(float f, float f2) {
@@ -137,6 +173,14 @@ public class MultiTouchPointerState {
     }
 
     public void processTouchSnapshot(float[] pointerX, float[] pointerY, int count, boolean down, int buttonState) {
+        // RWX：平台每帧推一份真实指针快照（通常是 0 个指针），在这里把测试注入的指针合并进去。
+        if (rwxInjectedDown) {
+            pointerX[0] = rwxInjectedX;
+            pointerY[0] = rwxInjectedY;
+            count = 1;
+            down = true;
+            buttonState = 1;
+        }
         int pointerCount = Math.max(0, Math.min(count, this.x.length));
         this.historyCount = 0;
         this.numPointers = pointerCount;

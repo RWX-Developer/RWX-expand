@@ -160,6 +160,8 @@ public class Command {
     private static int RWX_UNREACHABLE_N = 0;
     // RWX：落点被钳回地图内的次数（日志只打前 8 条）
     private static int RWX_CLAMP_N = 0;
+    // RWX：命令观测——每一次移动指令记一行（上限 40），用来验证「模拟点击真的下到了命令」
+    private static int RWX_ORDER_N = 0;
     // RWX：三类拒令总开关；RWX_AI_GUARD=0 时全部退回原版行为
     private static final boolean RWX_ORDER_GUARD = !("0".equals((System.getenv("RWX_AI_GUARD") == null ? "" : System.getenv("RWX_AI_GUARD").trim())));
     private static int RWX_REFUSE_TOTAL = 0;
@@ -635,6 +637,10 @@ public class Command {
 
     /* JADX INFO: renamed from: a */
     public void setMoveTarget(float f, float f2) {
+        if (RWX_ORDER_N < 40) {
+            RWX_ORDER_N++;
+            io.github.rwx.probe.RwxPerf.out("RWX_ORDER move x=" + (int) f + " y=" + (int) f2);
+        }
         // RWX：-Drwx.clampReject=1 时，图外落点不再被钳到边界（那是「开到地图边缘」的直接来源），改为拒令。
         if (!"0".equals(System.getProperty("rwx.clampReject", "1").trim()) && rwxOutOfMap(f, f2)) {
             if (RWX_CLAMP_N++ < 12) {
