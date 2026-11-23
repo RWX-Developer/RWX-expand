@@ -645,68 +645,58 @@ public final class PathSolver implements Runnable {
     // RWX：路径一生成就剪掉「离目的地过远」的航点（老师要求：取消要快，别等走到边界）。
     // 判定：航点贴地图边界 1 格内，或到目的地的距离比「本路径里离目的地最近的航点」还远 40 像素以上。
     // 命中则丢掉最近点之前那一段，只保留尾巴。这样单位拿到的路径从一开始就不含绕远的点。
+    // RWX：两点之间是否「逐格都能走」。用 Bresenham 走一遍格子，任何一格不可走就判 false。
+    // 这是「删航点」的唯一安全前提：删掉 B 之后必然要沿 A->C 直线走，直线穿不过去就不能删。
+    boolean rwxLineWalkable(int x0, int y0, int x1, int y1) {
+        int dx = Math.abs(x1 - x0), dy = Math.abs(y1 - y0);
+        int sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+        int err = dx - dy, x = x0, y = y0, guard = 0;
+        while (guard++ < 8192) {
+            if (x < 0 || y < 0 || x >= this.g || y >= this.h) { return false; }
+            if (this.a(x, y) == -1) { return false; }
+            if (x == x1 && y == y1) { return true; }
+            int e2 = err * 2;
+            if (e2 > -dy) { err -= dy; x += sx; }
+            if (e2 < dx) { err += dx; y += sy; }
+        }
+        return false;
+    }
+
+    // RWX：路径后处理（老师规则）：
+    // 1) 目的地不在边界附近时，边界航点应当删除；
+    // 2) 离目的地明显更远的绕远航点也应当删除；
+    // 但只有「删掉它之后，前后航点之间逐格都能走」时才删，否则保留——这就是地形所限唯有此路。
     LinkedList rwxPruneFar(LinkedList linkedList, int endX, int endY) {
-        if (linkedList == null || linkedList.size() < 2) { return linkedList; }
-        // RWX：航点（PathPoint.x/y）是格子坐标，就在这里按格子比较，不需要换算世界坐标。
-        // 过远判定：贴边界 1 格内，或到目的地的距离比「本路径里离目的地最近的航点」远出 2 格以上。
-        float rwxMinD = Float.MAX_VALUE;
-        int rwxMinIdx = 0, rwxIdx = 0;
-        for (Object o : linkedList) {
-            PathPoint pp = (PathPoint) o;
-            float dx = pp.tileX - endX, dy = pp.tileY - endY;
-            float d = dx * dx + dy * dy;
-            if (d < rwxMinD) { rwxMinD = d; rwxMinIdx = rwxIdx; }
-            rwxIdx++;
-        }
-        boolean rwxBad = false;
-        rwxIdx = 0;
-        for (Object o : linkedList) {
-            PathPoint pp = (PathPoint) o;
-            int tx = pp.tileX, ty = pp.tileY;
-            boolean edge = tx <= 1 || ty <= 1 || tx >= this.g - 2 || ty >= this.h - 2;
-            float dx = pp.tileX - endX, dy = pp.tileY - endY;
-            float d = dx * dx + dy * dy;
-            if (edge || d > rwxMinD + 4.0f) { rwxBad = true; break; }
-            rwxIdx++;
-        }
-        // RWX：老师规则——目的地不在边界附近时，边界上的航点无条件删除；
-        // 只有删掉之后前后航点不再相邻（地形所限，唯有此路）才保留。
+        if (linkedList == null || linkedList.size() < 3) { return linkedList; }
         boolean rwxEndNearEdge = endX <= 2 || endY <= 2 || endX >= this.g - 3 || endY >= this.h - 3;
-        if (!rwxEndNearEdge) {
-            LinkedList rwxKeepList = new LinkedList();
-            Object[] rwxArr = linkedList.toArray();
-            int rwxRemoved = 0;
-            for (int rwxI = 0; rwxI < rwxArr.length; rwxI++) {
-                PathPoint rwxPp = (PathPoint) rwxArr[rwxI];
-                int rwxTx = rwxPp.tileX, rwxTy = rwxPp.tileY;
-                boolean rwxEdgePt = rwxTx <= 1 || rwxTy <= 1 || rwxTx >= this.g - 2 || rwxTy >= this.h - 2;
-                if (!rwxEdgePt) { rwxKeepList.add(rwxPp); continue; }
-                PathPoint rwxPrev = rwxKeepList.isEmpty() ? null : (PathPoint) rwxKeepList.getLast();
-                PathPoint rwxNext = rwxI + 1 < rwxArr.length ? (PathPoint) rwxArr[rwxI + 1] : null;
-                boolean rwxForced = false;
-                if (rwxPrev != null && rwxNext != null) {
-                    int rwxDx = Math.abs(rwxPrev.tileX - rwxNext.tileX);
-                    int rwxDy = Math.abs(rwxPrev.tileY - rwxNext.tileY);
-                    rwxForced = rwxDx > 2 || rwxDy > 2;
-                } else if (rwxPrev != null) {
-                    rwxForced = Math.abs(rwxPrev.tileX - rwxTx) > 2 || Math.abs(rwxPrev.tileY - rwxTy) > 2;
-                }
-                if (rwxForced) { rwxKeepList.add(rwxPp); } else { rwxRemoved++; }
-            }
-            if (rwxRemoved > 0 && rwxKeepList.size() >= 2) {
-                io.github.rwx.probe.RwxPerf.out("RWX_PRUNE_EDGE removed=" + rwxRemoved + " kept=" + rwxKeepList.size() + " end=" + endX + "," + endY);
-                linkedList = rwxKeepList;
-                rwxBad = false;
-            }
-        }
-        if (!rwxBad || rwxMinIdx == 0) { return linkedList; }
         LinkedList out = new LinkedList();
-        rwxIdx = 0;
-        for (Object o : linkedList) {
-            if (rwxIdx++ >= rwxMinIdx) { out.add(o); }
+        int removedEdge = 0, removedFar = 0;
+        for (int i = 0; i < linkedList.size(); i++) {
+            PathPoint cur = (PathPoint) linkedList.get(i);
+            boolean isLast = i == linkedList.size() - 1;
+            if (isLast) { out.add(cur); continue; }
+            boolean edgePt = !rwxEndNearEdge && (cur.tileX <= 1 || cur.tileY <= 1 || cur.tileX >= this.g - 2 || cur.tileY >= this.h - 2);
+            boolean farPt = false;
+            if (!edgePt) {
+                PathPoint lastP = (PathPoint) linkedList.get(linkedList.size() - 1);
+                float dxc = cur.tileX - lastP.tileX, dyc = cur.tileY - lastP.tileY;
+                float dxe = lastP.tileX - endX, dye = lastP.tileY - endY;
+                farPt = (dxc * dxc + dyc * dyc) > (dxe * dxe + dye * dye) + 64.0f;
+            }
+            if (!edgePt && !farPt) { out.add(cur); continue; }
+            PathPoint prev = out.isEmpty() ? null : (PathPoint) out.getLast();
+            PathPoint next = (PathPoint) linkedList.get(i + 1);
+            if (prev != null && rwxLineWalkable(prev.tileX, prev.tileY, next.tileX, next.tileY)) {
+                if (edgePt) { removedEdge++; } else { removedFar++; }
+            } else {
+                out.add(cur);
+            }
         }
-        io.github.rwx.probe.RwxPerf.out("RWX_PRUNE_SOLVER dropped=" + rwxMinIdx + " kept=" + out.size() + " end=" + endX + "," + endY);
-        return out;
+        if (out.size() >= 2 && (removedEdge + removedFar) > 0) {
+            io.github.rwx.probe.RwxPerf.out("RWX_PRUNE_SAFE removedEdge=" + removedEdge + " removedFar=" + removedFar + " kept=" + out.size() + " end=" + endX + "," + endY);
+            return out;
+        }
+        return linkedList;
     }
 
     public LinkedList a(byte b, short s, short s2) {
