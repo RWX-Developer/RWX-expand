@@ -53,6 +53,10 @@ public abstract class OrderableUnit extends UnitBase {
     private int rwxBorderDropCount = 0;
     private float rwxBorderDropLastX = -1.0f;
     private float rwxBorderDropLastY = -1.0f;
+    // RWX：试算-评估-重算 的计数与目标记忆
+    private int rwxRefineCount = 0;
+    private float rwxRefineGoalX = -1.0f;
+    private float rwxRefineGoalY = -1.0f;
     // RWX：路径全量跟踪（-Drwx.pathTrace=1），每条路径打一行航点清单。
     static final boolean RWX_PATH_TRACE = "1".equals(System.getProperty("rwx.pathTrace", "0").trim());
     private static int RWX_PATH_TRACE_N = 0;
@@ -4564,53 +4568,52 @@ public abstract class OrderableUnit extends UnitBase {
                                 clearPathData();
                             }
                         }
-                            // RWX：老师要求——拿到路径就检查，凡是「离目的地过远」的航点一律取消，
-                            // 不要等单位走到那里再重算。判定：航点贴地图边界（1 格内）、或者到目的地的
-                            // 距离比「整条路径里离目的地最近的那个航点」还远出 40 像素以上（绕远路）。
-                            // 命中就丢掉整条路，下一 tick 立刻从当前位置重新寻路到目的地；同一目标最多 3 次。
-                            {
+                            // RWX：老师要求的「试算 → 评估 → 重算」流程。
+                            // 单位先算出试算路径；若航点之间跨度太大、或航点离目标不是最优（贴边/绕远），
+                            // 立刻丢掉这条试算路径重新试算，最多 3 次；都试完就按当时那条开始行动。
+                            if (this.activePathCount > 1) {
+                                if (this.lastPathTargetX != this.rwxRefineGoalX || this.lastPathTargetY != this.rwxRefineGoalY) {
+                                    this.rwxRefineGoalX = this.lastPathTargetX;
+                                    this.rwxRefineGoalY = this.lastPathTargetY;
+                                    this.rwxRefineCount = 0;
+                                }
                                 float rwxGx = this.lastPathTargetX;
                                 float rwxGy = this.lastPathTargetY;
                                 float rwxMinD = Float.MAX_VALUE;
-                                int rwxMinIdx = 0;
-                                boolean rwxDetour = false;
-                                for (int rwxK = 0; rwxK < this.activePathCount; rwxK++) {
-                                    PositionData rwxP = this.pathPositions[rwxK];
-                                    if (rwxP == null) { continue; }
-                                    float rwxDx = rwxP.posX - rwxGx;
-                                    float rwxDy = rwxP.posY - rwxGy;
-                                    float rwxD = rwxDx * rwxDx + rwxDy * rwxDy;
-                                    if (rwxD < rwxMinD) { rwxMinD = rwxD; rwxMinIdx = rwxK; }
-                                }
+                                float rwxMaxHop = 0.0f;
+                                float rwxLastD = 0.0f;
+                                boolean rwxEdgeWp = false;
+                                float rwxPrevX = this.posX;
+                                float rwxPrevY = this.posY;
                                 for (int rwxK = 0; rwxK < this.activePathCount; rwxK++) {
                                     PositionData rwxP = this.pathPositions[rwxK];
                                     if (rwxP == null) { continue; }
                                     int rwxTx = (int) (rwxP.posX * tileMap.tileScaleX);
                                     int rwxTy = (int) (rwxP.posY * tileMap.tileScaleY);
-                                    boolean rwxEdgeWp = rwxTx <= 1 || rwxTy <= 1 || rwxTx >= tileMap.tileCountX - 2 || rwxTy >= tileMap.tileCountY - 2;
+                                    if (rwxTx <= 1 || rwxTy <= 1 || rwxTx >= tileMap.tileCountX - 2 || rwxTy >= tileMap.tileCountY - 2) { rwxEdgeWp = true; }
                                     float rwxDx = rwxP.posX - rwxGx;
                                     float rwxDy = rwxP.posY - rwxGy;
-                                    float rwxD = rwxDx * rwxDx + rwxDy * rwxDy;
-                                    if (rwxEdgeWp || rwxD > rwxMinD + 40f * 40f) { rwxDetour = true; break; }
+                                    float rwxD = (float) Math.sqrt(rwxDx * rwxDx + rwxDy * rwxDy);
+                                    rwxLastD = rwxD;
+                                    if (rwxD < rwxMinD) { rwxMinD = rwxD; }
+                                    float rwxHx = rwxP.posX - rwxPrevX;
+                                    float rwxHy = rwxP.posY - rwxPrevY;
+                                    float rwxHop = (float) Math.sqrt(rwxHx * rwxHx + rwxHy * rwxHy);
+                                    if (rwxHop > rwxMaxHop) { rwxMaxHop = rwxHop; }
+                                    rwxPrevX = rwxP.posX;
+                                    rwxPrevY = rwxP.posY;
                                 }
-                                if (rwxDetour) {
-                                    if (this.lastPathTargetX != this.rwxBorderDropLastX || this.lastPathTargetY != this.rwxBorderDropLastY) {
-                                        this.rwxBorderDropLastX = this.lastPathTargetX;
-                                        this.rwxBorderDropLastY = this.lastPathTargetY;
-                                        this.rwxBorderDropCount = 0;
-                                    }
-                                    if (this.rwxBorderDropCount < 3) {
-                                        this.rwxBorderDropCount++;
-                                        // 把 rwxMinIdx 之前的「过远航点」整段删掉，只保留从离目的地最近的航点开始的尾巴。
-                                        int rwxKeep = this.activePathCount - rwxMinIdx;
-                                        for (int rwxM = 0; rwxM < rwxKeep; rwxM++) {
-                                            this.pathPositions[rwxM] = this.pathPositions[rwxMinIdx + rwxM];
-                                        }
-                                        this.activePathCount = rwxKeep;
-                                        io.github.rwx.probe.RwxPerf.out("RWX_BORDER_DROP unit=" + (r() == null ? "?" : r().getUnitTypeDescriptionShort())
-                                            + " dropped=" + rwxMinIdx + " kept=" + rwxKeep + " goal=" + this.aU.endTileX + "," + this.aU.endTileY
-                                            + " map=" + tileMap.tileCountX + "x" + tileMap.tileCountY + " drop#" + this.rwxBorderDropCount);
-                                    }
+                                boolean rwxBad = rwxEdgeWp || rwxMaxHop > 120.0f || rwxLastD > 40.0f;
+                                if (rwxBad && this.rwxRefineCount < 3) {
+                                    this.rwxRefineCount++;
+                                    io.github.rwx.probe.RwxPerf.out("RWX_REFINE unit=" + (r() == null ? "?" : r().getUnitTypeDescriptionShort())
+                                        + " try=" + this.rwxRefineCount + " nodes=" + this.activePathCount
+                                        + " edge=" + rwxEdgeWp + " maxHop=" + (int) rwxMaxHop + " minD=" + (int) rwxMinD + " lastD=" + (int) rwxLastD
+                                        + " goal=" + this.aU.endTileX + "," + this.aU.endTileY
+                                        + " map=" + tileMap.tileCountX + "x" + tileMap.tileCountY);
+                                    clearPathData();
+                                    requestPathToTarget(this.lastPathTargetX, this.lastPathTargetY, this.pathTargetRadius,
+                                        this.isTransportAttached && this.formationSlotIndex > 1, this.isLowPriority);
                                 }
                             }
                     }
