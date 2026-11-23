@@ -30,3 +30,24 @@ java -cp . AttachT $PID "C:/.../xxx.jar" 参数
 
 `RwxInputBridge.screenshot()` 等价按 F12，写到 `<游戏目录>/screenshots/`，
 不依赖窗口焦点——游戏在浏览器后面也能拍到真实一帧。
+
+## 2026-11-23 走完整条流程的结论
+
+一次成功的路径（全部走进程内注入，不碰桌面鼠标）：
+
+1. `click 875 491` → 单人游戏（AWT 事件投给 Compose 的 `hierarchyRoot$1`）
+2. `click 256 281` → 选中 Beach landing（同一路径）
+3. 作战房间：游戏循环按设计停摆（`EmbeddedSlickGameContainer.start()` 第 84-87 行，
+   画布不可见就 `skipFrameUntilCanvasReady()` 空转），因此引擎截图与 tick 都停了。
+   用 `dump`（在 AWT 线程上 `printAll` 到 BufferedImage）才看得到房间界面。
+4. `click 1723 1054` → 房间右下角绿色 ▶，对局开始：日志 "Adopting started battle room"，
+   tick 1742 → 2733，截图恢复。
+5. 局内：注入的指针等价触屏。单指拖拽会转成相机平移；在单位上点一下（press 60ms + release）
+   probe 显示 `wasDown=true`，但没有选中框，`RWX_ORDER` 也没增加（172 → 172）。
+
+### 还没打通的一环
+
+局内的点选/下令要走**入队**的输入路径，不是直接写 pointerState：
+`SlickGame.mousePressed` → `enqueueInputEvent` → 循环里 `applyPendingInputEvents` → `pointerState.processEvent`。
+现成的入口是 `SlickGame.submitOverlayPointer(x, y, down, pointerId)`，但没有静态拿 SlickGame 的地方
+（`SlickCanvasHost` 只存 uiFrame/外观分发器）。要么在源码里加一个静态桥，要么继续找持有者。
