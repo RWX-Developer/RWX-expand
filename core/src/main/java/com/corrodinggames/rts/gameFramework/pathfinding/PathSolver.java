@@ -637,7 +637,46 @@ public final class PathSolver implements Runnable {
             Debug.stopMethodTracing();
             PathEngine.l = false;
         }
-        return linkedList;
+        // RWX：返回前就剪掉绕远/贴边的航点。
+        return rwxPruneFar(linkedList, n12, n13);
+    }
+
+
+    // RWX：路径一生成就剪掉「离目的地过远」的航点（老师要求：取消要快，别等走到边界）。
+    // 判定：航点贴地图边界 1 格内，或到目的地的距离比「本路径里离目的地最近的航点」还远 40 像素以上。
+    // 命中则丢掉最近点之前那一段，只保留尾巴。这样单位拿到的路径从一开始就不含绕远的点。
+    LinkedList rwxPruneFar(LinkedList linkedList, int endX, int endY) {
+        if (linkedList == null || linkedList.size() < 2) { return linkedList; }
+        // RWX：航点（PathPoint.x/y）是格子坐标，就在这里按格子比较，不需要换算世界坐标。
+        // 过远判定：贴边界 1 格内，或到目的地的距离比「本路径里离目的地最近的航点」远出 2 格以上。
+        float rwxMinD = Float.MAX_VALUE;
+        int rwxMinIdx = 0, rwxIdx = 0;
+        for (Object o : linkedList) {
+            PathPoint pp = (PathPoint) o;
+            float dx = pp.tileX - endX, dy = pp.tileY - endY;
+            float d = dx * dx + dy * dy;
+            if (d < rwxMinD) { rwxMinD = d; rwxMinIdx = rwxIdx; }
+            rwxIdx++;
+        }
+        boolean rwxBad = false;
+        rwxIdx = 0;
+        for (Object o : linkedList) {
+            PathPoint pp = (PathPoint) o;
+            int tx = pp.tileX, ty = pp.tileY;
+            boolean edge = tx <= 1 || ty <= 1 || tx >= this.g - 2 || ty >= this.h - 2;
+            float dx = pp.tileX - endX, dy = pp.tileY - endY;
+            float d = dx * dx + dy * dy;
+            if (edge || d > rwxMinD + 4.0f) { rwxBad = true; break; }
+            rwxIdx++;
+        }
+        if (!rwxBad || rwxMinIdx == 0) { return linkedList; }
+        LinkedList out = new LinkedList();
+        rwxIdx = 0;
+        for (Object o : linkedList) {
+            if (rwxIdx++ >= rwxMinIdx) { out.add(o); }
+        }
+        io.github.rwx.probe.RwxPerf.out("RWX_PRUNE_SOLVER dropped=" + rwxMinIdx + " kept=" + out.size() + " end=" + endX + "," + endY);
+        return out;
     }
 
     public LinkedList a(byte b, short s, short s2) {
