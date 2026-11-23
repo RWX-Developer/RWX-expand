@@ -200,7 +200,11 @@ class SlickGame(
     },
     private val onLoadingStatus: (String) -> Unit = {},
 ) : BasicGame("RWX") {
-    private val view = SlickCoreGameView(gameSession.inGameMenuController)
+    private val view = SlickCoreGameView(
+        gameSession.inGameMenuController,
+        submitPointerEvent = { x, y, down, id -> submitOverlayPointer(x, y, down, id) },
+        sendPointerMotion = { x, y -> moveOverlayPointer(x, y) },
+    )
 
     init {
         // RWX：把「截图」暴露给测试桥，等价于按 F12（走同一条 saveScreenshot 路径）。
@@ -1344,6 +1348,10 @@ class SlickGame(
 
     private class SlickCoreGameView(
         private val menuController: InGameMenuController,
+        // RWX：入队指针入口的转发（等价 AWT 鼠标事件）。视图是嵌套类，拿不到外层 SlickGame，
+        // 所以在构造时把外层的方法传进来。
+        private val submitPointerEvent: (Float, Float, Boolean, Int) -> Unit,
+        private val sendPointerMotion: (Float, Float) -> Unit,
     ) : CoreGameView {
         val pointerState = MultiTouchPointerState()
         private var rendering = true
@@ -1369,6 +1377,9 @@ class SlickGame(
         init {
             // RWX：把平台层真实的指针入口暴露给测试注入，走的是和 AWT 事件同一条路。
             RwxInputBridge.injector = { x, y, down -> pointerState.processEvent(x, y, down, 0) }
+            // 入队路径：和 AWT 鼠标事件一样先排队，再由游戏循环按帧应用（点选/下令要这条）。
+            RwxInputBridge.pointerSubmitter = { x, y, down, id -> submitPointerEvent(x, y, down, id) }
+            RwxInputBridge.pointerMotion = { x, y -> sendPointerMotion(x, y) }
             RwxInputBridge.stateProbe = { "isDown=" + pointerState.rwxIsDown() + " numPointers=" + pointerState.rwxNumPointers() + " wasDown=" + pointerState.wasDown() + " lastNum=" + pointerState.getLastNumPointers() }
         }
 
@@ -1470,6 +1481,30 @@ object RwxInputBridge {
 
     @Volatile
     var screenshotDirProvider: (() -> String)? = null
+
+    /**
+     * RWX：走「入队」的指针入口，等价真实鼠标事件。
+     * injector 是直接写 pointerState，点选这种一次性的判定吃不到；
+     * 这条会进 SlickGame 的 pendingInputEvents，在游戏循环里按同一帧顺序应用。
+     */
+    @Volatile
+    var pointerSubmitter: ((Float, Float, Boolean, Int) -> Unit)? = null
+
+    /** RWX：等价鼠标移动，用来给点选/拖框预设起点。 */
+    @Volatile
+    var pointerMotion: ((Float, Float) -> Unit)? = null
+
+    fun submitPointer(x: Float, y: Float, down: Boolean, pointerId: Int): Boolean {
+        val f = pointerSubmitter ?: return false
+        f(x, y, down, pointerId)
+        return true
+    }
+
+    fun motion(x: Float, y: Float): Boolean {
+        val f = pointerMotion ?: return false
+        f(x, y)
+        return true
+    }
 
     fun screenshot(): Boolean {
         val a = screenshotAction ?: return false
