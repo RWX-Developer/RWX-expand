@@ -4564,6 +4564,55 @@ public abstract class OrderableUnit extends UnitBase {
                                 clearPathData();
                             }
                         }
+                            // RWX：老师要求——拿到路径就检查，凡是「离目的地过远」的航点一律取消，
+                            // 不要等单位走到那里再重算。判定：航点贴地图边界（1 格内）、或者到目的地的
+                            // 距离比「整条路径里离目的地最近的那个航点」还远出 40 像素以上（绕远路）。
+                            // 命中就丢掉整条路，下一 tick 立刻从当前位置重新寻路到目的地；同一目标最多 3 次。
+                            {
+                                float rwxGx = this.lastPathTargetX;
+                                float rwxGy = this.lastPathTargetY;
+                                float rwxMinD = Float.MAX_VALUE;
+                                int rwxMinIdx = 0;
+                                boolean rwxDetour = false;
+                                for (int rwxK = 0; rwxK < this.activePathCount; rwxK++) {
+                                    PositionData rwxP = this.pathPositions[rwxK];
+                                    if (rwxP == null) { continue; }
+                                    float rwxDx = rwxP.posX - rwxGx;
+                                    float rwxDy = rwxP.posY - rwxGy;
+                                    float rwxD = rwxDx * rwxDx + rwxDy * rwxDy;
+                                    if (rwxD < rwxMinD) { rwxMinD = rwxD; rwxMinIdx = rwxK; }
+                                }
+                                for (int rwxK = 0; rwxK < this.activePathCount; rwxK++) {
+                                    PositionData rwxP = this.pathPositions[rwxK];
+                                    if (rwxP == null) { continue; }
+                                    int rwxTx = (int) (rwxP.posX * tileMap.tileScaleX);
+                                    int rwxTy = (int) (rwxP.posY * tileMap.tileScaleY);
+                                    boolean rwxEdgeWp = rwxTx <= 1 || rwxTy <= 1 || rwxTx >= tileMap.tileCountX - 2 || rwxTy >= tileMap.tileCountY - 2;
+                                    float rwxDx = rwxP.posX - rwxGx;
+                                    float rwxDy = rwxP.posY - rwxGy;
+                                    float rwxD = rwxDx * rwxDx + rwxDy * rwxDy;
+                                    if (rwxEdgeWp || rwxD > rwxMinD + 40f * 40f) { rwxDetour = true; break; }
+                                }
+                                if (rwxDetour) {
+                                    if (this.lastPathTargetX != this.rwxBorderDropLastX || this.lastPathTargetY != this.rwxBorderDropLastY) {
+                                        this.rwxBorderDropLastX = this.lastPathTargetX;
+                                        this.rwxBorderDropLastY = this.lastPathTargetY;
+                                        this.rwxBorderDropCount = 0;
+                                    }
+                                    if (this.rwxBorderDropCount < 3) {
+                                        this.rwxBorderDropCount++;
+                                        // 把 rwxMinIdx 之前的「过远航点」整段删掉，只保留从离目的地最近的航点开始的尾巴。
+                                        int rwxKeep = this.activePathCount - rwxMinIdx;
+                                        for (int rwxM = 0; rwxM < rwxKeep; rwxM++) {
+                                            this.pathPositions[rwxM] = this.pathPositions[rwxMinIdx + rwxM];
+                                        }
+                                        this.activePathCount = rwxKeep;
+                                        io.github.rwx.probe.RwxPerf.out("RWX_BORDER_DROP unit=" + (r() == null ? "?" : r().getUnitTypeDescriptionShort())
+                                            + " dropped=" + rwxMinIdx + " kept=" + rwxKeep + " goal=" + this.aU.endTileX + "," + this.aU.endTileY
+                                            + " map=" + tileMap.tileCountX + "x" + tileMap.tileCountY + " drop#" + this.rwxBorderDropCount);
+                                    }
+                                }
+                            }
                     }
                 }
                 // RWX：寻路器确认「没有任何可通行的地形能抵达目标」时不再走向最近可达点空转。
