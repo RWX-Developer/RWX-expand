@@ -59,6 +59,11 @@ public abstract class OrderableUnit extends UnitBase {
     private float rwxRefineGoalY = -1.0f;
     // RWX：移动途中的路径合理性检查（不合格就改路）
     private int rwxMoveRepathCount = 0;
+    // RWX：移动途中路径检查（独立分支）用的状态
+    private boolean rwxPreMoveOn = true;
+    private float rwxPreMoveGoalX = -1.0f;
+    private float rwxPreMoveGoalY = -1.0f;
+    private int rwxPreMoveCount = 0;
     private float rwxMoveCheckGoalX = -1.0f;
     private float rwxMoveCheckGoalY = -1.0f;
     // RWX：路径全量跟踪（-Drwx.pathTrace=1），每条路径打一行航点清单。
@@ -1562,6 +1567,83 @@ public abstract class OrderableUnit extends UnitBase {
                 this.longRangePathing = 0;
             }
             unitStateTracker.isReset = false;
+            // RWX：移动途中的路径合理性检查（独立于下方的攻击分支，普通移动也走这里）。
+            // 每 8 个 tick 查一次（按 objectId 错开）；三条判定：
+            //   (1) 目标不在边界附近却出现贴边航点；(2) 航点比直奔目标还远 3 格以上；
+            //   (3) 航点偏离「当前位置->目标」直线超过 pruneDevTiles 格。
+            // 命中就丢路径立刻重算；同一目标最多 3 次；第 1 次不受 repathCooldown 限制。
+            if (this.rwxPreMoveOn && this.activePathCount > 1 && ((GameEngine.getInstance().currentTick + this.objectId) & 7) == 0) {
+                com.corrodinggames.rts.game.map.TileMap rwxTm2 = GameEngine.getInstance().tileMap;
+                if (rwxTm2 != null) {
+                    if (this.lastPathTargetX != this.rwxPreMoveGoalX || this.lastPathTargetY != this.rwxPreMoveGoalY) {
+                        this.rwxPreMoveGoalX = this.lastPathTargetX;
+                        this.rwxPreMoveGoalY = this.lastPathTargetY;
+                        this.rwxPreMoveCount = 0;
+                    }
+                    if (this.rwxPreMoveCount < 3) {
+                        int rwxGtx2 = (int) (this.lastPathTargetX * rwxTm2.tileScaleX);
+                        int rwxGty2 = (int) (this.lastPathTargetY * rwxTm2.tileScaleY);
+                        boolean rwxEndNear2 = rwxGtx2 <= 2 || rwxGty2 <= 2 || rwxGtx2 >= rwxTm2.tileCountX - 3 || rwxGty2 >= rwxTm2.tileCountY - 3;
+                        boolean rwxBad2 = false;
+                        if (!rwxEndNear2) {
+                            for (int rwxK2 = 0; rwxK2 < this.activePathCount; rwxK2++) {
+                                PositionData rwxPd2 = this.pathPositions[rwxK2];
+                                if (rwxPd2 == null) { continue; }
+                                int rwxTtx2 = (int) (rwxPd2.posX * rwxTm2.tileScaleX);
+                                int rwxTty2 = (int) (rwxPd2.posY * rwxTm2.tileScaleY);
+                                if (rwxTtx2 <= 1 || rwxTty2 <= 1 || rwxTtx2 >= rwxTm2.tileCountX - 2 || rwxTty2 >= rwxTm2.tileCountY - 2) { rwxBad2 = true; break; }
+                            }
+                        }
+                        if (!rwxBad2) {
+                            float rwxGdx2 = this.lastPathTargetX - this.posX;
+                            float rwxGdy2 = this.lastPathTargetY - this.posY;
+                            float rwxDirect2 = (float) Math.sqrt(rwxGdx2 * rwxGdx2 + rwxGdy2 * rwxGdy2);
+                            float rwxTol2 = 3.0f * (float) Math.max(rwxTm2.tileWorldSizeX, rwxTm2.tileWorldSizeY);
+                            for (int rwxK2 = 0; rwxK2 < this.activePathCount; rwxK2++) {
+                                PositionData rwxPd2 = this.pathPositions[rwxK2];
+                                if (rwxPd2 == null) { continue; }
+                                float rwxDdx2 = rwxPd2.posX - this.lastPathTargetX;
+                                float rwxDdy2 = rwxPd2.posY - this.lastPathTargetY;
+                                if ((float) Math.sqrt(rwxDdx2 * rwxDdx2 + rwxDdy2 * rwxDdy2) > rwxDirect2 + rwxTol2) { rwxBad2 = true; break; }
+                            }
+                        }
+                        if (!rwxBad2) {
+                            float rwxDevT2 = 3.0f;
+                            try {
+                                String rwxDevP2 = System.getProperty("rwx.pruneDevTiles", "3").trim();
+                                if (!rwxDevP2.isEmpty()) { rwxDevT2 = Float.parseFloat(rwxDevP2); }
+                            } catch (Throwable rwxDevE2) { rwxDevT2 = 3.0f; }
+                            if (rwxDevT2 < 0.0f) { rwxDevT2 = 0.0f; }
+                            float rwxLdx2 = this.lastPathTargetX - this.posX;
+                            float rwxLdy2 = this.lastPathTargetY - this.posY;
+                            float rwxLLen2 = (float) Math.sqrt(rwxLdx2 * rwxLdx2 + rwxLdy2 * rwxLdy2);
+                            float rwxDevLim2 = rwxDevT2 * (float) Math.max(rwxTm2.tileWorldSizeX, rwxTm2.tileWorldSizeY);
+                            if (rwxLLen2 > 1.0f) {
+                                for (int rwxK2 = 0; rwxK2 < this.activePathCount; rwxK2++) {
+                                    PositionData rwxPd2 = this.pathPositions[rwxK2];
+                                    if (rwxPd2 == null) { continue; }
+                                    float rwxWx2 = rwxPd2.posX - this.posX;
+                                    float rwxWy2 = rwxPd2.posY - this.posY;
+                                    float rwxCross2 = rwxWx2 * rwxLdy2 - rwxWy2 * rwxLdx2;
+                                    if (Math.abs(rwxCross2) / rwxLLen2 > rwxDevLim2) { rwxBad2 = true; break; }
+                                }
+                            }
+                        }
+                        if (rwxBad2) {
+                            this.rwxPreMoveCount++;
+                            int rwxATx2 = this.aU == null ? -1 : this.aU.endTileX;
+                            int rwxATy2 = this.aU == null ? -1 : this.aU.endTileY;
+                            io.github.rwx.probe.RwxPerf.out("RWX_REPATH_MOVE unit=" + (r() == null ? "?" : r().getUnitTypeDescriptionShort())
+                                + " try=" + this.rwxPreMoveCount + " nodes=" + this.activePathCount + " goal=" + rwxATx2 + "," + rwxATy2
+                                + " map=" + rwxTm2.tileCountX + "x" + rwxTm2.tileCountY + " src=premove");
+                            clearPathData();
+                            requestPathToTarget(this.lastPathTargetX, this.lastPathTargetY, this.pathTargetRadius,
+                                this.isTransportAttached && this.formationSlotIndex > 1, this.isLowPriority);
+                            return;
+                        }
+                    }
+                }
+            }
             if (0 == 0 && this.attackTarget != null && !this.attackTarget.isDead) {
                     // RWX：老师要求——移动途中也要检查路径点是否合理，不合理就改路。
                 // 每 8 个 tick 检查一次（按 objectId 错开，避免所有单位同一帧扫描）：
@@ -4660,12 +4742,36 @@ public abstract class OrderableUnit extends UnitBase {
                                     rwxPrevX = rwxP.posX;
                                     rwxPrevY = rwxP.posY;
                                 }
-                                boolean rwxBad = rwxEdgeWp || rwxMaxHop > 120.0f || rwxLastD > 40.0f;
+                                // RWX：偏离主线判定（和求解器里那条同一套规则）。
+                                // 以「单位当前位置 -> 目标」为基准线，算每个航点到这条线的垂直距离，
+                                // 超过 -Drwx.pruneDevTiles（默认 3 格）就算不合理。
+                                boolean rwxDevWp = false;
+                                float rwxDevTiles = 3.0f;
+                                try {
+                                    String rwxDevProp2 = System.getProperty("rwx.pruneDevTiles", "3").trim();
+                                    if (!rwxDevProp2.isEmpty()) { rwxDevTiles = Float.parseFloat(rwxDevProp2); }
+                                } catch (Throwable rwxDevEx2) { rwxDevTiles = 3.0f; }
+                                if (rwxDevTiles < 0.0f) { rwxDevTiles = 0.0f; }
+                                float rwxLDx = rwxGx - this.posX;
+                                float rwxLDy = rwxGy - this.posY;
+                                float rwxLLenSq = rwxLDx * rwxLDx + rwxLDy * rwxLDy;
+                                if (rwxLLenSq > 1.0f) {
+                                    float rwxDevLimitSq = rwxDevTiles * rwxDevTiles * tileMap.tileWorldSizeX * tileMap.tileWorldSizeY;
+                                    for (int rwxK2 = 0; rwxK2 < this.activePathCount; rwxK2++) {
+                                        PositionData rwxPd2 = this.pathPositions[rwxK2];
+                                        if (rwxPd2 == null) { continue; }
+                                        float rwxWx = rwxPd2.posX - this.posX;
+                                        float rwxWy = rwxPd2.posY - this.posY;
+                                        float rwxCross = rwxWx * rwxLDy - rwxWy * rwxLDx;
+                                        if ((rwxCross * rwxCross) / rwxLLenSq > rwxDevLimitSq) { rwxDevWp = true; break; }
+                                    }
+                                }
+                                boolean rwxBad = rwxEdgeWp || rwxMaxHop > 120.0f || rwxLastD > 40.0f || rwxDevWp;
                                 if (rwxBad && this.rwxRefineCount < 3) {
                                     this.rwxRefineCount++;
                                     io.github.rwx.probe.RwxPerf.out("RWX_REFINE unit=" + (r() == null ? "?" : r().getUnitTypeDescriptionShort())
                                         + " try=" + this.rwxRefineCount + " nodes=" + this.activePathCount
-                                        + " edge=" + rwxEdgeWp + " maxHop=" + (int) rwxMaxHop + " minD=" + (int) rwxMinD + " lastD=" + (int) rwxLastD
+                                        + " edge=" + rwxEdgeWp + " dev=" + rwxDevWp + " maxHop=" + (int) rwxMaxHop + " minD=" + (int) rwxMinD + " lastD=" + (int) rwxLastD
                                         + " goal=" + this.aU.endTileX + "," + this.aU.endTileY
                                         + " map=" + tileMap.tileCountX + "x" + tileMap.tileCountY);
                                     clearPathData();
