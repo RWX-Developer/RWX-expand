@@ -677,6 +677,13 @@ public final class PathSolver implements Runnable {
     LinkedList rwxPruneFar(LinkedList linkedList, int endX, int endY) {
         if (linkedList == null || linkedList.size() < 3) { return linkedList; }
         boolean rwxEndNearEdge = endX <= 2 || endY <= 2 || endX >= this.g - 3 || endY >= this.h - 3;
+        float rwxMinDist = Float.MAX_VALUE;
+        for (int i0 = 0; i0 < linkedList.size(); i0++) {
+            PathPoint p0 = (PathPoint) linkedList.get(i0);
+            float dx0 = p0.tileX - endX, dy0 = p0.tileY - endY;
+            float d0 = dx0 * dx0 + dy0 * dy0;
+            if (d0 < rwxMinDist) { rwxMinDist = d0; }
+        }
         LinkedList out = new LinkedList();
         int removedEdge = 0, removedFar = 0;
         for (int i = 0; i < linkedList.size(); i++) {
@@ -686,10 +693,11 @@ public final class PathSolver implements Runnable {
             boolean edgePt = !rwxEndNearEdge && (cur.tileX <= 1 || cur.tileY <= 1 || cur.tileX >= this.g - 2 || cur.tileY >= this.h - 2);
             boolean farPt = false;
             if (!edgePt) {
-                PathPoint lastP = (PathPoint) linkedList.get(linkedList.size() - 1);
-                float dxc = cur.tileX - lastP.tileX, dyc = cur.tileY - lastP.tileY;
-                float dxe = lastP.tileX - endX, dye = lastP.tileY - endY;
-                farPt = (dxc * dxc + dyc * dyc) > (dxe * dxe + dye * dye) + 64.0f;
+                // RWX：基准是「整条路径里离目的地最近的那个航点」，不是最后一个点。
+                // 用最后一个点当基准会把几乎每个点都判成“绕远”（实测 removedFar=23/33）。
+                float dxe = cur.tileX - endX, dye = cur.tileY - endY;
+                float dcur = dxe * dxe + dye * dye;
+                farPt = dcur > rwxMinDist + 9.0f;
             }
             if (!edgePt && !farPt) { out.add(cur); continue; }
             PathPoint prev = out.isEmpty() ? null : (PathPoint) out.getLast();
