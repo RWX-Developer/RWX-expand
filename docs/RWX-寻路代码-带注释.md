@@ -1,34 +1,71 @@
-# RWX 寻路代码（带注释）
+# RWX 寻路代码（带注释，当前版本）
 
-这份文档是**现在实际在跑的代码**，从仓库里直接抽出来的，不是示意伪代码。
-读法建议：先看第一节的流程，再看后面的整段代码对照。
+本文档里的代码是从仓库**直接抽出**的，对应提交 `774fb83` 之后的仓库状态。
+前半部分是“现在实际怎么跑”，后半部分是“原始代码 + 我加的注释”。
 
 ---
 
-## 一、一次移动指令会经过哪些代码
+## 一、一次移动指令的完整路径
 
 ```
 玩家右键 / AI 下令
-  └─ Command.setMoveTarget / setAttackMoveTarget
-       ├─ rwxOutOfMap(...)          图外？直接拒令（不留“去边界”的命令）
-       └─ unitCommand.setMoveTarget 原样记下目标坐标
+  └─ Command.setMoveTarget / setAttackMoveTarget / setBuildTarget
+       ├─ rwxOutOfMap()：目标在图外 → 直接拒令（不留“去边界”的命令）
+       └─ 原样记下坐标（不再钳制、不再搬到“最近可站格”）
             ↓
-单位 requestPathToTarget → 引擎路径队列 → PathSolver.e()（普通路径）或 g()（动态重算）
-  ├─ 目标在图外            → endUnreachable = true，返回空路径
-  ├─ -Drwx.astar 开（默认）→ RwxAStar.find(...) 自研 A*
-  │     └─ 失败（起点不可走 / 展开超 6000）→ 返回 null，回退原求解器
-  └─ 求解结果
-        └─ rwxPruneFar(...)  逐格校验后，删掉贴边/绕远的航点
-             ↓
+单位 requestPathToTarget → 路径队列 → PathSolver.e()
+  ├─ 目标在图外      → endUnreachable = true，返回空路径
+  ├─ -Drwx.astar≠0   → RwxAStar.find()（自研 A*，按地形代价）
+  │     ├─ 成功 → rwxPruneFar() 剪枝后返回
+  │     └─ 失败（起点不可走 / 展开超 6000）→ null，回退原求解器
+  └─ 原求解器 → rwxPruneFar() 剪枝后返回
+            ↓
 单位拿到路径
-  ├─ 试算-评估-重算（最多 3 次，RWX_REFINE）
-  ├─ 移动途中每 8 tick 检查一次（RWX_REPATH_MOVE）
-  └─ 沿航点走
+  ├─ 试算-评估-重算（RWX_REFINE，每目标最多 3 次）
+  ├─ 每 8 tick 检查一次合理性（RWX_REPATH_MOVE）
+  └─ 沿航点移动
 ```
 
 ---
 
-## 二、自研 A*（新文件，整段）
+## 二、地形与移动类型（读源码得到的事实）
+
+### 2.1 地形种类（`MapTile` 字段）
+
+| 字段 | 含义 |
+| --- | --- |
+| 默认（无标记） | 平地 |
+| `isCliff` | 悬崖 / 山地 |
+| `isWater` | 水面 |
+| `isWaterBridge` | 水桥 |
+| `isShallowWater` | 浅水（RWX 新增：视觉是水，陆军可踩） |
+| `isLava` | 熔岩 |
+| `isResourcePool` | 资源池（属性，非地形种类） |
+| `hasLargeObject` | 大物件占位 |
+| `movementBlockLevel` | 额外阻挡等级 |
+
+另外 `getTileAt()` 返回 null 表示“没有地块”（地图空洞）。
+
+### 2.2 代价层（`PathSolver.a(x,y)`）
+
+```java
+public final int a(int i, int i2) {
+    if (this.b[...] == -1 || this.c[...] == -1 || this.d[...] == -1) { return -1; }
+    return this.b[...] + this.c[...] + (this.d[...] * 10);
+}
+```
+
+- `b` 地形代价、`c` 建筑代价、`d` 物件代价（×10）；
+- 任一层 -1 → 这一格不可走；
+- 三张图按**移动类型**分别维护（`PathCostMap` 由 `C.a(UnitMovementType)` 取图）；
+- 移动类型 8 种：`NONE / LAND / BUILDING / AIR / WATER / HOVER / OVER_CLIFF / OVER_CLIFF_WATER`。
+
+**结论**：同一格对 LAND 可能不可走、对 HOVER 可走。A* 不需要自己判断“水/陆/悬崖”，
+只问 `a(x,y)`，拿到的就是该兵种视角下的真实代价。
+
+---
+
+## 三、自研 A*（整段全文）
 
 文件：`core/src/main/java/com/corrodinggames/rts/gameFramework/pathfinding/RwxAStar.java`
 
@@ -46,11 +83,37 @@ import java.util.LinkedList;
  *  - 8 方向移动，禁止贴角斜穿（两边都是墙时不许斜走）；
  *  - 展开节点上限与原求解器一致（6000），超了就当失败，交回原求解器。
  *
- * 只在 -Drwx.astar=1 时启用；失败时返回 null，调用方回退到原求解器。
+ * 地形与移动类型（实测读代码得出）：
+ *  - PathSolver.a(x,y) 返回「地形代价 + 建筑代价 + 物件代价×10」，任一层为 -1 即不可走；
+ *  - 三张代价图是按移动类型分别维护的（PathCostMap 通过 C.a(UnitMovementType) 取图），
+ *    移动类型共 8 种：NONE / LAND / BUILDING / AIR / WATER / HOVER / OVER_CLIFF / OVER_CLIFF_WATER；
+ *  - 所以 A* 不需要自己判断“水/陆/悬崖”，只要问 solver.a(x,y)，就是该兵种视角下的真实代价。
+ * 步进代价 = 1 + 格子代价×COST_SCALE（直走），斜走再乘 1.414；COST_SCALE 默认 0.1，
+ * 即代价 10 相当于多花 1 步。这样单位会绕开高代价地形（沼泽、斜坡），而不是只看“能不能走”。
+ *
+ * 只在 -Drwx.astar=0 时关闭；失败时返回 null，调用方回退到原求解器。
  */
 public final class RwxAStar {
 
     private static final int MAX_EXPAND = 6000;
+    // 地形代价换算系数：代价 10 的格子相当于多花 1 步。可用 -Drwx.astar.costScale 调整。
+    private static final float COST_SCALE = rwxCostScale();
+
+    private static float rwxCostScale() {
+        try {
+            String v = System.getProperty("rwx.astar.costScale", "0.1");
+            float f = Float.parseFloat(v.trim());
+            if (f < 0.0f) { f = 0.0f; }
+            if (f > 10.0f) { f = 10.0f; }
+            return f;
+        } catch (Throwable t) {
+            return 0.1f;
+        }
+    }
+
+    // RWX：首次调用/首次失败各打一行，方便确认 A* 真的在跑（各只打一次，不刷屏）。
+    private static boolean rwxLoggedOk = false;
+    private static boolean rwxLoggedFail = false;
 
     private RwxAStar() {
     }
@@ -98,7 +161,14 @@ public final class RwxAStar {
             heapSize--;
             if (closed[cur]) { continue; }
             closed[cur] = true;
-            if (cur == goal) { return buildPath(cameFrom, cur, w, sx, sy); }
+            if (cur == goal) {
+                LinkedList rwxPath = buildPath(cameFrom, cur, w, sx, sy);
+                if (!rwxLoggedOk) {
+                    rwxLoggedOk = true;
+                    io.github.rwx.probe.RwxPerf.out("RWX_ASTAR ok map=" + w + "x" + h + " nodes=" + rwxPath.size() + " expand=" + expanded + " costScale=" + COST_SCALE);
+                }
+                return rwxPath;
+            }
             if (++expanded > MAX_EXPAND) { return null; }
 
             int cx = cur % w;
@@ -115,7 +185,10 @@ public final class RwxAStar {
                 }
                 int ni = ny * w + nx;
                 if (closed[ni]) { continue; }
-                float step = diagonal ? 1.4142135f : 1.0f;
+                // 进入目标格的代价：1 + 该格代价×COST_SCALE，斜走再乘 1.414
+                int tileCost = solver.a(nx, ny);
+                if (tileCost < 0) { continue; }
+                float step = (1.0f + tileCost * COST_SCALE) * (diagonal ? 1.4142135f : 1.0f);
                 float tentative = gScore[cur] + step;
                 if (tentative >= gScore[ni]) { continue; }
                 gScore[ni] = tentative;
@@ -127,6 +200,10 @@ public final class RwxAStar {
                     heapSize++;
                 }
             }
+        }
+        if (!rwxLoggedFail) {
+            rwxLoggedFail = true;
+            io.github.rwx.probe.RwxPerf.out("RWX_ASTAR fail-to-find map=" + w + "x" + h + " expand=" + expanded + " start=" + sx + "," + sy + " end=" + ex + "," + ey);
         }
         return null;
     }
@@ -177,16 +254,18 @@ public final class RwxAStar {
 
 ```
 
-**读这段要抓住的四个点**
+**读这段要抓住的五点**
 
-1. `gScore`：从起点走到这一格已经花掉多少（斜走算 1.414，直走算 1.0）。
-2. `hScore`：这一格到终点“还差多远”的估计，用的八向距离。
-3. `heapPop` 每次取 `g+h` 最小的格子展开；**f 相同的时候取 h 更小的**——这一句就是“不再顺着边界绕”的关键：同样代价下优先靠近目标的格子。
-4. 斜走之前要检查两侧正交格，任一不可走就不许斜——不然单位会从墙角“切”过去。
+1. `gScore`：从起点走到这一格已经花掉多少；`hScore`：这一格到终点还差多远的估计（八向距离）。
+2. `heapPop` 每次取 `g+h` 最小的格子；**f 相同取 h 更小的**——这是“不再顺着边界绕”的关键。
+3. 斜走前检查两侧正交格，任一不可走就不许斜走——防止从墙角切过去。
+4. **步进代价 = (1 + 格子代价 × COST_SCALE) ×（斜走 1.414）**，默认 `COST_SCALE=0.1`，
+   也就是代价 10 的格子约等于多花 1 步，单位会绕开沼泽/斜坡。
+5. 展开上限 6000，失败返回 null 交回原求解器，不会把单位卡死。
 
 ---
 
-## 三、求解器里的剪枝（贴边 / 绕远的航点）
+## 四、求解器侧剪枝
 
 文件：`core/src/main/java/com/corrodinggames/rts/gameFramework/pathfinding/PathSolver.java`
 
@@ -215,6 +294,13 @@ public final class RwxAStar {
     LinkedList rwxPruneFar(LinkedList linkedList, int endX, int endY) {
         if (linkedList == null || linkedList.size() < 3) { return linkedList; }
         boolean rwxEndNearEdge = endX <= 2 || endY <= 2 || endX >= this.g - 3 || endY >= this.h - 3;
+        float rwxMinDist = Float.MAX_VALUE;
+        for (int i0 = 0; i0 < linkedList.size(); i0++) {
+            PathPoint p0 = (PathPoint) linkedList.get(i0);
+            float dx0 = p0.tileX - endX, dy0 = p0.tileY - endY;
+            float d0 = dx0 * dx0 + dy0 * dy0;
+            if (d0 < rwxMinDist) { rwxMinDist = d0; }
+        }
         LinkedList out = new LinkedList();
         int removedEdge = 0, removedFar = 0;
         for (int i = 0; i < linkedList.size(); i++) {
@@ -224,10 +310,11 @@ public final class RwxAStar {
             boolean edgePt = !rwxEndNearEdge && (cur.tileX <= 1 || cur.tileY <= 1 || cur.tileX >= this.g - 2 || cur.tileY >= this.h - 2);
             boolean farPt = false;
             if (!edgePt) {
-                PathPoint lastP = (PathPoint) linkedList.get(linkedList.size() - 1);
-                float dxc = cur.tileX - lastP.tileX, dyc = cur.tileY - lastP.tileY;
-                float dxe = lastP.tileX - endX, dye = lastP.tileY - endY;
-                farPt = (dxc * dxc + dyc * dyc) > (dxe * dxe + dye * dye) + 64.0f;
+                // RWX：基准是「整条路径里离目的地最近的那个航点」，不是最后一个点。
+                // 用最后一个点当基准会把几乎每个点都判成“绕远”（实测 removedFar=23/33）。
+                float dxe = cur.tileX - endX, dye = cur.tileY - endY;
+                float dcur = dxe * dxe + dye * dye;
+                farPt = dcur > rwxMinDist + 9.0f;
             }
             if (!edgePt && !farPt) { out.add(cur); continue; }
             PathPoint prev = out.isEmpty() ? null : (PathPoint) out.getLast();
@@ -246,9 +333,7 @@ public final class RwxAStar {
     }
 ```
 
-**为什么删点前要逐格走一遍**：删掉中间某个航点，单位就会沿着“前一个点 → 后一个点”的直线走。那条直线如果穿过水、墙，看起来就是“不认地形”。`rwxLineWalkable` 就是拿 Bresenham 把这条直线经过的每一格都查一次，有一格不能走就保留原航点——这就是“地形所限，唯有此路”。
-
-A* 的接入点：
+A* 接入点：
 
 ```java
         // RWX：-Drwx.astar=1 时走自研 A*（默认开启，失败自动回退原求解器）。
@@ -261,48 +346,17 @@ A* 的接入点：
         }
 ```
 
----
-
-## 三点五、地形类型与代价层（更正一处措辞）
-
-之前说「地形属性」时把两件事混在一起了，这里分开：
-
-**地图格子真正携带的属性**（`MapTile` 源码字段）：
-
-| 字段 | 含义 |
-| --- | --- |
-| 默认（无标记） | 平地 |
-| `isCliff` | 悬崖/山地 |
-| `isWater` | 水面 |
-| `isWaterBridge` | 水桥 |
-| `isShallowWater` | 浅水（RWX 新增：视觉是水，陆军能踩） |
-| `isLava` | 熔岩 |
-| `isResourcePool` | 资源池（属性，不是地形种类） |
-| `hasLargeObject` | 大物件占位 |
-| `movementBlockLevel` | 额外阻挡等级 |
-
-也就是说：**地形种类就是平地、山地、水面、水桥、熔岩**（外加 RWX 的浅水、以及“没有地块”的空洞），老师的记忆没错。
-
-**代价层**是另一回事：
-
-| 层 | 作用 |
-| --- | --- |
-| 地形代价 `b` | 这一格对某移动类型的基本代价 |
-| 建筑代价 `c` | 建筑占位 |
-| 物件代价 `d` | 单位/物件占位，×10 |
-
-`PathSolver.a(x,y) = b + c + d×10`，任一层 -1 即不可走。三张图按 8 种移动类型分别维护，
-所以同一格对 LAND 不可走、对 HOVER 可走——这是“代价层”，不是“地形种类”。
-
-运行时统计工具：`logs/rwx-terrain-attr.txt`（逐格铺开，图例：`. 平地 ~ 水 B 水桥 s 浅水 L 熔岩 # 悬崖 R 资源池 O 大物件`）。
+**剪枝的唯一安全前提**：删掉某个航点后，单位会沿“前一点 → 后一点”的直线走，
+所以删除前必须用 `rwxLineWalkable` 把这条直线经过的每一格都查一遍，有一格不可走就保留。
+这就是“地形所限，唯有此路”。
 
 ---
 
-## 四、单位侧的两次检查
+## 五、单位侧的两道检查
 
 文件：`core/src/main/java/com/corrodinggames/rts/game/units/OrderableUnit.java`
 
-### 4.1 拿到路径时：试算-评估-重算
+### 5.1 拿到路径时：试算-评估-重算
 
 ```java
                             // RWX：老师要求的「试算 → 评估 → 重算」流程。
@@ -359,8 +413,6 @@ A* 的接入点：
                 }
 ```
 
-三个判定：
-
 | 判定 | 含义 |
 | --- | --- |
 | `rwxEdgeWp` | 有航点贴在边界 1 格内 |
@@ -369,16 +421,16 @@ A* 的接入点：
 
 任一项命中且本目标试算不足 3 次 → 丢路径、立刻重算。
 
-### 4.2 移动途中：每 8 tick 检查一次
+### 5.2 移动途中（每 8 tick）
 
 ```java
-                // RWX：老师要求——移动途中也要检查路径点是否合理，不合理就改路。
+                    // RWX：老师要求——移动途中也要检查路径点是否合理，不合理就改路。
                 // 每 8 个 tick 检查一次（按 objectId 错开，避免所有单位同一帧扫描）：
                 // 条件是「目的地不在边界附近，却有航点贴在边界」，或「有航点比本路径最近的航点到目的地还远 3 格」。
                 // 命中且同一目标改路不足 3 次，就丢掉当前路径立刻重新寻路。
-                if (this.activePathCount > 1 && ((gameEngine.currentTick + this.objectId) & 7) == 0) {
+                if (this.activePathCount > 1 && ((GameEngine.getInstance().currentTick + this.objectId) & 7) == 0) {
                     com.corrodinggames.rts.game.map.TileMap rwxTm = GameEngine.getInstance().tileMap;
-                    if (rwxTm == null) { rwxTm = gameEngine.tileMap; }
+                    if (rwxTm == null) { return; }
                     if (this.lastPathTargetX != this.rwxMoveCheckGoalX || this.lastPathTargetY != this.rwxMoveCheckGoalY) {
                         this.rwxMoveCheckGoalX = this.lastPathTargetX;
                         this.rwxMoveCheckGoalY = this.lastPathTargetY;
@@ -425,11 +477,11 @@ A* 的接入点：
                 }
 ```
 
-按 `objectId` 错开（`(tick + objectId) & 7 == 0`），避免所有单位同一帧一起扫路径。
+按 `objectId` 错开（`(tick + objectId) & 7 == 0`），避免所有单位同帧一起扫。
 
 ---
 
-## 五、命令入口：图外目标直接拒发
+## 六、命令入口：图外目标直接拒发
 
 文件：`core/src/main/java/com/corrodinggames/rts/gameFramework/Command.java`
 
@@ -451,7 +503,7 @@ A* 的接入点：
     }
 ```
 
-配合三个 setter 里的这段（以 `setAttackMoveTarget` 为例）：
+三个 setter 里的用法（以攻击移动为例）：
 
 ```java
     public void setAttackMoveTarget(float f, float f2) {
@@ -464,14 +516,32 @@ A* 的接入点：
         }
 ```
 
-**这一条是“寻路跑到西北角”的直接来源**：以前 `-99999,-99999` 这种“没有目标”的哨兵值会被 `rwxClampTarget` 钳到内缩角 `(10,10)`，而 `(10,10)` 就是左上角。现在在钳制之前就判图外并拒令。
+**这一条是“寻路跑到西北角”的直接来源**：`-99999,-99999` 这种“没有目标”的哨兵值，
+以前会被 `rwxClampTarget` 钳到内缩角 `(10,10)`，而 (10,10) 正是左上角。
 
 ---
 
-## 六、必须说清楚的边界
+## 七、实测记录（来自 `logs/rwx-prof.log`）
 
-1. `RWX_REPATH_MOVE` / `RWX_REFINE` 每个目标最多改路 3 次，之后就不再改，否则会无限抖动；最坏情况仍会走一段不理想的路。
-2. `rwxLineWalkable` 用的是逐格直线检查，不是真正的连通性搜索；如果“绕一下能走、直线不能走”，它会选择保留原航点（保守，不会穿地形，但可能少剪一点）。
-3. A* 每次求解都会分配几个数组（每格一个 float/int/boolean），大地图上单位密集时可能增加 GC 压力；目前**没有实测数据**。
-4. A* 只接在普通路径（`e()`）上；动态重算走的 `g()` 仍是原算法 + 单位侧检查。
-5. 这些阈值（120px、40px、3 格、3 次）是按经验设的初始值，**不是实测调出来的**。
+| 日志 | 条数 | 状态 |
+| --- | --- | --- |
+| `RWX_PRUNE_SAFE` | 22132 | 在跑 |
+| `RWX_REFINE` | 12917 | 在跑 |
+| `RWX_BORDER_DROP` | 1066 | 旧版遗留 |
+| `RWX_REPATH_MOVE` | 0 | 曾误放在“单位被卡住”分支，已修，待复测 |
+| `RWX_PRUNE_EDGE` | 0 | 一次未触发，待复测 |
+| `RWX_ASTAR ok / fail` | 0 | A\* 需要真实寻路请求才会加载，尚未出现 |
+
+另外用 `GC.class_histogram` 查过运行进程：`PathSolver` 已加载，`RwxAStar` **未加载**——
+说明 A\* 到现在为止一次都没执行过。
+
+---
+
+## 八、必须说清楚的边界
+
+1. 每目标最多改路 3 次，之后不再改（否则无限抖动），最坏情况仍会走一段不理想的路。
+2. `rwxLineWalkable` 是逐格直线检查，不是连通性搜索；“绕一下能走、直线不能走”时它会保守地保留原航点。
+3. A\* 每次求解要分配几个数组（每格 float/int/boolean），大地图单位多时可能增加 GC 压力，**没有实测**。
+4. A\* 只接在普通路径 `e()` 上；动态重算走的 `g()` 仍是原算法 + 单位侧检查。
+5. 阈值（120px、40px、3 格、3 次、costScale=0.1）都是经验值，**不是实测调出来的**。
+6. A\* 的代价只影响“绕不绕路”，不含熔岩伤害这类玩法效果。
