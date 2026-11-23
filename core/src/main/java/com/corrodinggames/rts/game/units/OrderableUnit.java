@@ -4577,6 +4577,37 @@ public abstract class OrderableUnit extends UnitBase {
                                     this.rwxRefineGoalY = this.lastPathTargetY;
                                     this.rwxRefineCount = 0;
                                 }
+                                // RWX：老师规则——目的地不在边界附近时，边界航点无条件删除；
+                                // 删掉会让前后航点断开（地形所限唯有此路）才保留。
+                                int rwxEndTx = this.aU.endTileX, rwxEndTy = this.aU.endTileY;
+                                boolean rwxEndNearEdge = rwxEndTx <= 2 || rwxEndTy <= 2 || rwxEndTx >= tileMap.tileCountX - 3 || rwxEndTy >= tileMap.tileCountY - 3;
+                                if (!rwxEndNearEdge && this.activePathCount > 1) {
+                                    int rwxWr = 0;
+                                    int rwxCut = 0;
+                                    for (int rwxK = 0; rwxK < this.activePathCount; rwxK++) {
+                                        PositionData rwxPd = this.pathPositions[rwxK];
+                                        if (rwxPd == null) { continue; }
+                                        int rwxTtx = (int) (rwxPd.posX * tileMap.tileScaleX);
+                                        int rwxTty = (int) (rwxPd.posY * tileMap.tileScaleY);
+                                        boolean rwxEdgePt = rwxTtx <= 1 || rwxTty <= 1 || rwxTtx >= tileMap.tileCountX - 2 || rwxTty >= tileMap.tileCountY - 2;
+                                        if (rwxEdgePt) {
+                                            PositionData rwxNx = (rwxK + 1 < this.activePathCount) ? this.pathPositions[rwxK + 1] : null;
+                                            boolean rwxForced = false;
+                                            if (rwxWr > 0 && rwxNx != null) {
+                                                PositionData rwxPv = this.pathPositions[rwxWr - 1];
+                                                float rwxDdx = Math.abs(rwxPv.posX - rwxNx.posX);
+                                                float rwxDdy = Math.abs(rwxPv.posY - rwxNx.posY);
+                                                rwxForced = rwxDdx > 2.0f * tileMap.tileWorldSizeX || rwxDdy > 2.0f * tileMap.tileWorldSizeY;
+                                            }
+                                            if (!rwxForced) { rwxCut++; continue; }
+                                        }
+                                        this.pathPositions[rwxWr++] = rwxPd;
+                                    }
+                                    if (rwxCut > 0 && rwxWr >= 2) {
+                                        this.activePathCount = rwxWr;
+                                        io.github.rwx.probe.RwxPerf.out("RWX_CUT_EDGE unit=" + (r() == null ? "?" : r().getUnitTypeDescriptionShort()) + " cut=" + rwxCut + " kept=" + rwxWr + " goal=" + rwxEndTx + "," + rwxEndTy);
+                                    }
+                                }
                                 float rwxGx = this.lastPathTargetX;
                                 float rwxGy = this.lastPathTargetY;
                                 float rwxMinD = Float.MAX_VALUE;

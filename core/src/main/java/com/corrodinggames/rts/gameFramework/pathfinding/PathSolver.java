@@ -669,6 +669,36 @@ public final class PathSolver implements Runnable {
             if (edge || d > rwxMinD + 4.0f) { rwxBad = true; break; }
             rwxIdx++;
         }
+        // RWX：老师规则——目的地不在边界附近时，边界上的航点无条件删除；
+        // 只有删掉之后前后航点不再相邻（地形所限，唯有此路）才保留。
+        boolean rwxEndNearEdge = endX <= 2 || endY <= 2 || endX >= this.g - 3 || endY >= this.h - 3;
+        if (!rwxEndNearEdge) {
+            LinkedList rwxKeepList = new LinkedList();
+            Object[] rwxArr = linkedList.toArray();
+            int rwxRemoved = 0;
+            for (int rwxI = 0; rwxI < rwxArr.length; rwxI++) {
+                PathPoint rwxPp = (PathPoint) rwxArr[rwxI];
+                int rwxTx = rwxPp.tileX, rwxTy = rwxPp.tileY;
+                boolean rwxEdgePt = rwxTx <= 1 || rwxTy <= 1 || rwxTx >= this.g - 2 || rwxTy >= this.h - 2;
+                if (!rwxEdgePt) { rwxKeepList.add(rwxPp); continue; }
+                PathPoint rwxPrev = rwxKeepList.isEmpty() ? null : (PathPoint) rwxKeepList.getLast();
+                PathPoint rwxNext = rwxI + 1 < rwxArr.length ? (PathPoint) rwxArr[rwxI + 1] : null;
+                boolean rwxForced = false;
+                if (rwxPrev != null && rwxNext != null) {
+                    int rwxDx = Math.abs(rwxPrev.tileX - rwxNext.tileX);
+                    int rwxDy = Math.abs(rwxPrev.tileY - rwxNext.tileY);
+                    rwxForced = rwxDx > 2 || rwxDy > 2;
+                } else if (rwxPrev != null) {
+                    rwxForced = Math.abs(rwxPrev.tileX - rwxTx) > 2 || Math.abs(rwxPrev.tileY - rwxTy) > 2;
+                }
+                if (rwxForced) { rwxKeepList.add(rwxPp); } else { rwxRemoved++; }
+            }
+            if (rwxRemoved > 0 && rwxKeepList.size() >= 2) {
+                io.github.rwx.probe.RwxPerf.out("RWX_PRUNE_EDGE removed=" + rwxRemoved + " kept=" + rwxKeepList.size() + " end=" + endX + "," + endY);
+                linkedList = rwxKeepList;
+                rwxBad = false;
+            }
+        }
         if (!rwxBad || rwxMinIdx == 0) { return linkedList; }
         LinkedList out = new LinkedList();
         rwxIdx = 0;
