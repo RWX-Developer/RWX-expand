@@ -183,7 +183,11 @@ class EditorServer(private val workspace: File, private val port: Int) {
             "class" -> sb.append(",\"class\":").append(classJson(p, name))
             "dex" -> sb.append(",\"dex\":").append(dexJson(p, name))
             "binary" -> sb.append(",\"hex\":").append(jstr(hexPreview(runCatching { p.readBytes(name) }.getOrNull(), 1024)))
-            "ini", "toml" -> sb.append(",\"doc\":").append(docJson(text ?: "", if (kind == "toml") "=" else ":"))
+            "ini", "toml" -> {
+                // 原文一起给：文本页要能整篇改，给空值会被回写成一堆 "undefined"
+                sb.append(",\"text\":").append(jstr(text ?: ""))
+                sb.append(",\"doc\":").append(docJson(text ?: "", if (kind == "toml") "=" else ":"))
+            }
             else -> sb.append(",\"text\":").append(jstr(text ?: ""))
         }
         sb.append('}')

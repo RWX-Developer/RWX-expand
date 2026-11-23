@@ -30,14 +30,15 @@ fun entryKindOf(name: String, text: String? = null): String {
     val ext = name.substringAfterLast('.', "").lowercase()
     if (ext == "toml") return "toml"
     if (ext == "kt" || ext == "java") return "kt"
+    if (ext == "ini" || ext == "template") return "ini"
     if (!isEditableSource(name)) return "text"
+    // 少数模组用 .txt 存 ini：只有真带 [节] 才当模块看，光有冒号不算
     val t = text ?: return "text"
     val hasSections = t.split("\n").any { l ->
         val s = l.trim()
         s.length > 2 && s.startsWith("[") && s.endsWith("]")
     }
-    val hasColon = t.split("\n").any { it.contains(':') && !it.trim().startsWith("#") }
-    return if (hasSections || hasColon) "ini" else "text"
+    return if (hasSections) "ini" else "text"
 }
 
 /** 十六进制预览：偏移 + 16 字节 + ASCII 栏。 */

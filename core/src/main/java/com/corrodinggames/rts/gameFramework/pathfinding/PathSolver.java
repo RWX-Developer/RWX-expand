@@ -726,55 +726,13 @@ public final class PathSolver implements Runnable {
                     }
                 }
             }
-            if (b3) {
-                if (PathEngine.a) {
-                    Log.d("RustedWarfare", "end is blocked on isolated groups");
-                }
-                short n6 = n4;
-                short n7 = n5;
-                float n8 = -1.0f;
-                for (short n9 = (short) (l - 25); n9 <= l + 25; ++n9) {
-                    for (short n10 = (short) (m - 25); n10 <= m + 25; ++n10) {
-                        if (n9 >= 0) {
-                            if (n9 < g) {
-                                if (n10 >= 0) {
-                                    if (n10 < h) {
-                                        if (integer1 == e2[n9 * h + n10] || e2[n9 * h + n10] == 0) {
-                                            final float n11 = Utility.distanceSq(n9, n10, l, m);
-                                            if (n8 == -1.0f || n11 < n8) {
-                                                n8 = n11;
-                                                n6 = n9;
-                                                n7 = n10;
-                                                short3 = 0;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                if (n8 == -1.0f) {
-                    for (short n9 = 0; n9 < g; ++n9) {
-                        for (short n10 = 0; n10 < h; ++n10) {
-                            if (integer1 == e2[n9 * h + n10] || e2[n9 * h + n10] == 0) {
-                                final float n11 = Utility.distanceSq(n9, n10, l, m);
-                                if (n8 == -1.0f || n11 < n8) {
-                                    n8 = n11;
-                                    n6 = n9;
-                                    n7 = n10;
-                                    short3 = 0;
-                                }
-                            }
-                        }
-                    }
-                }
-                n4 = n6;
-                n5 = n7;
-                if (PathEngine.a) {
-                    Log.d("RustedWarfare", "fakeNode search was:" + (System.currentTimeMillis() - this.y));
-                }
-            }
+            // RWX：目标落在另一个孤立地形组＝这个兵种到不了。原逻辑 ±25 格找「最近的同组格子」，
+        // 找不到就从 (0,0) 全图扫，同距离先到先得——落点被推到地图边缘（老师实测的边缘航点）。
+        // 现在直接判不可达，不改终点。
+        if (b3) {
+            e.endUnreachable = true;
+            return;
+        }
         }
         int j = 1;
         short integer1;
@@ -795,54 +753,11 @@ public final class PathSolver implements Runnable {
                 }
             }
         }
+        // RWX：目标半径内一格都走不过去＝到不了。原来 ±9 格找最近能走格，兜底再从 (0,0) 全图扫，
+        // 落点同样被推到边缘。现在直接判不可达，不改终点。
         if (j != 0) {
-            integer1 = n4;
-            short integer2 = n5;
-            float n12 = -1.0f;
-            if (PathEngine.a) {
-                Log.d("RustedWarfare", "end is blocked on non isolated groups");
-            }
-            for (short n7 = (short) (n4 - 9); n7 <= n4 + 9; ++n7) {
-                for (short n13 = (short) (n5 - 9); n13 <= n5 + 9; ++n13) {
-                    if (n7 >= 0) {
-                        if (n7 < g) {
-                            if (n13 >= 0) {
-                                if (n13 < h) {
-                                    if (this.a(n7, n13) != -1) {
-                                        final float n14 = Utility.distanceSq(n7, n13, n4, n5);
-                                        if (n12 == -1.0f || n14 < n12) {
-                                            n12 = n14;
-                                            integer1 = n7;
-                                            integer2 = n13;
-                                            short3 = 0;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            if (n12 == -1.0f) {
-                for (short n7 = 0; n7 < g; ++n7) {
-                    for (short n13 = 0; n13 < h; ++n13) {
-                        if (this.a(n7, n13) != -1) {
-                            final float n14 = Utility.distanceSq(n7, n13, n4, n5);
-                            if (n12 == -1.0f || n14 < n12) {
-                                n12 = n14;
-                                integer1 = n7;
-                                integer2 = n13;
-                                short3 = 0;
-                            }
-                        }
-                    }
-                }
-            }
-            n4 = integer1;
-            n5 = integer2;
-            if (PathEngine.a) {
-                Log.d("RustedWarfare", "fakeNode search was:" + (System.currentTimeMillis() - this.y));
-            }
+            e.endUnreachable = true;
+            return;
         }
         if (PathEngine.a && (n4 != l || n5 != m)) {
             Log.d("RustedWarfare", "Moved end to fakeEndX:" + (int) n4 + " fakeEndY:" + (int) n5);
