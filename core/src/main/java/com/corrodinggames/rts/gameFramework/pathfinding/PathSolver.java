@@ -317,6 +317,14 @@ public final class PathSolver implements Runnable {
             linkedList.clear();
             return linkedList;
         }
+        // RWX：-Drwx.astar=1 时走自研 A*（默认开启，失败自动回退原求解器）。
+        // 起点/终点取本次求解用的 s3,s4（起点）与 n9,n10（终点）。
+        if (!"0".equals(System.getProperty("rwx.astar", "1").trim())) {
+            LinkedList rwxA = RwxAStar.find(this, s3, s4, n9, n10);
+            if (rwxA != null && rwxA.size() >= 1) {
+                return rwxPruneFar(rwxA, n9, n10);
+            }
+        }
         if (s3 == n9 && s4 == n10) {
             if (PathEngine.a) {
                 Log.d("RustedWarfare", "no point pathing when start=end");
