@@ -23,7 +23,19 @@ import java.util.LinkedList;
  */
 public final class RwxAStar {
 
-    private static final int MAX_EXPAND = 6000;
+    // RWX：扩展上限改成可调。实验台实测：6000 在合成复杂图上会“明明可达却放弃”。
+    private static final int MAX_EXPAND = rwxMaxExpand();
+
+    private static int rwxMaxExpand() {
+        try {
+            int v = Integer.parseInt(System.getProperty("rwx.astar.maxExpand", "60000").trim());
+            if (v < 1000) { v = 1000; }
+            if (v > 2000000) { v = 2000000; }
+            return v;
+        } catch (Throwable t) {
+            return 60000;
+        }
+    }
     // 地形代价换算系数：代价 10 的格子相当于多花 1 步。可用 -Drwx.astar.costScale 调整。
     private static final float COST_SCALE = rwxCostScale();
 
