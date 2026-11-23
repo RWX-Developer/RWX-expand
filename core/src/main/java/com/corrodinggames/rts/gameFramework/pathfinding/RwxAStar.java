@@ -11,11 +11,37 @@ import java.util.LinkedList;
  *  - 8 方向移动，禁止贴角斜穿（两边都是墙时不许斜走）；
  *  - 展开节点上限与原求解器一致（6000），超了就当失败，交回原求解器。
  *
- * 只在 -Drwx.astar=1 时启用；失败时返回 null，调用方回退到原求解器。
+ * 地形与移动类型（实测读代码得出）：
+ *  - PathSolver.a(x,y) 返回「地形代价 + 建筑代价 + 物件代价×10」，任一层为 -1 即不可走；
+ *  - 三张代价图是按移动类型分别维护的（PathCostMap 通过 C.a(UnitMovementType) 取图），
+ *    移动类型共 8 种：NONE / LAND / BUILDING / AIR / WATER / HOVER / OVER_CLIFF / OVER_CLIFF_WATER；
+ *  - 所以 A* 不需要自己判断“水/陆/悬崖”，只要问 solver.a(x,y)，就是该兵种视角下的真实代价。
+ * 步进代价 = 1 + 格子代价×COST_SCALE（直走），斜走再乘 1.414；COST_SCALE 默认 0.1，
+ * 即代价 10 相当于多花 1 步。这样单位会绕开高代价地形（沼泽、斜坡），而不是只看“能不能走”。
+ *
+ * 只在 -Drwx.astar=0 时关闭；失败时返回 null，调用方回退到原求解器。
  */
 public final class RwxAStar {
 
     private static final int MAX_EXPAND = 6000;
+    // 地形代价换算系数：代价 10 的格子相当于多花 1 步。可用 -Drwx.astar.costScale 调整。
+    private static final float COST_SCALE = rwxCostScale();
+
+    private static float rwxCostScale() {
+        try {
+            String v = System.getProperty("rwx.astar.costScale", "0.1");
+            float f = Float.parseFloat(v.trim());
+            if (f < 0.0f) { f = 0.0f; }
+            if (f > 10.0f) { f = 10.0f; }
+            return f;
+        } catch (Throwable t) {
+            return 0.1f;
+        }
+    }
+
+    // RWX：首次调用/首次失败各打一行，方便确认 A* 真的在跑（各只打一次，不刷屏）。
+    private static boolean rwxLoggedOk = false;
+    private static boolean rwxLoggedFail = false;
 
     private RwxAStar() {
     }
@@ -63,7 +89,14 @@ public final class RwxAStar {
             heapSize--;
             if (closed[cur]) { continue; }
             closed[cur] = true;
-            if (cur == goal) { return buildPath(cameFrom, cur, w, sx, sy); }
+            if (cur == goal) {
+                LinkedList rwxPath = buildPath(cameFrom, cur, w, sx, sy);
+                if (!rwxLoggedOk) {
+                    rwxLoggedOk = true;
+                    io.github.rwx.probe.RwxPerf.out("RWX_ASTAR ok map=" + w + "x" + h + " nodes=" + rwxPath.size() + " expand=" + expanded + " costScale=" + COST_SCALE);
+                }
+                return rwxPath;
+            }
             if (++expanded > MAX_EXPAND) { return null; }
 
             int cx = cur % w;
@@ -80,7 +113,10 @@ public final class RwxAStar {
                 }
                 int ni = ny * w + nx;
                 if (closed[ni]) { continue; }
-                float step = diagonal ? 1.4142135f : 1.0f;
+                // 进入目标格的代价：1 + 该格代价×COST_SCALE，斜走再乘 1.414
+                int tileCost = solver.a(nx, ny);
+                if (tileCost < 0) { continue; }
+                float step = (1.0f + tileCost * COST_SCALE) * (diagonal ? 1.4142135f : 1.0f);
                 float tentative = gScore[cur] + step;
                 if (tentative >= gScore[ni]) { continue; }
                 gScore[ni] = tentative;
@@ -92,6 +128,10 @@ public final class RwxAStar {
                     heapSize++;
                 }
             }
+        }
+        if (!rwxLoggedFail) {
+            rwxLoggedFail = true;
+            io.github.rwx.probe.RwxPerf.out("RWX_ASTAR fail-to-find map=" + w + "x" + h + " expand=" + expanded + " start=" + sx + "," + sy + " end=" + ex + "," + ey);
         }
         return null;
     }
