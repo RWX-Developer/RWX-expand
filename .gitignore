@@ -40,3 +40,4 @@ bin/
 *.jks
 *.keystore
 *.p12
+tools/pathlab/out/
