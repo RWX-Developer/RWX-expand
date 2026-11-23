@@ -677,6 +677,22 @@ public final class PathSolver implements Runnable {
     LinkedList rwxPruneFar(LinkedList linkedList, int endX, int endY) {
         if (linkedList == null || linkedList.size() < 3) { return linkedList; }
         boolean rwxEndNearEdge = endX <= 2 || endY <= 2 || endX >= this.g - 3 || endY >= this.h - 3;
+        // RWX：路径点距离代价（老师要求）。以「起点 -> 终点」这条直线为基准，
+        // 每个航点到这条直线的垂直距离就是它的“偏离代价”：越远代价越大。
+        // 超过阈值（默认 3 格，-Drwx.pruneDevTiles 可调）的航点，允许被删除（仍要过逐格可通行校验）。
+        float rwxDevTiles = 3.0f;
+        try {
+            String rwxDevProp = System.getProperty("rwx.pruneDevTiles", "3").trim();
+            if (!rwxDevProp.isEmpty()) { rwxDevTiles = Float.parseFloat(rwxDevProp); }
+        } catch (Throwable rwxDevEx) {
+            rwxDevTiles = 3.0f;
+        }
+        if (rwxDevTiles < 0.0f) { rwxDevTiles = 0.0f; }
+        float rwxDevLimitSq = rwxDevTiles * rwxDevTiles;
+        PathPoint rwxFirstPt = (PathPoint) linkedList.get(0);
+        float rwxLineDx = endX - rwxFirstPt.tileX;
+        float rwxLineDy = endY - rwxFirstPt.tileY;
+        float rwxLineLenSq = rwxLineDx * rwxLineDx + rwxLineDy * rwxLineDy;
         float rwxMinDist = Float.MAX_VALUE;
         for (int i0 = 0; i0 < linkedList.size(); i0++) {
             PathPoint p0 = (PathPoint) linkedList.get(i0);
@@ -685,31 +701,41 @@ public final class PathSolver implements Runnable {
             if (d0 < rwxMinDist) { rwxMinDist = d0; }
         }
         LinkedList out = new LinkedList();
-        int removedEdge = 0, removedFar = 0;
+        int removedEdge = 0, removedFar = 0, removedDev = 0;
         for (int i = 0; i < linkedList.size(); i++) {
             PathPoint cur = (PathPoint) linkedList.get(i);
             boolean isLast = i == linkedList.size() - 1;
             if (isLast) { out.add(cur); continue; }
             boolean edgePt = !rwxEndNearEdge && (cur.tileX <= 1 || cur.tileY <= 1 || cur.tileX >= this.g - 2 || cur.tileY >= this.h - 2);
+            // RWX：两条判定并列——
+            //   farPt ：到目的地的距离明显比“本路径最近的航点”更远（旧规则）；
+            //   devPt ：到「起点->终点」直线的垂直距离超过阈值（新的距离代价规则）。
             boolean farPt = false;
+            boolean devPt = false;
             if (!edgePt) {
-                // RWX：基准是「整条路径里离目的地最近的那个航点」，不是最后一个点。
-                // 用最后一个点当基准会把几乎每个点都判成“绕远”（实测 removedFar=23/33）。
                 float dxe = cur.tileX - endX, dye = cur.tileY - endY;
                 float dcur = dxe * dxe + dye * dye;
                 farPt = dcur > rwxMinDist + 9.0f;
+                if (rwxLineLenSq > 1.0f) {
+                    // 点到直线距离（用叉积，再除以线长）
+                    float wx = cur.tileX - rwxFirstPt.tileX;
+                    float wy = cur.tileY - rwxFirstPt.tileY;
+                    float cross = wx * rwxLineDy - wy * rwxLineDx;
+                    float devSq = (cross * cross) / rwxLineLenSq;
+                    devPt = devSq > rwxDevLimitSq;
+                }
             }
-            if (!edgePt && !farPt) { out.add(cur); continue; }
+            if (!edgePt && !farPt && !devPt) { out.add(cur); continue; }
             PathPoint prev = out.isEmpty() ? null : (PathPoint) out.getLast();
             PathPoint next = (PathPoint) linkedList.get(i + 1);
             if (prev != null && rwxLineWalkable(prev.tileX, prev.tileY, next.tileX, next.tileY)) {
-                if (edgePt) { removedEdge++; } else { removedFar++; }
+                if (edgePt) { removedEdge++; } else if (devPt) { removedDev++; } else { removedFar++; }
             } else {
                 out.add(cur);
             }
         }
-        if (out.size() >= 2 && (removedEdge + removedFar) > 0) {
-            io.github.rwx.probe.RwxPerf.out("RWX_PRUNE_SAFE removedEdge=" + removedEdge + " removedFar=" + removedFar + " kept=" + out.size() + " end=" + endX + "," + endY);
+        if (out.size() >= 2 && (removedEdge + removedFar + removedDev) > 0) {
+            io.github.rwx.probe.RwxPerf.out("RWX_PRUNE_SAFE removedEdge=" + removedEdge + " removedFar=" + removedFar + " removedDev=" + removedDev + " kept=" + out.size() + " end=" + endX + "," + endY + " devTiles=" + rwxDevTiles);
             return out;
         }
         return linkedList;
