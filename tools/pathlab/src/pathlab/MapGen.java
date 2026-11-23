@@ -3,15 +3,17 @@ package pathlab;
 import java.util.*;
 
 /**
- * 合成代价地图生成器（为将来地图编辑器积累数据格式经验）。
- * 输出：int[h][w]，-2 = 不可走，其余 = 该格代价（0 平地 / 2 林地 / 6 沼泽）。
- * 约定与游戏导出的 cost-LAND.csv 完全一致，实验台可直接读。
+ * 合成地图生成器：先生成「地形码」，再按移动类型换算成代价网格。
+ * 地形码：0 平地 / 1 林地 / 2 沼泽 / 3 水面 / 4 水桥 / 5 岩浆 / 6 悬崖(不可走)
+ * 换算规则（代价 10 = 多走 1 步）：
+ *   LAND   ：平地0 林地2 沼泽6 水桥0 | 水面、岩浆、悬崖 不可走
+ *   WATER  ：水面0 水桥0           | 其余全部不可走
+ *   HOVER  ：平地0 林地1 沼泽3 水面0 水桥0 | 岩浆、悬崖 不可走
+ *   AIR    ：全部 0（不封路）
  */
 public final class MapGen {
+    public static final int GRASS = 0, FOREST = 1, SWAMP = 2, WATER = 3, BRIDGE = 4, LAVA = 5, CLIFF = 6;
     public static final int BLOCK = -2;
-    public static final int GRASS = 0;
-    public static final int FOREST = 2;
-    public static final int SWAMP = 6;
 
     private MapGen() {
     }
@@ -30,7 +32,6 @@ public final class MapGen {
         }
     }
 
-    /** 一条从 (x0,y0) 到 (x1,y1) 的带状区域，宽度 halfW。 */
     static void band(int[][] g, int x0, int y0, int x1, int y1, int halfW, int v, double wobble, Random rnd) {
         int h = g.length, w = g[0].length;
         int steps = Math.max(1, Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0)));
@@ -49,30 +50,27 @@ public final class MapGen {
         }
     }
 
-    /** 随机散步的河，把地图切开，桥上留可走。 */
-    static void river(int[][] g, Random rnd, int v) {
+    /** 横向切一刀：v 是填充物（水面或岩浆），桥上换成 BRIDGE。返回切口的中心行。 */
+    static int cutAcross(int[][] g, int v, int bridges, Random rnd) {
         int h = g.length, w = g[0].length;
-        int y = h / 3 + rnd.nextInt(h / 3);
+        int midY = h / 2 + rnd.nextInt(h / 5) - h / 10;
         for (int x = 0; x < w; x++) {
-            y += rnd.nextInt(3) - 1;
-            y = Math.max(2, Math.min(h - 3, y));
-            int halfW = 2 + rnd.nextInt(2);
-            for (int dy = -halfW; dy <= halfW; dy++) {
-                int yy = y + dy;
-                if (yy < 0 || yy >= h) { continue; }
-                g[yy][x] = v;
+            int thick = 6 + rnd.nextInt(8);
+            for (int dy = -thick; dy <= thick; dy++) {
+                int y = midY + dy;
+                if (y < 0 || y >= h) { continue; }
+                g[y][x] = v;
             }
         }
-        // 三座桥：把河带改成可走
-        for (int b = 0; b < 3; b++) {
-            int bx = (w / 4) * (b + 1) - 10;
-            bx = Math.max(1, Math.min(w - 2, bx + rnd.nextInt(18)));
-            for (int dy = -6; dy <= 6; dy++) {
-                int yy = y + dy;
-                if (yy < 0 || yy >= h) { continue; }
-                g[yy][bx] = GRASS;
+        for (int b = 0; b < bridges; b++) {
+            int bx = (w / (bridges + 1)) * (b + 1);
+            bx = Math.max(1, Math.min(w - 2, bx + rnd.nextInt(12) - 6));
+            for (int y = Math.max(0, midY - 14); y < Math.min(h, midY + 14); y++) {
+                g[y][bx] = BRIDGE;
+                if (bx + 1 < w) { g[y][bx + 1] = BRIDGE; }
             }
         }
+        return midY;
     }
 
     public static int[][] generate(String preset, int w, int h, long seed) {
@@ -81,73 +79,83 @@ public final class MapGen {
         fill(g, GRASS);
 
         if (preset.equals("roads")) {
-            // 大片林地 + 沼泽，中间一张稀疏路网（代价 0）
-            for (int i = 0; i < (w * h) / 220; i++) {
-                blob(g, rnd.nextInt(w), rnd.nextInt(h), 4 + rnd.nextInt(10), FOREST, rnd);
-            }
-            for (int i = 0; i < (w * h) / 900; i++) {
-                blob(g, rnd.nextInt(w), rnd.nextInt(h), 3 + rnd.nextInt(6), SWAMP, rnd);
-            }
+            for (int i = 0; i < (w * h) / 220; i++) { blob(g, rnd.nextInt(w), rnd.nextInt(h), 4 + rnd.nextInt(10), FOREST, rnd); }
+            for (int i = 0; i < (w * h) / 900; i++) { blob(g, rnd.nextInt(w), rnd.nextInt(h), 3 + rnd.nextInt(6), SWAMP, rnd); }
             for (int x = 20; x < w; x += 30) { band(g, x, 0, x, h - 1, 1, GRASS, 0, rnd); }
             for (int y = 20; y < h; y += 30) { band(g, 0, y, w - 1, y, 1, GRASS, 0, rnd); }
-            // 一点点障碍，让路网有意义
-            for (int i = 0; i < 120; i++) {
-                int bx = rnd.nextInt(w), by = rnd.nextInt(h);
-                g[by][bx] = BLOCK;
-            }
+            for (int i = 0; i < 120; i++) { g[rnd.nextInt(h)][rnd.nextInt(w)] = CLIFF; }
         } else if (preset.equals("canyon")) {
-            // 一道横贯地图的山脉，只有 2 个隘口
             fill(g, FOREST);
+            cutAcross(g, CLIFF, 0, rnd);
             int midY = h / 2;
-            for (int x = 0; x < w; x++) {
-                int thick = 8 + rnd.nextInt(6);
-                for (int dy = -thick; dy <= thick; dy++) {
-                    int y = midY + dy;
-                    if (y < 0 || y >= h) { continue; }
-                    g[y][x] = BLOCK;
-                }
-            }
             int pass1 = w / 4, pass2 = (3 * w) / 4;
-            for (int x = pass1 - 3; x <= pass1 + 3; x++) {
-                for (int y = midY - 12; y <= midY + 12; y++) {
-                    if (x >= 0 && x < w && y >= 0 && y < h) { g[y][x] = SWAMP; }
-                }
-            }
-            for (int x = pass2 - 2; x <= pass2 + 2; x++) {
-                for (int y = midY - 12; y <= midY + 12; y++) {
-                    if (x >= 0 && x < w && y >= 0 && y < h) { g[y][x] = GRASS; }
-                }
-            }
+            for (int x = pass1 - 3; x <= pass1 + 3; x++) { for (int y = midY - 12; y <= midY + 12; y++) { if (x >= 0 && x < w && y >= 0 && y < h) { g[y][x] = SWAMP; } } }
+            for (int x = pass2 - 2; x <= pass2 + 2; x++) { for (int y = midY - 12; y <= midY + 12; y++) { if (x >= 0 && x < w && y >= 0 && y < h) { g[y][x] = GRASS; } } }
         } else if (preset.equals("swampfield")) {
-            // 棋盘状沼泽：最优解必须走折线，直连必穿沼泽
-            for (int y = 0; y < h; y++) {
-                for (int x = 0; x < w; x++) {
-                    boolean even = ((x / 12) + (y / 12)) % 2 == 0;
-                    g[y][x] = even ? SWAMP : GRASS;
-                }
-            }
-        } else if (preset.equals("archipelago")) {
-            // 散岛：大片不可走，测「真不可达」和「A* 放弃」的区分
-            fill(g, BLOCK);
-            for (int i = 0; i < 14; i++) {
-                int cx = rnd.nextInt(w), cy = rnd.nextInt(h);
-                int r = 10 + rnd.nextInt(16);
-                blob(g, cx, cy, r, GRASS, rnd);
-            }
+            for (int y = 0; y < h; y++) { for (int x = 0; x < w; x++) { g[y][x] = (((x / 12) + (y / 12)) % 2 == 0) ? SWAMP : GRASS; } }
         } else if (preset.equals("river")) {
-            river(g, rnd, BLOCK);
-            for (int i = 0; i < (w * h) / 300; i++) {
-                blob(g, rnd.nextInt(w), rnd.nextInt(h), 3 + rnd.nextInt(7), FOREST, rnd);
-            }
+            cutAcross(g, WATER, 3, rnd);
+            for (int i = 0; i < (w * h) / 300; i++) { blob(g, rnd.nextInt(w), rnd.nextInt(h), 3 + rnd.nextInt(7), FOREST, rnd); }
+        } else if (preset.equals("lava")) {
+            fill(g, FOREST);
+            cutAcross(g, LAVA, 2, rnd);
+            for (int i = 0; i < 6; i++) { blob(g, rnd.nextInt(w), rnd.nextInt(h), 3 + rnd.nextInt(5), WATER, rnd); }
+            for (int i = 0; i < (w * h) / 400; i++) { blob(g, rnd.nextInt(w), rnd.nextInt(h), 3 + rnd.nextInt(6), SWAMP, rnd); }
+        } else if (preset.equals("archipelago")) {
+            fill(g, WATER);
+            for (int i = 0; i < 14; i++) { blob(g, rnd.nextInt(w), rnd.nextInt(h), 10 + rnd.nextInt(16), GRASS, rnd); }
+            for (int i = 0; i < 3; i++) { band(g, rnd.nextInt(w), 30, rnd.nextInt(w), h - 30, 1, BRIDGE, 0, rnd); }
         } else {
             throw new IllegalArgumentException("unknown preset: " + preset);
         }
         return g;
     }
 
-    /** 确保至少存在一个连通块（起点可用）。返回最大的可走连通块大小。 */
-    public static int largestComponent(int[][] g) {
-        int h = g.length, w = g[0].length;
+    /** 按移动类型把地形码换成代价网格。语义与游戏导出的一致：-2 不可走，其余是代价。 */
+    public static int[][] costGrid(int[][] terrain, String movementType) {
+        int h = terrain.length, w = terrain[0].length;
+        int[][] c = new int[h][w];
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                int t = terrain[y][x];
+                int v;
+                switch (movementType) {
+                    case "LAND":
+                        switch (t) {
+                            case GRASS: v = 0; break;
+                            case FOREST: v = 2; break;
+                            case SWAMP: v = 6; break;
+                            case BRIDGE: v = 0; break;
+                            default: v = BLOCK;
+                        }
+                        break;
+                    case "WATER":
+                        v = (t == WATER || t == BRIDGE) ? 0 : BLOCK;
+                        break;
+                    case "HOVER":
+                        switch (t) {
+                            case GRASS: v = 0; break;
+                            case FOREST: v = 1; break;
+                            case SWAMP: v = 3; break;
+                            case WATER: v = 0; break;
+                            case BRIDGE: v = 0; break;
+                            default: v = BLOCK;
+                        }
+                        break;
+                    case "AIR":
+                        v = 0;
+                        break;
+                    default:
+                        v = BLOCK;
+                }
+                c[y][x] = v;
+            }
+        }
+        return c;
+    }
+
+    public static int largestComponent(int[][] cost) {
+        int h = cost.length, w = cost[0].length;
         boolean[] seen = new boolean[w * h];
         int best = 0;
         int[] stack = new int[w * h];
@@ -155,7 +163,7 @@ public final class MapGen {
         for (int y = 0; y < h; y++) {
             for (int x = 0; x < w; x++) {
                 int i = y * w + x;
-                if (seen[i] || g[y][x] == BLOCK) { continue; }
+                if (seen[i] || cost[y][x] == BLOCK) { continue; }
                 int sp = 0, size = 0;
                 stack[sp++] = i;
                 seen[i] = true;
@@ -167,7 +175,7 @@ public final class MapGen {
                         int nx = cx + dx[d], ny = cy + dy[d];
                         if (nx < 0 || ny < 0 || nx >= w || ny >= h) { continue; }
                         int ni = ny * w + nx;
-                        if (seen[ni] || g[ny][nx] == BLOCK) { continue; }
+                        if (seen[ni] || cost[ny][nx] == BLOCK) { continue; }
                         seen[ni] = true;
                         stack[sp++] = ni;
                     }
@@ -179,15 +187,11 @@ public final class MapGen {
     }
 
     public static void writeCsv(String path, int[][] g) throws java.io.IOException {
-        int h = g.length, w = g[0].length;
         java.io.PrintWriter pw = new java.io.PrintWriter(new java.io.FileWriter(path));
-        pw.println(w + "," + h);
-        for (int y = 0; y < h; y++) {
+        pw.println(g[0].length + "," + g.length);
+        for (int[] row : g) {
             StringBuilder sb = new StringBuilder();
-            for (int x = 0; x < w; x++) {
-                if (x > 0) { sb.append(','); }
-                sb.append(g[y][x]);
-            }
+            for (int i = 0; i < row.length; i++) { if (i > 0) { sb.append(','); } sb.append(row[i]); }
             pw.println(sb);
         }
         pw.close();
