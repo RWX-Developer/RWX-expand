@@ -90,6 +90,26 @@ val results = api.ai.submitActions(units.map { u ->
 
 所以模拟点击和命令 API 最终走的是同一段代码，区别只在“命令有没有真的进来”。
 
+## 命令轮换实测（bench-mod，2026-11-23）
+
+`-Dbench.agentOp=MOVE|ATTACK_MOVE|PATROL|STOP|CYCLE` 加了轮换开关，跑真实的 headless 对局
+（Beach landing，3000 tick，12 台单位/轮，每 70 tick 一轮）：
+
+| 结果 | 数字 |
+| --- | --- |
+| 轮次 | 42 轮（前 17 轮是空轮，单位还没生成完） |
+| MOVE | 10 轮 |
+| ATTACK_MOVE | 11 轮 |
+| PATROL | 11 轮 |
+| STOP | 10 轮 |
+| 命令 accepted | 504 条，全部接受 |
+| 拒绝 | 0 条 |
+| 引擎寻路证据 | `RWX_SOLVER e` 21 次；`RWX_ASTAR ok` 1 次（nodes=50, expand=60） |
+| `RWX_CLAMP_REJECT` | 0（这一轮目标都在图内，符合预期） |
+| `RWX_REPATH_MOVE` | 0（开局重算那条还没触发，仍是待查项） |
+
+桌面看效果用 `bench-agent-cycle.bat`（默认 CYCLE、40 台、每 120 tick 换一种）。
+
 ## 实测记录
 
 | 项 | 数字 |

@@ -412,6 +412,16 @@ private fun armAgentBench() {
         }
         val every = System.getProperty("bench.agentMoveTick", "300").toLong()
         val maxUnits = System.getProperty("bench.agentMax", "20").toInt()
+        // RWX：命令轮换。bench.agentOp=MOVE|ATTACK_MOVE|PATROL|STOP|CYCLE
+        // CYCLE 每轮换一种，用来确认 14 种命令里常用的 4 种在真实对局里都走得通。
+        val opName = System.getProperty("bench.agentOp", "MOVE").trim().uppercase()
+        val opCycle = listOf(
+            UnitCommandType.MOVE,
+            UnitCommandType.ATTACK_MOVE,
+            UnitCommandType.PATROL,
+            UnitCommandType.STOP,
+        )
+        var waveIndex = 0
         val rnd = java.util.Random(20261123L)
         var acceptedAll = 0
         var rejectedAll = 0
@@ -443,12 +453,20 @@ private fun armAgentBench() {
             val outOfMap = "1" == System.getProperty("bench.agentOutOfMap", "0").trim()
             val tx = if (outOfMap) (if (rnd.nextBoolean()) -2500f else 9000f) else 300f + rnd.nextFloat() * 700f
             val ty = if (outOfMap) (if (rnd.nextBoolean()) -2500f else 9000f) else 300f + rnd.nextFloat() * 700f
+            waveIndex++
+            val op: UnitCommandType = if (opName == "CYCLE") {
+                opCycle[waveIndex % opCycle.size]
+            } else {
+                runCatching { UnitCommandType.valueOf(opName) }.getOrDefault(UnitCommandType.MOVE)
+            }
             val cmds = units.take(maxUnits).map { u ->
                 UnitCommandRequest(
                     teamId = teamId,
                     unitIds = listOf(u.ref.instanceId),
-                    type = UnitCommandType.MOVE,
-                    target = UnitCommandTarget.Point(WorldPosition(tx, ty))
+                    type = op,
+                    // STOP 不需要目标，带了反而会被校验挡下来
+                    target = if (op == UnitCommandType.STOP) null else UnitCommandTarget.Point(WorldPosition(tx, ty)),
+                    stopCurrentAction = op == UnitCommandType.STOP,
                 )
             }
             val results = a.ai.submitActions(cmds)
@@ -467,7 +485,7 @@ private fun armAgentBench() {
             }
             a.game.log(
                 LogLevel.INFO,
-                "BENCH_AGENT tick=" + a.game.tick + " units=" + units.size + " issued=" + cmds.size +
+                "BENCH_AGENT tick=" + a.game.tick + " op=" + op + " units=" + units.size + " issued=" + cmds.size +
                     " acc=" + acc + " rej=" + rej + " accAll=" + acceptedAll + " rejAll=" + rejectedAll +
                     " arrived=" + arrived + " avgMovedFromFirstSeen=" + String.format("%.1f", if (cnt > 0) moved / cnt else 0.0) +
                     " target=" + tx.toInt() + "," + ty.toInt()
