@@ -7,3 +7,7 @@ type=AIR len=52900 d:-1=0,0=52900,>0=0
 type=HOVER len=52900 d:-1=620,0=52280,>0=0
 type=OVER_CLIFF len=52900 d:-1=18047,0=34853,>0=0
 type=OVER_CLIFF_WATER len=52900 d:-1=0,0=52900,>0=0
+地图: maps/skirmish/[z;p10]Crossing Large (10p).tmx
+尺寸: 230x230
+导出时间: 2026-11-23 18:0x（实战对局中）
+陆地 32364 / 水域 18047 / 障碍 2489 / 两栖 0
