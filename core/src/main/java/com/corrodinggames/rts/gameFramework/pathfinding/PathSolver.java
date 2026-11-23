@@ -279,6 +279,24 @@ public final class PathSolver implements Runnable {
     // RWX：clearance 惩罚倍数（越大越远离障碍；1=原版）
     private static final int RWX_CLEARANCE_WEIGHT = 6;
     private static int RWX_FAKEEND_LOG_N = 0;
+    // RWX：g()（逐帧动态重算）调用记录仪。g() 返回 void、只写 flowField，没法在游戏外直接跑，
+    // 所以先把真实调用录成 CSV，再用实验台上的 A* 重放同一批起终点做对照。
+    private static int rwxScanN = 0;
+    private static boolean rwxScanHeaderDone = false;
+
+    private static synchronized void rwxScanDump(String tag, int gw, int gh, int sx, int sy, int ex, int ey, String mtype) {
+        try {
+            java.io.File f = new java.io.File("logs/rwx-scan.csv");
+            java.io.FileWriter fw = new java.io.FileWriter(f, true);
+            if (!rwxScanHeaderDone) {
+                rwxScanHeaderDone = true;
+                if (f.length() == 0) { fw.write("tag,w,h,sx,sy,ex,ey,mtype\n"); }
+            }
+            fw.write(tag + "," + gw + "," + gh + "," + sx + "," + sy + "," + ex + "," + ey + "," + mtype + "\n");
+            fw.close();
+        } catch (Throwable t) { }
+    }
+
     private static int rwxSolverLogE = 0;
     private static int rwxSolverLogG = 0;
 
@@ -803,6 +821,7 @@ public final class PathSolver implements Runnable {
             if (PathEngine.a) {
                 Log.d("RustedWarfare", "no point pathing for none");
             }
+        if (rwxScanN < 400) { rwxScanN++; rwxScanDump("early", this.g, this.h, -1, -1, -1, -1, this.n == null ? "?" : String.valueOf(this.n.a)); }
             return;
         }
         int n3 = 0;
@@ -837,6 +856,7 @@ public final class PathSolver implements Runnable {
         // 现在直接判不可达，不改终点。
         if (b3) {
             e.endUnreachable = true;
+        if (rwxScanN < 400) { rwxScanN++; rwxScanDump("early", this.g, this.h, -1, -1, -1, -1, this.n == null ? "?" : String.valueOf(this.n.a)); }
             return;
         }
         }
@@ -863,6 +883,7 @@ public final class PathSolver implements Runnable {
         // 落点同样被推到边缘。现在直接判不可达，不改终点。
         if (j != 0) {
             e.endUnreachable = true;
+        if (rwxScanN < 400) { rwxScanN++; rwxScanDump("early", this.g, this.h, -1, -1, -1, -1, this.n == null ? "?" : String.valueOf(this.n.a)); }
             return;
         }
         if (PathEngine.a && (n4 != l || n5 != m)) {
@@ -882,6 +903,7 @@ public final class PathSolver implements Runnable {
         while (j == 0) {
             ++n9;
             if (e.w) {
+        if (rwxScanN < 400) { rwxScanN++; rwxScanDump("early", this.g, this.h, -1, -1, -1, -1, this.n == null ? "?" : String.valueOf(this.n.a)); }
                 return;
             }
             ++n3;
@@ -1020,5 +1042,6 @@ public final class PathSolver implements Runnable {
             Debug.stopMethodTracing();
             PathEngine.l = false;
         }
+        if (rwxScanN < 400) { rwxScanN++; rwxScanDump("done", this.g, this.h, h2, i, l, m, this.n == null ? "?" : String.valueOf(this.n.a)); }
     }
 }
