@@ -10,11 +10,11 @@ import io.github.rwx.geometry.PointF;
 
 /**
  * 拦截炮塔钩子。
- * RWX 改动只在三点：①开关显式化（缺 key 时按旧规则自动开启）②新增排除标签/瞬间命中过滤
- * ③拦截时复用引擎自己的炮塔状态机开火（冷却 / 预热 / 转向全部沿用引擎语义，不自造充能）。
+ * RWX 改动：①开关显式化（缺 key 时按旧规则自动开启）②排除标签/瞬间命中过滤
+ * ③拦截时复用引擎自己的炮塔状态机开火（冷却 / 预热 / 转向全部沿用引擎语义，不自造充能）
+ * ④锁定同一枚抛射物持续瞄准，并按双方速度求提前量，瞄「拦截点」而不是当前位置。
  *
- * 索敌保持原版：遍历全部炮弹，命中的最后一个当作目标。开火走引擎同款
- * 「rotation 归零就绪 → 扣费 → 发射 → rotation 重置为 b(i)+t(i)」，
+ * 开火走引擎同款「rotation 归零就绪 → 扣费 → 发射 → rotation 重置为 b(i)+t(i)」，
  * rotation 依旧由引擎每帧递减，这里绝不再写正数把它"充回去"。
  */
 public class ProjectileInterceptorHook extends CustomUnitRenderHook {
@@ -28,6 +28,16 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
      */
     private static final java.util.Map<BaseUnit, float[]> RWX_FIREDELAY_WAIT =
             java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
+    /**
+     * 持续锁定标记：每个单位/炮塔记住当前跟踪的抛射物。
+     * 只要它还在全局抛射物表里且通过过滤，就一直瞄它，避免每帧换目标导致炮管来回摆、反应变慢。
+     */
+    private static final java.util.Map<BaseUnit, Projectile[]> RWX_TARGET_LOCK =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
+    /** 求提前量时复用的结果，避免每帧分配小数组。 */
+    private static final float[] RWX_AIM_POINT = new float[2];
 
     @Override
     public void b(CustomUnit customUnit, float f) {
@@ -75,12 +85,13 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
         float f3 = turretConfig.interceptProjectilesAndOverHeight;
         AnimationSet includeTags = turretConfig.interceptProjectilesWithTags;
         AnimationSet excludeTags = turretConfig.interceptProjectilesWithoutTags;
+        Projectile locked = getTargetLock(customUnit, turretIndex);
         Projectile projectile = null;
         Object[] objArrA = Projectile.a.a();
         int i = Projectile.a.size;
         for (int i2 = 0; i2 < i; i2++) {
             Projectile projectile2 = (Projectile) objArrA[i2];
-            if (projectile2.isInstantHit && !turretConfig.interceptProjectilesAllowInstantHit) {
+            if (projectile2.isDestroyed || projectile2.isInstantHit && !turretConfig.interceptProjectilesAllowInstantHit) {
                 continue;
             }
             if (excludeTags != null && projectile2.animationSet != null && AnimationTag.a(projectile2.animationSet, excludeTags)) {
@@ -104,12 +115,19 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
             if (projectile2.lifeTimer <= 0.0f || a(projectile2)) {
                 continue;
             }
+            // 已锁定的目标优先；只有它失效时才退回原版的「最后一个通过过滤的」。
+            if (projectile2 == locked) {
+                projectile = projectile2;
+                break;
+            }
             projectile = projectile2;
         }
         if (projectile == null) {
+            clearTargetLock(customUnit, turretIndex);
             resetFireDelay(customUnit, turretIndex);
             return;
         }
+        setTargetLock(customUnit, turretIndex, projectile);
         // ---- 以下全部沿用引擎炮塔状态机语义，不再自造 rotation 充能 ----
         UnitMovementData movementData = customUnit.movementLevels[turretIndex];
 
@@ -119,9 +137,11 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
         //    而不是从单位中心算，避免偏移炮塔瞄准点不一致。
         PointF turretPos = customUnit.G(turretIndex);
         PointF shadowOffset = customUnit.getShadowOffsetForLevel(turretIndex);
+        // 瞄拦截点而不是抛射物当前位置：按双方速度求最早相遇时刻，炮管一开始就转向未来位置。
+        float[] aimPoint = predictInterceptPoint(customUnit, turretConfig, projectile, turretPos);
         float wantAngle = Utility.getAngleBetweenPoints(
                 turretPos.x, turretPos.y,
-                projectile.posX + shadowOffset.x, projectile.posY + shadowOffset.y);
+                aimPoint[0] + shadowOffset.x, aimPoint[1] + shadowOffset.y);
         float remaining = customUnit.a(frameDelta, wantAngle, turretIndex);
 
         float warmup = Math.max(0.0f, customUnit.e(turretIndex));
@@ -175,12 +195,14 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
         //    这一步不能省：拦截钩子直接调 6 参数生成弹丸，绕过了 CustomUnit.a(baseUnit,i) 里的联炮联动。
         applyLinkedTurretCooldown(customUnit, turretConfig, turretIndex);
         customUnit.b(turretConfig);
-        Projectile projectileA = customUnit.a((BaseUnit) null, projectile.posX, projectile.posY, turretConfig.turretIndex, (CustomProjectileTemplate) null, 0);
+        Projectile projectileA = customUnit.a((BaseUnit) null, aimPoint[0], aimPoint[1], turretConfig.turretIndex, (CustomProjectileTemplate) null, 0);
         if (projectileA == null) {
             return;
         }
         projectileA.fliesToPosition = true;
         projectileA.parentProjectile = projectile;
+        // 目标已经交给拦截弹处理，本炮塔下一帧重新锁定新的抛射物。
+        clearTargetLock(customUnit, turretIndex);
 
         // 6) 重置冷却：引擎同款 rotation = b(i) + t(i)，之后由引擎每帧递减到 0 再次就绪。
         //    非 warmupNoReset 炮塔发射后清空预热（引擎同款 speed=0）。
@@ -188,6 +210,90 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
         if (!warmupNoReset) {
             movementData.speed = 0.0f;
         }
+    }
+
+    private static Projectile getTargetLock(BaseUnit unit, int turretIndex) {
+        Projectile[] locked = RWX_TARGET_LOCK.get(unit);
+        return locked != null && turretIndex < locked.length ? locked[turretIndex] : null;
+    }
+
+    private static void setTargetLock(CustomUnit unit, int turretIndex, Projectile projectile) {
+        Projectile[] locked = RWX_TARGET_LOCK.get(unit);
+        if (locked == null || turretIndex >= locked.length) {
+            locked = new Projectile[Math.max(turretIndex + 1, unit.movementLevels.length)];
+            RWX_TARGET_LOCK.put(unit, locked);
+        }
+        locked[turretIndex] = projectile;
+    }
+
+    private static void clearTargetLock(BaseUnit unit, int turretIndex) {
+        Projectile[] locked = RWX_TARGET_LOCK.get(unit);
+        if (locked != null && turretIndex < locked.length) {
+            locked[turretIndex] = null;
+        }
+    }
+
+    /**
+     * 求最早拦截点：|目标当前位置 + 目标速度 * t - 炮塔位置| = 拦截弹速度 * t。
+     * 解不出来（目标太快/方向背离）时退化为瞄当前位置。
+     */
+    private static float[] predictInterceptPoint(CustomUnit customUnit, TurretConfig turretConfig,
+                                                 Projectile target, PointF origin) {
+        float ownSpeed = 5.0f;
+        int projectileId = turretConfig.a(customUnit);
+        CustomProjectileTemplate[] templates = customUnit.unitConfig.projectileTemplatesById;
+        if (templates != null && projectileId >= 0 && projectileId < templates.length) {
+            CustomProjectileTemplate template = templates[projectileId];
+            if (template != null) {
+                float configured = template.targetSpeed > 0.0f ? template.targetSpeed : template.w;
+                if (configured > 0.0f) {
+                    ownSpeed = configured;
+                }
+            }
+        }
+
+        float rx = target.posX - origin.x;
+        float ry = target.posY - origin.y;
+        float vx = target.velocityX + Utility.fastCos(target.angle) * target.speed;
+        float vy = target.velocityY + Utility.fastSin(target.angle) * target.speed;
+
+        float qa = vx * vx + vy * vy - ownSpeed * ownSpeed;
+        float qb = 2.0f * (rx * vx + ry * vy);
+        float qc = rx * rx + ry * ry;
+        float t = 0.0f;
+        if (qc > 0.0f) {
+            if (Utility.abs(qa) < 1.0E-6f) {
+                if (Utility.abs(qb) > 1.0E-6f) {
+                    t = -qc / qb;
+                }
+            } else {
+                float disc = qb * qb - 4.0f * qa * qc;
+                if (disc >= 0.0f) {
+                    float sq = (float) Math.sqrt(disc);
+                    float t1 = (-qb + sq) / (2.0f * qa);
+                    float t2 = (-qb - sq) / (2.0f * qa);
+                    t = Float.MAX_VALUE;
+                    if (t1 > 0.0f && t1 < t) {
+                        t = t1;
+                    }
+                    if (t2 > 0.0f && t2 < t) {
+                        t = t2;
+                    }
+                    if (t == Float.MAX_VALUE) {
+                        t = 0.0f;
+                    }
+                }
+            }
+        }
+        if (t < 0.0f) {
+            t = 0.0f;
+        }
+        if (t > 600.0f) {
+            t = 600.0f;
+        }
+        RWX_AIM_POINT[0] = target.posX + vx * t;
+        RWX_AIM_POINT[1] = target.posY + vy * t;
+        return RWX_AIM_POINT;
     }
 
     /**
