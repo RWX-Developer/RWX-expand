@@ -130,11 +130,11 @@
 
 - 开火时已补回 `CustomUnit.a(BaseUnit, int)` 里的联炮冷却联动（`linkDelayWithTurret` + `attachedTo` 父炮 recoil），否则拦截弹走 6 参数生成弹丸会绕过这段，附属炮塔与主炮塔冷却失步。
 - 当前游戏内三处拦截炮（`antinuke_launcher`、`experimental_gunship`、`experimental_carrier`、`nautilus` 等）都是独立 `canShoot:false` 炮塔，没有 `attachedTo` / `slave`，所以不受角度继承影响。
-- 若以后把拦截炮挂到主炮上：必须写 `shouldResetTurret: false`，否则主炮转向会把拦截炮的目标角拉回去；`slave` 父炮不要单独开拦截，应由负责索敌的子炮承担。
+- 拦截炮塔在解析层已默认 `shouldResetTurret: false`（显式写 `true` 仍会被尊重，但会导致炮塔被拉回 `idleDir`、表现为不转或只转一点）；若挂到主炮上更不要写 `true`。`slave` 父炮不要单独开拦截，应由负责索敌的子炮承担。
 
 ### 验证到哪一步
 
 - `:core:compileJava`、`:desktop:packageUberJarForCurrentOS` 编译/打包通过（JDK 25 + Gradle 9.8）。
 - 已用最小无头场景验证：`itest:shooter` 发射带 `nuke` 标签的靶弹，`itest:blocker` 开启拦截；日志确认选中目标、炮管到位（`remaining=0.0` / `turretX=180.0`）并连续生成拦截弹（`RWX_INTERCEPT fired=1` ... `fired=30`）。
-- 测试场景踩过的坑：`rawSection` 同名段会整段替换 typed turret，必须把 `projectile` / `turnSpeed` 等原生键写全；拦截炮塔建议 `shouldResetTurret: false`，否则引擎每帧把炮管拉回 `idleDir`，会把拦截钩子的转向抵消掉。
+- 测试场景踩过的坑：`rawSection` 同名段会整段替换 typed turret，必须把 `projectile` / `turnSpeed` 等原生键写全；拦截炮塔已由解析层默认 `shouldResetTurret: false`，不再需要在每个 INI 里单独写。
 - 验证用的临时 mod、探针和配置已在验证后移除，正式仓库只保留引擎同构的开火逻辑。

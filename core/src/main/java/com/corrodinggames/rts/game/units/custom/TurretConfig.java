@@ -568,7 +568,13 @@ public class TurretConfig {
         turretConfig.interceptProjectilesAndTargetingGroundUnderDistance = iniFile.getFloat(str, "interceptProjectiles_andTargetingGroundUnderDistance", Float.valueOf(turretConfig.interceptProjectilesAndTargetingGroundUnderDistance)).floatValue();
         turretConfig.interceptProjectilesAndUnderDistance = iniFile.getFloat(str, "interceptProjectiles_andUnderDistance", Float.valueOf(turretConfig.interceptProjectilesAndUnderDistance)).floatValue();
         turretConfig.interceptProjectilesAndOverHeight = iniFile.getFloat(str, "interceptProjectiles_andOverHeight", Float.valueOf(turretConfig.interceptProjectilesAndOverHeight)).floatValue();
-        turretConfig.shouldResetTurret = iniFile.getBoolean(str, "shouldResetTurret", Boolean.valueOf(turretConfig.shouldResetTurret)).booleanValue();
+        // RWX：拦截炮塔必须保留转向结果，否则引擎每帧把炮管拉回 idleDir，
+        // 拦截钩子的持续瞄准会被抵消，表现为「炮塔不转或只转一点」。
+        // 没显式写 shouldResetTurret 的拦截炮默认 false；模组作者显式写的仍尊重。
+        Boolean explicitShouldReset = iniFile.getBoolean(str, "shouldResetTurret", (Boolean) null);
+        turretConfig.shouldResetTurret = explicitShouldReset != null
+                ? explicitShouldReset.booleanValue()
+                : !turretConfig.interceptProjectiles;
         turretConfig.idleSpin = iniFile.getFloat(str, "idleSpin", Float.valueOf(turretConfig.idleSpin)).floatValue();
         turretConfig.idleSweepAngle = iniFile.getFloat(str, "idleSweepAngle", Float.valueOf(turretConfig.idleSweepAngle)).floatValue();
         turretConfig.idleSweepDelay = iniFile.getFloat(str, "idleSweepDelay", Float.valueOf(turretConfig.idleSweepDelay)).floatValue();
