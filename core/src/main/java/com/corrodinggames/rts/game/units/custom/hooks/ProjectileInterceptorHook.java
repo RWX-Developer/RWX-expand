@@ -66,6 +66,10 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
         if (!customUnit.a(turretConfig)) {
             return;
         }
+        int turretIndex = turretConfig.turretIndex;
+        if (turretIndex < 0 || turretIndex >= customUnit.movementLevels.length) {
+            turretIndex = 0;
+        }
         float f = turretConfig.interceptProjectilesAndTargetingGroundUnderDistance;
         float f2 = turretConfig.interceptProjectilesAndUnderDistance;
         float f3 = turretConfig.interceptProjectilesAndOverHeight;
@@ -103,40 +107,44 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
             projectile = projectile2;
         }
         if (projectile == null) {
+            resetFireDelay(customUnit, turretIndex);
             return;
         }
         // ---- 以下全部沿用引擎炮塔状态机语义，不再自造 rotation 充能 ----
-        int turretIndex = turretConfig.turretIndex;
-        if (turretIndex < 0 || turretIndex >= customUnit.movementLevels.length) {
-            turretIndex = 0;
-        }
         UnitMovementData movementData = customUnit.movementLevels[turretIndex];
 
         // 1) 转向：直接调引擎的转向函数（它改 movementData.targetX，返回剩余角度差）
         float wantAngle = Utility.getAngleBetweenPoints(customUnit.posX, customUnit.posY, projectile.posX, projectile.posY);
         float remaining = customUnit.a(frameDelta, wantAngle, turretIndex);
 
-        // 2) 预热：和引擎 advanceMovementLevelTowardTarget 同款，把 speed 累到 e(i)=warmup。
-        //    s(i)=warmupNoReset 为真时视为常驻就绪（引擎同款）。
         float warmup = Math.max(0.0f, customUnit.e(turretIndex));
         boolean warmupNoReset = customUnit.s(turretIndex);
+        // rotation 由引擎每帧递减，归零才是冷却就绪（OrderableUnit:899 / :3296）。
+        boolean cooldownReady = movementData.rotation == 0.0f;
+        // 拦截炮必须真的把炮管转到目标方向。这里刻意用固定小角度，
+        // 不能被 canAttackMaxAngle=181 那种「免转向发射」配置绕过（那是导弹语义）。
+        boolean turretAligned = Utility.abs(remaining) <= 2.0f;
+
+        // 2) 先转向、再预热：转向中或冷却中不允许攒预热，已攒的按引擎 warmupCallDownRate 回落。
+        //    这样炮管到位后还要走完 warmup 才会开火，不会出现「弹比炮管快」。
+        if (!turretAligned || !cooldownReady) {
+            if (!warmupNoReset && movementData.speed != 0.0f) {
+                movementData.speed = Utility.moveTowardsZero(
+                        movementData.speed, customUnit.f(turretIndex) * frameDelta);
+            }
+            resetFireDelay(customUnit, turretIndex);
+            return;
+        }
+
+        // 3) 预热：和引擎 advanceMovementLevelTowardTarget 同款，把 speed 累到 e(i)=warmup。
+        //    s(i)=warmupNoReset 为真时视为常驻就绪（引擎同款）。
         if (warmupNoReset) {
             movementData.speed = warmup;
         } else if (movementData.speed < warmup) {
             movementData.speed = Math.min(warmup, movementData.speed + frameDelta);
         }
-        boolean warmupReady = movementData.speed >= warmup;
-
-        // 3) 冷却门槛：引擎每帧已把 rotation 递减，归零才就绪（OrderableUnit:3296）。
-        //    绝不能写正数把它"充回去"——那是旧代码的 bug。
-        if (movementData.rotation != 0.0f) {
-            return;
-        }
-        // 炮管没转到位不开火（引擎同款小角度判定）
-        if (Utility.abs(remaining) > 2.0f) {
-            return;
-        }
-        if (!warmupReady) {
+        if (movementData.speed < warmup) {
+            resetFireDelay(customUnit, turretIndex);
             return;
         }
 
@@ -170,6 +178,14 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
         movementData.rotation = customUnit.b(turretIndex) + customUnit.t(turretIndex);
         if (!warmupNoReset) {
             movementData.speed = 0.0f;
+        }
+    }
+
+    /** 炮管未到位、冷却中或无目标时，清掉 fireDelay 的累计，避免跨转向攒出「瞬间开火」。 */
+    private static void resetFireDelay(BaseUnit customUnit, int turretIndex) {
+        float[] waitArr = RWX_FIREDELAY_WAIT.get(customUnit);
+        if (waitArr != null && turretIndex < waitArr.length) {
+            waitArr[turretIndex] = 0.0f;
         }
     }
 
