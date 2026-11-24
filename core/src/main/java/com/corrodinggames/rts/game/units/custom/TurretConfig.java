@@ -142,6 +142,18 @@ public class TurretConfig {
     /* JADX INFO: renamed from: ak */
     public AnimationSet interceptProjectilesWithTags;
 
+    // RWX：拦截炮塔改成显式开关。以前「写了 withTags 才算拦截炮塔」，现在 withTags 只当过滤器用。
+    public boolean interceptProjectiles = false;
+
+    // RWX：排除规则。带这些标签的炮弹一律不拦（优先于 withTags 的包含规则）。
+    public AnimationSet interceptProjectilesWithoutTags = null;
+
+    // RWX：拦截发射间隔（毫秒）。-1 = 沿用该炮塔自己的 delay（再叠加 warmup 影响）。
+    public float interceptProjectilesFireDelay = -1.0f;
+
+    // RWX：是否允许拦截瞬间命中（Projectile.isInstantHit）的炮弹，默认不拦。
+    public boolean interceptProjectilesAllowInstantHit = false;
+
     /* JADX INFO: renamed from: ao */
     public TurretConfig linkedTurret;
 
@@ -526,14 +538,20 @@ public class TurretConfig {
             customUnitConfig.hasLaserDefenceTurret = true;
             customUnitConfig.a(ProjectileInterceptorHook.a);
         }
+        // RWX：拦截炮塔由 interceptProjectiles 显式开启；withTags 退化成「只拦这些标签」的过滤器。
+        turretConfig.interceptProjectiles = iniFile.getBoolean(str, "interceptProjectiles", Boolean.valueOf(turretConfig.interceptProjectiles)).booleanValue();
         turretConfig.interceptProjectilesWithTags = AnimationTag.a(iniFile.getString(str, "interceptProjectiles_withTags", (String) null), turretConfig.interceptProjectilesWithTags);
-        if (turretConfig.interceptProjectilesWithTags != null) {
+        turretConfig.interceptProjectilesWithoutTags = AnimationTag.a(iniFile.getString(str, "interceptProjectiles_withoutTags", (String) null), turretConfig.interceptProjectilesWithoutTags);
+        turretConfig.interceptProjectilesAllowInstantHit = iniFile.getBoolean(str, "interceptProjectiles_allowInstantHit", Boolean.valueOf(turretConfig.interceptProjectilesAllowInstantHit)).booleanValue();
+        turretConfig.interceptProjectilesFireDelay = iniFile.getTime(str, "interceptProjectiles_fireDelay", Float.valueOf(turretConfig.interceptProjectilesFireDelay)).floatValue();
+        if (turretConfig.interceptProjectiles || turretConfig.interceptProjectilesWithTags != null || turretConfig.interceptProjectilesWithoutTags != null) {
             customUnitConfig.hasProjectileInterceptorTurret = true;
             customUnitConfig.a(ProjectileInterceptorHook.a);
-            turretConfig.interceptProjectilesAndTargetingGroundUnderDistance = iniFile.getFloat(str, "interceptProjectiles_andTargetingGroundUnderDistance", Float.valueOf(turretConfig.interceptProjectilesAndTargetingGroundUnderDistance)).floatValue();
-            turretConfig.interceptProjectilesAndUnderDistance = iniFile.getFloat(str, "interceptProjectiles_andUnderDistance", Float.valueOf(turretConfig.interceptProjectilesAndUnderDistance)).floatValue();
-            turretConfig.interceptProjectilesAndOverHeight = iniFile.getFloat(str, "interceptProjectiles_andOverHeight", Float.valueOf(turretConfig.interceptProjectilesAndOverHeight)).floatValue();
         }
+        // 这三个键必须无条件解析：旧模组可能只写了它们，条件解析会让 luke 报「键未使用」直接加载失败。
+        turretConfig.interceptProjectilesAndTargetingGroundUnderDistance = iniFile.getFloat(str, "interceptProjectiles_andTargetingGroundUnderDistance", Float.valueOf(turretConfig.interceptProjectilesAndTargetingGroundUnderDistance)).floatValue();
+        turretConfig.interceptProjectilesAndUnderDistance = iniFile.getFloat(str, "interceptProjectiles_andUnderDistance", Float.valueOf(turretConfig.interceptProjectilesAndUnderDistance)).floatValue();
+        turretConfig.interceptProjectilesAndOverHeight = iniFile.getFloat(str, "interceptProjectiles_andOverHeight", Float.valueOf(turretConfig.interceptProjectilesAndOverHeight)).floatValue();
         turretConfig.shouldResetTurret = iniFile.getBoolean(str, "shouldResetTurret", Boolean.valueOf(turretConfig.shouldResetTurret)).booleanValue();
         turretConfig.idleSpin = iniFile.getFloat(str, "idleSpin", Float.valueOf(turretConfig.idleSpin)).floatValue();
         turretConfig.idleSweepAngle = iniFile.getFloat(str, "idleSweepAngle", Float.valueOf(turretConfig.idleSweepAngle)).floatValue();
