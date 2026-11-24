@@ -110,30 +110,43 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
         float f2 = turretConfig.interceptProjectilesAndUnderDistance;
         float f3 = turretConfig.interceptProjectilesAndOverHeight;
         Projectile locked = getTargetLock(customUnit, turretIndex);
-        // RWX：只拦炮塔正前方扇区。参考方向沿用引擎射界判定语义（单位朝向 + 本炮塔 idleDir），
-        // 所以车体转向时「正面」跟着一起转。半角 >=180 或 <=0 视为不限方向，保持全向拦截。
+        // RWX：正面扇区只做「选择优先级」，**绝不做拒绝条件**。
+        //
+        // 之前把它当硬门槛过滤，后果是所有拦截炮都只肯打正前方：来袭弹从背后/侧后进入时
+        // 一发不放（建筑尤其明显——它根本不转身；载具也在导弹绕到侧后时哑火）。
+        // 无头实测：原版 antiNukeLauncherC + nukeLauncherC，扇区 90° 时全程 0 拦截弹，
+        // 核弹一路飞到距目标 72；同一局把扇区放开后第 67 帧就开火并击落。
+        //
+        // 现在的语义：优先打落在正面半角内的弹，正面没有就退回全向——炮塔照样转身去追。
         float rwxFrontHalfAngle = turretConfig.interceptProjectilesOnlyInFrontAngle;
-        boolean rwxFrontOnly = rwxFrontHalfAngle > 0.0f && rwxFrontHalfAngle < 180.0f;
-        float rwxFrontAngle = rwxFrontOnly ? rwxFrontFacingAngle(customUnit, turretConfig) : 0.0f;
+        boolean rwxPreferFront = rwxFrontHalfAngle > 0.0f && rwxFrontHalfAngle < 180.0f;
+        float rwxFrontAngle = rwxPreferFront ? rwxFrontFacingAngle(customUnit, turretConfig) : 0.0f;
 
         // 选目标照原版 updateAttackTargeting 的顺序：先校验手上已有的目标，它失效了才重新搜索。
         // 这样每帧省掉一次全抛射物遍历，也不会因为遍历顺序变化而频繁换目标、炮管来回摆。
         Projectile projectile = null;
-        if (locked != null && isInterceptable(customUnit, turretConfig, locked,
-                f, f2, f3, rwxFrontOnly, rwxFrontAngle, rwxFrontHalfAngle)) {
+        if (locked != null && isInterceptable(customUnit, turretConfig, locked, f, f2, f3)) {
             projectile = locked;
         } else {
+            Projectile preferred = null;
+            Projectile fallback = null;
             Object[] objArrA = Projectile.a.a();
             int i = Projectile.a.size;
             for (int i2 = 0; i2 < i; i2++) {
                 Projectile projectile2 = (Projectile) objArrA[i2];
-                if (!isInterceptable(customUnit, turretConfig, projectile2,
-                        f, f2, f3, rwxFrontOnly, rwxFrontAngle, rwxFrontHalfAngle)) {
+                if (!isInterceptable(customUnit, turretConfig, projectile2, f, f2, f3)) {
                     continue;
                 }
-                // 与原版一致：同条件下取遍历到的最后一个（原版也是覆盖式赋值，不做距离排序）。
-                projectile = projectile2;
+                if (rwxPreferFront && isWithinFrontSector(rwxFrontAngle,
+                        Utility.getAngleBetweenPoints(customUnit.posX, customUnit.posY, projectile2.posX, projectile2.posY),
+                        rwxFrontHalfAngle)) {
+                    preferred = projectile2;
+                } else {
+                    // 与原版一致：同条件下取遍历到的最后一个（覆盖式赋值，不做距离排序）。
+                    fallback = projectile2;
+                }
             }
+            projectile = preferred != null ? preferred : fallback;
         }
         UnitMovementData movementData = customUnit.movementLevels[turretIndex];
         if (projectile == null) {
@@ -205,7 +218,7 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
                         + " aligned=" + aligned + " remaining=" + Utility.abs(remaining)
                         + " tol=" + tolerance + " rotation=" + movementData.rotation
                         + " speed=" + charged + "/" + warmup
-                        + " frontOnly=" + rwxFrontOnly + " frontAngle=" + rwxFrontAngle
+                        + " preferFront=" + rwxPreferFront + " frontAngle=" + rwxFrontAngle
                         + " targetZ=" + projectile.posZ + " turretX=" + movementData.targetX);
             }
             warmupArr[turretIndex] = decayWarmup(customUnit, turretIndex, movementData,
@@ -366,10 +379,7 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
             Projectile projectile,
             float targetingGroundDistance,
             float underDistance,
-            float overHeight,
-            boolean frontOnly,
-            float frontAngle,
-            float frontHalfAngle) {
+            float overHeight) {
         if (projectile.isDestroyed || projectile.isInstantHit && !turretConfig.interceptProjectilesAllowInstantHit) {
             return false;
         }
@@ -391,15 +401,8 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
                 && Utility.distanceSq(customUnit.posX, customUnit.posY, projectile.targetX, projectile.targetY) >= targetingGroundDistance * targetingGroundDistance) {
             return false;
         }
-        // RWX：扇区过滤——只处理落在炮塔正前方半角内的抛射物，背后/侧后的不接。
-        // 放在距离判定之后，常见情况（远处弹）能用更便宜的比较先排除。
-        if (frontOnly) {
-            float bearing = Utility.getAngleBetweenPoints(
-                    customUnit.posX, customUnit.posY, projectile.posX, projectile.posY);
-            if (!isWithinFrontSector(frontAngle, bearing, frontHalfAngle)) {
-                return false;
-            }
-        }
+        // 正面扇区不在这里判：它只是「选目标时的优先级」，不是可拦截性的一部分。
+        // 放到这里当过滤条件，会让炮塔在来袭弹位于侧后时完全不出手。
         if (projectile.sourceUnit != null
                 && (projectile.sourceUnit.team.d(customUnit.team) || projectile.sourceUnit.team == customUnit.team)) {
             return false;
@@ -439,9 +442,12 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
         return "unit#" + unit.objectId;
     }
 
-    /** 临时诊断输出，写到 <game>/logs/rwx-intercept.log；只写前 400 行。 */
+    /**
+     * 诊断输出，写到 <game>/logs/rwx-intercept.log；只写前 400 行。
+     * 默认关闭，需要时用 -Drwx.intercept.debug=1 打开（台架测试会自己打开）。
+     */
     private static void rwxLog(String line) {
-        if (rwxLogLines >= RWX_LOG_MAX) {
+        if (!Boolean.getBoolean("rwx.intercept.debug") || rwxLogLines >= RWX_LOG_MAX) {
             return;
         }
         try {
