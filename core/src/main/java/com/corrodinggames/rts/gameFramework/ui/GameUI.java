@@ -1878,7 +1878,14 @@ public final class GameUI extends Serializable {
                             if (pointScreenToWorld == null) {
                                 baseUnitFindUnitAtPosition = findUnitAtPosition(f4, f5, true);
                             }
-                            handleUnitSelectionClick(baseUnitFindUnitAtPosition);
+                            // RWX：左键「点到即修复」。
+                            // 原版桌面语义是「左键只选中、右键才下令」，但沙盒建造者/工程单位的
+                            // 习惯操作是「点一下友方受损目标就该修」。这里在选中之前先给一次修复机会：
+                            // 只有目标确实是友方、确实受损、且当前选中单位真的都能修它时，才下修复令，
+                            // 其余情况原样回落到选中，不改变任何既有行为。
+                            if (!tryRepairOnLeftClick(baseUnitFindUnitAtPosition)) {
+                                handleUnitSelectionClick(baseUnitFindUnitAtPosition);
+                            }
                         } else if (z4) {
                             BaseUnit baseUnitFindUnitAtPosition2 = null;
                             if (pointScreenToWorld == null) {
@@ -2677,6 +2684,57 @@ public final class GameUI extends Serializable {
             this.lastSelectedUnit = baseUnit;
             this.lastSelectionTime = 0.0f;
         }
+    }
+
+    /**
+     * RWX：左键「点到即修复」的纯判定，单独抽出来便于回归测试。
+     *
+     * @param friendly      目标是友军（与选中单位同队）
+     * @param damaged       目标已受损（掉血或未建完）
+     * @param hasOrderable  选中列表里至少有一个可下令单位
+     * @param allCanRepair  每个被选中的可下令单位都能控制且能修这个目标
+     */
+    public static boolean shouldRepairOnLeftClick(boolean friendly, boolean damaged, boolean hasOrderable, boolean allCanRepair) {
+        return friendly && damaged && hasOrderable && allCanRepair;
+    }
+
+    /**
+     * RWX：左键点到友方受损目标时，如果当前选中单位确实都能修它，就直接下修复令。
+     *
+     * 判定条件与 {@link #handleUnitTargetClick} 的修复分支逐条对齐，只放行「修复」这一种，
+     * 绝不顺带处理攻击/移动/回收——那些仍然必须走右键，避免左键误下令。
+     * 任何一条不满足就返回 false，调用方原样回落到选中。
+     */
+    private boolean tryRepairOnLeftClick(BaseUnit baseUnit) {
+        if (baseUnit == null || baseUnit.isDead || getSelectedUnitCount() == 0) {
+            return false;
+        }
+        // 只处理「友方 + 已受损」的目标，满血单位点上去仍然只是选中。
+        PlayerTeam selectedUnitsTeam = getSelectedUnitsTeam();
+        boolean friendly = selectedUnitsTeam != null && selectedUnitsTeam.d(baseUnit.team);
+        boolean damaged = baseUnit.currentHealth < baseUnit.maxHealth || baseUnit.buildProgress < 1.0f;
+        // 所有被选中的可下令单位都必须能修这个目标，否则不抢右键的活。
+        boolean anyOrderable = false;
+        boolean allCanRepair = true;
+        for (GameObject gameObject : this.selectedUnitsList) {
+            if (!(gameObject instanceof OrderableUnit)) {
+                continue;
+            }
+            OrderableUnit orderableUnit = (OrderableUnit) gameObject;
+            if (!orderableUnit.isSelected) {
+                continue;
+            }
+            anyOrderable = true;
+            if (!canControlUnit(orderableUnit) || !orderableUnit.canRepairTarget(baseUnit)) {
+                allCanRepair = false;
+                break;
+            }
+        }
+        if (!shouldRepairOnLeftClick(friendly, damaged, anyOrderable, allCanRepair)) {
+            return false;
+        }
+        issueRepairCommand(baseUnit);
+        return true;
     }
 
     /* JADX INFO: renamed from: a */
