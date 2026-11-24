@@ -95,9 +95,20 @@ internal fun shouldDriveSlickGameLoop(
         (hasLoadedLevel &&
             (runningMenuBackground || networkGameStarted || (gameVisible && hasRunningMap)))
 
+/**
+ * 这一帧要不要走「暂停背景」渲染（只画世界、不画 HUD、也不跑游戏循环）。
+ *
+ * 注意：**不要**把 `gameSpeed == 0` 算进来。
+ * gameSpeed=0 是战局内的暂停（沙盒建造者的 Pause Game 动作、空格键都改这个值），
+ * 引擎在 `GameLogic.update()` 里已经用 `deltaSpeed *= gameSpeed` 冻结了模拟，
+ * 所以循环照常跑就行。一旦在这里跳过整个循环：
+ *   1) 走 `drawWorldOnlyThreadSafe()` → HUD 不画，画面上「UI 消失」；
+ *   2) `gameUI.updateInput()` 不再执行 → 空格键和建造者的暂停动作收不到输入，
+ *      玩家再也解不开暂停，表现为「UI 消失且游戏冻结」。
+ * 真正需要停掉循环的只有：Compose 暂停菜单背景（pausedBackground）和引擎自身暂停。
+ */
 internal fun shouldRenderPausedSlickFrame(
     pausedBackground: Boolean,
-    gameSpeed: Float,
     hasLoadedLevel: Boolean,
     gameVisible: Boolean,
     runningMenuBackground: Boolean,
@@ -107,7 +118,7 @@ internal fun shouldRenderPausedSlickFrame(
         gameVisible &&
         !runningMenuBackground &&
         !networkMultiplayerActive &&
-        (pausedBackground || gameSpeed == 0f || enginePaused)
+        (pausedBackground || enginePaused)
 
 internal fun shouldCountSlickReadyFrame(
     hasLoadedLevel: Boolean,
@@ -507,7 +518,6 @@ class SlickGame(
     private fun shouldRenderPausedFrame(activeEngine: GameEngine): Boolean =
         shouldRenderPausedSlickFrame(
             pausedBackground = pausedBackground,
-            gameSpeed = activeEngine.gameSpeed,
             hasLoadedLevel = activeEngine.hasLoadedLevel,
             gameVisible = gameVisible,
             runningMenuBackground = runningMenuBackground,

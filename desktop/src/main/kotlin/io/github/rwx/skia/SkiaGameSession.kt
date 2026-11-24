@@ -411,7 +411,10 @@ class SkiaGameSession(
         if (!engine.hasLoadedLevel || engine.tileMap == null) return false
         if (engine.isMenuBackgroundMap) return false
         if (engine.isNetworkGameActive()) return false
-        return pausedBackground || engine.gameSpeed == 0f || engine.isPaused || engine.isStopped
+        // RWX：gameSpeed==0 是战局内暂停，不能算「暂停背景」。
+        // 引擎自己会用 deltaSpeed *= gameSpeed 冻结模拟；这里若连循环一起停掉，
+        // HUD 不画、gameUI.updateInput() 也不跑，暂停就再也解不开（UI 消失 + 游戏冻结）。
+        return pausedBackground || engine.isPaused || engine.isStopped
     }
 
     private class SkiaCoreGameView(
