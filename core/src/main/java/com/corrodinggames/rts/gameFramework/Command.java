@@ -1551,8 +1551,10 @@ public class Command {
         if (!rwxLineClear(rwxMoveType, stgTX, stgTY, rwxEndX, rwxEndY)) {
             return;
         }
-        this.rwxStagingX = rwxTileMap.cursorTileX + rwxTileMap.halfTileWorldSizeX;
-        this.rwxStagingY = rwxTileMap.cursorTileY + rwxTileMap.halfTileWorldSizeY;
+        // RWX：cursorTileX/Y 此时是「格索引」，必须换算成世界像素再取格心，
+        // 否则集结点会落在 (格索引+半格) ≈ 地图左上角（空军不经过 corridor 所以一直没触发）。
+        this.rwxStagingX = (stgTX * rwxTileMap.tileWorldSizeX) + rwxTileMap.halfTileWorldSizeX;
+        this.rwxStagingY = (stgTY * rwxTileMap.tileWorldSizeY) + rwxTileMap.halfTileWorldSizeY;
         this.rwxStagingReady = true;
     }
 
