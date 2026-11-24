@@ -100,7 +100,7 @@
 
 1. 资源够（`customUnit.a(turretConfig)`）
 2. 目标炮弹通过全部过滤（瞬间命中/标签/高度/距离/友军/已锁定）
-3. **炮管先转到目标方向**：剩余角度 `<= 2°`（固定阈值，不允许 `canAttackMaxAngle=181` 这类「免转向发射」配置绕过）
+3. **炮管先转到目标方向**：走引擎同一个 `customUnit.a(frameDelta, angle, i)`，转速/加减速与攻击敌人时一致（`turnSpeed` / `turnSpeedAcceleration` / `turnSpeedDeceleration`）；目标角从炮塔实际位置 `G(i)` 算到「抛射物位置 + 本级 shadowOffset」，而不是单位中心。剩余角度 `<= 2°`（固定阈值，不允许 `canAttackMaxAngle=181` 这类「免转向发射」配置绕过）
 4. `rotation == 0`（引擎冷却就绪）
 5. 预热 `speed >= warmup`；预热只在第 3、4 步都通过后开始累，转向/冷却期间按 `warmupCallDownRate` 回落
 6. （可选 `fireDelay > 0`）额外等待累加器到点，未就绪时同样清零重来

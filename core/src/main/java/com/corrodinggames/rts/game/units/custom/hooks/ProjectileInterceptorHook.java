@@ -113,8 +113,15 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
         // ---- 以下全部沿用引擎炮塔状态机语义，不再自造 rotation 充能 ----
         UnitMovementData movementData = customUnit.movementLevels[turretIndex];
 
-        // 1) 转向：直接调引擎的转向函数（它改 movementData.targetX，返回剩余角度差）
-        float wantAngle = Utility.getAngleBetweenPoints(customUnit.posX, customUnit.posY, projectile.posX, projectile.posY);
+        // 1) 转向：和攻击敌人时走同一个引擎转向函数 customUnit.a(frameDelta, angle, i)，
+        //    转速/加减速完全取自 c(i)=turnSpeed、w(i)/y(i)，这里不另造转速。
+        //    目标角也按引擎同款算法：从炮塔实际位置 G(i) 指向目标 + 该级炮塔的 shadowOffset，
+        //    而不是从单位中心算，避免偏移炮塔瞄准点不一致。
+        PointF turretPos = customUnit.G(turretIndex);
+        PointF shadowOffset = customUnit.getShadowOffsetForLevel(turretIndex);
+        float wantAngle = Utility.getAngleBetweenPoints(
+                turretPos.x, turretPos.y,
+                projectile.posX + shadowOffset.x, projectile.posY + shadowOffset.y);
         float remaining = customUnit.a(frameDelta, wantAngle, turretIndex);
 
         float warmup = Math.max(0.0f, customUnit.e(turretIndex));
