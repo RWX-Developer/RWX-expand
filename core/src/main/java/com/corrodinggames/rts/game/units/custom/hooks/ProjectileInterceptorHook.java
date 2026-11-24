@@ -36,6 +36,30 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
     private static final java.util.Map<BaseUnit, Projectile[]> RWX_TARGET_LOCK =
             java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
 
+    /**
+     * 拦截预热累加器（帧单位），按下标为炮塔 index。
+     *
+     * 为什么不直接用引擎的 `movementLevels[i].speed`：
+     * 引擎 `updateAttackTargeting` 末尾有一句「没有攻击目标时把所有炮塔 speed 按
+     * warmupCallDownRate 回落」。拦截炮塔往往没有地面攻击目标（很多还是 canShoot:false
+     * 的纯拦截炮），这句回落会每帧把我们加进去的预热进度抹平——表现就是炮塔一直对着
+     * 导弹转、预热永远到不了头、一发都不打。
+     * 所以预热进度自己攒，只把结果镜像回 speed 供渲染/动画读取。
+     */
+    private static final java.util.Map<BaseUnit, float[]> RWX_WARMUP =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
+    /**
+     * 临时诊断：每个炮塔「锁着目标但没开火」的连续帧数。
+     * 累计到 90 帧（约 1.5 秒）就写一行原因到 logs/rwx-intercept.log，然后清零，
+     * 所以正常拦截时日志是空的，出问题时约每 1.5 秒每条炮塔一行。
+     */
+    private static final java.util.Map<BaseUnit, int[]> RWX_BLOCK_FRAMES =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+    private static java.io.Writer rwxLogWriter;
+    private static int rwxLogLines;
+    private static final int RWX_LOG_MAX = 400;
+
     @Override
     public void b(CustomUnit customUnit, float f) {
         CustomUnitConfig customUnitConfig = customUnit.unitConfig;
@@ -121,6 +145,7 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
             return;
         }
         setTargetLock(customUnit, turretIndex, projectile);
+        int[] blocked = blockedFrames(customUnit, turretIndex);
         // ---- 以下严格按原版 OrderableUnit.advanceMovementLevelTowardTarget 的顺序重排 ----
         // 原版一次开火的完整顺序：
         //   转向(先记 targetY) → 对齐置 isActive → rotation==0 && canShoot → 复核目标可打
@@ -163,43 +188,64 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
         boolean warmupNoReset = customUnit.s(turretIndex);
         // rotation 由引擎每帧递减，归零才是冷却就绪（OrderableUnit:899 / :3296）。
         boolean cooldownReady = movementData.rotation == 0.0f;
-        // 原版 r(i)：炮塔本身能不能射击（canShoot）。不能射的炮塔不该走预热/开火。
-        boolean canShoot = customUnit.r(turretIndex);
+        float[] warmupArr = warmupArray(customUnit, turretIndex);
+        float charged = warmupArr[turretIndex];
 
-        // 2) 没对准 / 冷却中 / 炮塔不能射击：预热按原版 warmupCallDownRate 回落，不攒进度。
+        // 2) 没对准 / 冷却中：预热按原版 warmupCallDownRate 回落，不攒进度。
         //    这条对应原版 updateAttackTargeting 末尾那段 !z && speed!=0 的回落。
-        if (!aligned || !cooldownReady || !canShoot) {
-            if (!warmupNoReset && movementData.speed != 0.0f) {
-                movementData.speed = Utility.moveTowardsZero(
-                        movementData.speed, customUnit.f(turretIndex) * frameDelta);
+        //
+        //    注意这里**不查** r(i)=canShoot。模组里的拦截炮塔普遍写着 canShoot:false——
+        //    那个字段的语义是「不参与对单位/建筑的常规攻击」，不是「不能开火」。
+        //    例如出发级战列舰的 [turret_L1]/[turret_L2]、维京驱逐舰、里海怪物、海军工厂，
+        //    它们的开火许可来自 interceptProjectiles:true，而不是 canShoot。
+        //    一旦照抄原版 r(i)，这些炮塔就会一直转、永远不开火。
+        if (!aligned || !cooldownReady) {
+            if (shouldLogBlock(customUnit, turretIndex, blocked)) {
+                rwxLog("[BLOCK] " + unitLabel(customUnit) + " turret=" + turretIndex
+                        + " aligned=" + aligned + " remaining=" + Utility.abs(remaining)
+                        + " tol=" + tolerance + " rotation=" + movementData.rotation
+                        + " speed=" + charged + "/" + warmup
+                        + " frontOnly=" + rwxFrontOnly + " frontAngle=" + rwxFrontAngle
+                        + " targetZ=" + projectile.posZ + " turretX=" + movementData.targetX);
             }
+            warmupArr[turretIndex] = decayWarmup(customUnit, turretIndex, movementData,
+                    charged, warmup, warmupNoReset, frameDelta);
             resetFireDelay(customUnit, turretIndex);
             return;
         }
 
         // 3) 开火前补一次资源门。原版 u(i) 在真正开火那一刻才查 a(turretConfig) 的消耗，
-        //    目标是同一单位上多门拦截炮共享能量——前面的炮抽干了，这门就不该打。
+        //    目标是同一单位上多门拦截炮共享能量/弹药——前面的炮抽干了，这门就不该打。
         //    目标有效性不必重查：本帧开头已经验过，帧内没有能改变它的状态。
         if (!customUnit.a(turretConfig)) {
-            if (!warmupNoReset && movementData.speed != 0.0f) {
-                movementData.speed = Utility.moveTowardsZero(
-                        movementData.speed, customUnit.f(turretIndex) * frameDelta);
+            if (shouldLogBlock(customUnit, turretIndex, blocked)) {
+                rwxLog("[BLOCK] " + unitLabel(customUnit) + " turret=" + turretIndex
+                        + " reason=resource energy=" + customUnit.currentEnergy
+                        + " usage=" + (turretConfig.resourceUsage != null));
             }
+            warmupArr[turretIndex] = decayWarmup(customUnit, turretIndex, movementData,
+                    charged, warmup, warmupNoReset, frameDelta);
             resetFireDelay(customUnit, turretIndex);
             return;
         }
 
-        // 4) 预热：原版同款 speed 累加，起手那一帧播 warmupStartEffect。
-        //    常驻预热(warmupNoReset)也是先累加、只是开火后不清零，所以第一发仍然有充能过程。
-        if (movementData.speed < warmup) {
-            if (movementData.speed == 0.0f) {
-                customUnit.b((BaseUnit) null, turretIndex);
+        // 4) 预热：进度存在钩子自己的累加器里，每帧镜像回 speed 给引擎渲染/动画用。
+        //    起手那一帧播 warmupStartEffect；常驻预热(warmupNoReset)只是开火后不清零，
+        //    所以第一发仍然有充能过程。
+        if (charged <= 0.0f && warmup > 0.0f) {
+            customUnit.b((BaseUnit) null, turretIndex);
+        }
+        charged = Math.min(warmup, charged + frameDelta);
+        warmupArr[turretIndex] = charged;
+        movementData.speed = charged;
+        if (charged < warmup) {
+            if (shouldLogBlock(customUnit, turretIndex, blocked)) {
+                rwxLog("[BLOCK] " + unitLabel(customUnit) + " turret=" + turretIndex
+                        + " reason=warmup charged=" + charged + "/" + warmup
+                        + " aligned=" + aligned + " rotation=" + movementData.rotation);
             }
-            movementData.speed = Math.min(warmup, movementData.speed + frameDelta);
-            if (movementData.speed < warmup) {
-                resetFireDelay(customUnit, turretIndex);
-                return;
-            }
+            resetFireDelay(customUnit, turretIndex);
+            return;
         }
 
         // 5) 可选 fireDelay：这是"就绪之后额外等多久"，用独立累加器，绝不碰 rotation。
@@ -228,6 +274,14 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
         }
         projectileA.fliesToPosition = true;
         projectileA.parentProjectile = projectile;
+        if (blocked[turretIndex] != 0) {
+            blocked[turretIndex] = 0;
+        }
+        if (rwxLogLines < RWX_LOG_MAX) {
+            rwxLog("[FIRE] " + unitLabel(customUnit) + " turret=" + turretIndex
+                    + " dist=" + Math.sqrt(Utility.distanceSq(customUnit.posX, customUnit.posY,
+                    projectile.posX, projectile.posY)));
+        }
         // 目标已经交给拦截弹处理，本炮塔（及跟随的父炮）下一帧重新锁定新的抛射物。
         clearTargetLock(customUnit, turretIndex);
         if (parentIndex != -1) {
@@ -240,8 +294,10 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
         customUnit.M(turretIndex);
         movementData.isOddShot = !movementData.isOddShot;
         if (!warmupNoReset) {
-            movementData.speed = 0.0f;
+            charged = 0.0f;
         }
+        warmupArr[turretIndex] = charged;
+        movementData.speed = charged;
     }
 
     /** 引擎待机复位用：该炮塔是否正在锁定瞄准抛射物。 */
@@ -354,8 +410,87 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
         return true;
     }
 
-    private static Projectile getTargetLock(BaseUnit unit, int turretIndex) {
-        Projectile[] locked = RWX_TARGET_LOCK.get(unit);
+    private static int[] blockedFrames(CustomUnit unit, int turretIndex) {
+        int[] arr = RWX_BLOCK_FRAMES.get(unit);
+        if (arr == null || turretIndex >= arr.length) {
+            arr = new int[Math.max(turretIndex + 1, unit.movementLevels.length)];
+            RWX_BLOCK_FRAMES.put(unit, arr);
+        }
+        return arr;
+    }
+
+    /** 累计阻塞帧数；到 90 帧（约 1.5 秒）返回 true 表示该写一条诊断，并把计数清零。 */
+    private static boolean shouldLogBlock(CustomUnit unit, int turretIndex, int[] blocked) {
+        blocked[turretIndex]++;
+        if (blocked[turretIndex] < 90) {
+            return false;
+        }
+        blocked[turretIndex] = 0;
+        return rwxLogLines < RWX_LOG_MAX;
+    }
+
+    private static String unitLabel(CustomUnit unit) {
+        try {
+            if (unit.r() != null) {
+                return unit.r().getUnitTypeDescriptionShort() + "#" + unit.objectId;
+            }
+        } catch (Throwable ignored) {
+        }
+        return "unit#" + unit.objectId;
+    }
+
+    /** 临时诊断输出，写到 <game>/logs/rwx-intercept.log；只写前 400 行。 */
+    private static void rwxLog(String line) {
+        if (rwxLogLines >= RWX_LOG_MAX) {
+            return;
+        }
+        try {
+            if (rwxLogWriter == null) {
+                java.io.File root = null;
+                try {
+                    root = io.github.rwx.LegacyAssetBridge.storageRootDir();
+                } catch (Throwable ignored) {
+                }
+                java.io.File dir = new java.io.File(root != null ? root : new java.io.File("."), "logs");
+                dir.mkdirs();
+                rwxLogWriter = new java.io.OutputStreamWriter(
+                        new java.io.FileOutputStream(new java.io.File(dir, "rwx-intercept.log")),
+                        java.nio.charset.StandardCharsets.UTF_8);
+            }
+            rwxLogWriter.write(line);
+            rwxLogWriter.write('\n');
+            rwxLogWriter.flush();
+            rwxLogLines++;
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 取（必要时创建）该单位的预热累加器数组。 */
+    private static float[] warmupArray(CustomUnit unit, int turretIndex) {        float[] arr = RWX_WARMUP.get(unit);
+        if (arr == null || turretIndex >= arr.length) {
+            arr = new float[Math.max(turretIndex + 1, unit.movementLevels.length)];
+            RWX_WARMUP.put(unit, arr);
+        }
+        return arr;
+    }
+
+    /**
+     * 预热进度回落，并把结果镜像回 {@code movementLevels[i].speed} 供引擎渲染/动画读取。
+     * 原版语义：非 warmupNoReset 的炮塔在打不出去的时候按 warmupCallDownRate 掉进度。
+     */
+    private static float decayWarmup(CustomUnit unit, int turretIndex, UnitMovementData data,
+                                     float charged, float warmup, boolean warmupNoReset, float frameDelta) {
+        if (!warmupNoReset && charged != 0.0f) {
+            charged = Utility.moveTowardsZero(charged, unit.f(turretIndex) * frameDelta);
+        }
+        if (charged < 0.0f) {
+            charged = 0.0f;
+        }
+        data.speed = Math.min(warmup, charged);
+        return charged;
+    }
+
+    private static Projectile getTargetLock(BaseUnit unit, int turretIndex) {        Projectile[] locked = RWX_TARGET_LOCK.get(unit);
         return locked != null && turretIndex < locked.length ? locked[turretIndex] : null;
     }
 
