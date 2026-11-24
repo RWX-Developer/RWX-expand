@@ -85,59 +85,33 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
         float f = turretConfig.interceptProjectilesAndTargetingGroundUnderDistance;
         float f2 = turretConfig.interceptProjectilesAndUnderDistance;
         float f3 = turretConfig.interceptProjectilesAndOverHeight;
-        AnimationSet includeTags = turretConfig.interceptProjectilesWithTags;
-        AnimationSet excludeTags = turretConfig.interceptProjectilesWithoutTags;
         Projectile locked = getTargetLock(customUnit, turretIndex);
         // RWX：只拦炮塔正前方扇区。参考方向沿用引擎射界判定语义（单位朝向 + 本炮塔 idleDir），
         // 所以车体转向时「正面」跟着一起转。半角 >=180 或 <=0 视为不限方向，保持全向拦截。
         float rwxFrontHalfAngle = turretConfig.interceptProjectilesOnlyInFrontAngle;
         boolean rwxFrontOnly = rwxFrontHalfAngle > 0.0f && rwxFrontHalfAngle < 180.0f;
         float rwxFrontAngle = rwxFrontOnly ? rwxFrontFacingAngle(customUnit, turretConfig) : 0.0f;
+
+        // 选目标照原版 updateAttackTargeting 的顺序：先校验手上已有的目标，它失效了才重新搜索。
+        // 这样每帧省掉一次全抛射物遍历，也不会因为遍历顺序变化而频繁换目标、炮管来回摆。
         Projectile projectile = null;
-        Object[] objArrA = Projectile.a.a();
-        int i = Projectile.a.size;
-        for (int i2 = 0; i2 < i; i2++) {
-            Projectile projectile2 = (Projectile) objArrA[i2];
-            if (projectile2.isDestroyed || projectile2.isInstantHit && !turretConfig.interceptProjectilesAllowInstantHit) {
-                continue;
-            }
-            if (excludeTags != null && projectile2.animationSet != null && AnimationTag.a(projectile2.animationSet, excludeTags)) {
-                continue;
-            }
-            if (includeTags != null && (projectile2.animationSet == null || !AnimationTag.a(projectile2.animationSet, includeTags))) {
-                continue;
-            }
-            if (projectile2.posZ <= f3) {
-                continue;
-            }
-            if (Utility.distanceSq(customUnit.posX, customUnit.posY, projectile2.posX, projectile2.posY) >= f2 * f2) {
-                continue;
-            }
-            if (f >= 0.0f && Utility.distanceSq(customUnit.posX, customUnit.posY, projectile2.targetX, projectile2.targetY) >= f * f) {
-                continue;
-            }
-            // RWX：扇区过滤——只处理落在炮塔正前方半角内的抛射物，背后/侧后的不接。
-            // 放在距离判定之后，常见情况（远处弹）能用更便宜的比较先排除。
-            if (rwxFrontOnly) {
-                float rwxBearing = Utility.getAngleBetweenPoints(
-                        customUnit.posX, customUnit.posY, projectile2.posX, projectile2.posY);
-                if (!isWithinFrontSector(rwxFrontAngle, rwxBearing, rwxFrontHalfAngle)) {
+        if (locked != null && isInterceptable(customUnit, turretConfig, locked,
+                f, f2, f3, rwxFrontOnly, rwxFrontAngle, rwxFrontHalfAngle)) {
+            projectile = locked;
+        } else {
+            Object[] objArrA = Projectile.a.a();
+            int i = Projectile.a.size;
+            for (int i2 = 0; i2 < i; i2++) {
+                Projectile projectile2 = (Projectile) objArrA[i2];
+                if (!isInterceptable(customUnit, turretConfig, projectile2,
+                        f, f2, f3, rwxFrontOnly, rwxFrontAngle, rwxFrontHalfAngle)) {
                     continue;
                 }
-            }
-            if (projectile2.sourceUnit != null && (projectile2.sourceUnit.team.d(customUnit.team) || projectile2.sourceUnit.team == customUnit.team)) {
-                continue;
-            }
-            if (projectile2.lifeTimer <= 0.0f || a(projectile2)) {
-                continue;
-            }
-            // 已锁定的目标优先；只有它失效时才退回原版的「最后一个通过过滤的」。
-            if (projectile2 == locked) {
+                // 与原版一致：同条件下取遍历到的最后一个（原版也是覆盖式赋值，不做距离排序）。
                 projectile = projectile2;
-                break;
             }
-            projectile = projectile2;
         }
+        UnitMovementData movementData = customUnit.movementLevels[turretIndex];
         if (projectile == null) {
             clearTargetLock(customUnit, turretIndex);
             if (parentIndex != -1) {
@@ -147,10 +121,13 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
             return;
         }
         setTargetLock(customUnit, turretIndex, projectile);
-        // ---- 以下全部沿用引擎炮塔状态机语义，不再自造 rotation 充能 ----
-        UnitMovementData movementData = customUnit.movementLevels[turretIndex];
+        // ---- 以下严格按原版 OrderableUnit.advanceMovementLevelTowardTarget 的顺序重排 ----
+        // 原版一次开火的完整顺序：
+        //   转向(先记 targetY) → 对齐置 isActive → rotation==0 && canShoot → 复核目标可打
+        //   → 预热(speed 累加，起手播 warmupStartEffect) → 满预热 → rotation=b(i)+t(i)
+        //   → 开火 → M(i) 复位后坐力 → isOddShot 翻转 → 非常驻预热清空 speed。
 
-        // 1) 转向：每帧都从锁定抛射物的当前 XY 重算方位角，持续跟踪它。
+        // 1) 转向：每帧从锁定抛射物的当前 XY 重算方位角，持续跟踪它。
         //    只看 posX/posY，不看 posZ；高度只参与上面的「能不能拦」过滤，不参与瞄准。
         //    起点取炮塔实际位置 G(i) + 本级 shadowOffset，和引擎攻击敌人时一致。
         //    仍走引擎同一个 customUnit.a(frameDelta, angle, i)，转速/加减速与攻击敌人时完全一致。
@@ -159,13 +136,24 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
         float wantAngle = Utility.getAngleBetweenPoints(
                 turretPos.x, turretPos.y,
                 projectile.posX + shadowOffset.x, projectile.posY + shadowOffset.y);
-        float angleDelta = Utility.rotateTowardsAngle(movementData.targetX, wantAngle, 360.0f);
+        // 原版在转向之前会把「上一帧的目标角」存进 targetY；待机复位在 shouldResetTurret=false
+        // 时正是拿 targetY 当基准，缺了这一步炮管归位会跳。
+        movementData.targetY = movementData.targetX;
         float remaining = customUnit.a(frameDelta, wantAngle, turretIndex);
+
+        // 对齐容差照原版 x(i)=canAttackMaxAngle。但拦截必须真的把炮管指过去，
+        // 所以 canAttackMaxAngle=181 这种「免转向发射」的导弹配置不照抄，退回 2°。
+        // 注意：这里只做局部判定，不写 movementData.isActive——那是引擎自己
+        // u(i) 开火门控用的标记，我们的炮塔不走引擎开火循环，写它只会让同一门炮
+        // 在瞄导弹的瞬间被引擎判成「可对地面目标开火」。
+        float tolerance = resolveAimTolerance(customUnit.x(turretIndex));
+        boolean aligned = Utility.abs(remaining) <= tolerance;
 
         // 子炮在拦截时，父炮同步进入瞄准状态并跟随子炮角度（父炮不额外发射）。
         if (parentIndex != -1) {
             setTargetLock(customUnit, parentIndex, projectile);
             UnitMovementData parentData = customUnit.movementLevels[parentIndex];
+            parentData.targetY = parentData.targetX;
             parentData.targetX = movementData.targetX;
             parentData.velocityX = 0.0f;
             parentData.velocityY = 0.0f;
@@ -175,13 +163,12 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
         boolean warmupNoReset = customUnit.s(turretIndex);
         // rotation 由引擎每帧递减，归零才是冷却就绪（OrderableUnit:899 / :3296）。
         boolean cooldownReady = movementData.rotation == 0.0f;
-        // 拦截炮必须真的把炮管转到目标方向。这里刻意用固定小角度，
-        // 不能被 canAttackMaxAngle=181 那种「免转向发射」配置绕过（那是导弹语义）。
-        boolean turretAligned = Utility.abs(angleDelta) <= 2.0f || Utility.abs(remaining) <= 2.0f;
+        // 原版 r(i)：炮塔本身能不能射击（canShoot）。不能射的炮塔不该走预热/开火。
+        boolean canShoot = customUnit.r(turretIndex);
 
-        // 2) 先转向、再预热：转向中或冷却中不允许攒预热，已攒的按引擎 warmupCallDownRate 回落。
-        //    这样炮管到位后还要走完 warmup 才会开火，不会出现「弹比炮管快」。
-        if (!turretAligned || !cooldownReady) {
+        // 2) 没对准 / 冷却中 / 炮塔不能射击：预热按原版 warmupCallDownRate 回落，不攒进度。
+        //    这条对应原版 updateAttackTargeting 末尾那段 !z && speed!=0 的回落。
+        if (!aligned || !cooldownReady || !canShoot) {
             if (!warmupNoReset && movementData.speed != 0.0f) {
                 movementData.speed = Utility.moveTowardsZero(
                         movementData.speed, customUnit.f(turretIndex) * frameDelta);
@@ -190,19 +177,32 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
             return;
         }
 
-        // 3) 预热：和引擎 advanceMovementLevelTowardTarget 同款，把 speed 累到 e(i)=warmup。
-        //    s(i)=warmupNoReset 为真时视为常驻就绪（引擎同款）。
-        if (warmupNoReset) {
-            movementData.speed = warmup;
-        } else if (movementData.speed < warmup) {
-            movementData.speed = Math.min(warmup, movementData.speed + frameDelta);
-        }
-        if (movementData.speed < warmup) {
+        // 3) 开火前补一次资源门。原版 u(i) 在真正开火那一刻才查 a(turretConfig) 的消耗，
+        //    目标是同一单位上多门拦截炮共享能量——前面的炮抽干了，这门就不该打。
+        //    目标有效性不必重查：本帧开头已经验过，帧内没有能改变它的状态。
+        if (!customUnit.a(turretConfig)) {
+            if (!warmupNoReset && movementData.speed != 0.0f) {
+                movementData.speed = Utility.moveTowardsZero(
+                        movementData.speed, customUnit.f(turretIndex) * frameDelta);
+            }
             resetFireDelay(customUnit, turretIndex);
             return;
         }
 
-        // 4) 可选 fireDelay：这是"就绪之后额外等多久"，用独立累加器，绝不碰 rotation。
+        // 4) 预热：原版同款 speed 累加，起手那一帧播 warmupStartEffect。
+        //    常驻预热(warmupNoReset)也是先累加、只是开火后不清零，所以第一发仍然有充能过程。
+        if (movementData.speed < warmup) {
+            if (movementData.speed == 0.0f) {
+                customUnit.b((BaseUnit) null, turretIndex);
+            }
+            movementData.speed = Math.min(warmup, movementData.speed + frameDelta);
+            if (movementData.speed < warmup) {
+                resetFireDelay(customUnit, turretIndex);
+                return;
+            }
+        }
+
+        // 5) 可选 fireDelay：这是"就绪之后额外等多久"，用独立累加器，绝不碰 rotation。
         //    默认 -1/null 时完全跳过，行为与引擎普通开火一致。
         Float overrideDelay = turretConfig.interceptProjectilesFireDelay;
         if (overrideDelay != null && overrideDelay.floatValue() > 0.0f) {
@@ -218,7 +218,7 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
             waitArr[turretIndex] = 0.0f;
         }
 
-        // 5) 发射：照抄引擎 a(baseUnit,i) 的顺序 —— 先处理联炮冷却，再扣资源、生成弹丸、设 parent。
+        // 6) 发射：照抄引擎 a(baseUnit,i) 的顺序 —— 先处理联炮冷却，再扣资源、生成弹丸、设 parent。
         //    这一步不能省：拦截钩子直接调 6 参数生成弹丸，绕过了 CustomUnit.a(baseUnit,i) 里的联炮联动。
         applyLinkedTurretCooldown(customUnit, turretConfig, turretIndex);
         customUnit.b(turretConfig);
@@ -234,9 +234,11 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
             clearTargetLock(customUnit, parentIndex);
         }
 
-        // 6) 重置冷却：引擎同款 rotation = b(i) + t(i)，之后由引擎每帧递减到 0 再次就绪。
-        //    非 warmupNoReset 炮塔发射后清空预热（引擎同款 speed=0）。
+        // 7) 发射后的收尾，顺序与原版一致。
+        //    t(i) 读的是 speed/warmup 比值，必须在清 speed 之前算，否则这会白丢一段冷却缩减。
         movementData.rotation = customUnit.b(turretIndex) + customUnit.t(turretIndex);
+        customUnit.M(turretIndex);
+        movementData.isOddShot = !movementData.isOddShot;
         if (!warmupNoReset) {
             movementData.speed = 0.0f;
         }
@@ -274,6 +276,82 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
             return customUnit.movementLevels[linked].targetX + turretConfig.idleDir;
         }
         return customUnit.rotationSpeed + turretConfig.idleDir;
+    }
+
+    /**
+     * 拦截开火的对齐容差（角度）。
+     *
+     * 原版 {@code OrderableUnit.advanceMovementLevelTowardTarget} 拿 {@code x(i)}
+     * （即 {@code canAttackMaxAngle}）判断炮塔是否"已对准"。绝大多数炮塔这个值是 181，
+     * 语义是"不用转，直接打"（导弹那种全向发射）。拦截炮必须真的把炮管指向来袭弹，
+     * 所以：
+     * <ul>
+     *   <li>0 &lt; 角度 &lt; 90：尊重模组配置，直接用它；</li>
+     *   <li>负数 / 0 / ≥90（含 181 这种免转向值）：退回 2°。</li>
+     * </ul>
+     */
+    public static float resolveAimTolerance(float canAttackMaxAngle) {
+        if (canAttackMaxAngle <= 0.0f || canAttackMaxAngle >= 90.0f) {
+            return 2.0f;
+        }
+        return canAttackMaxAngle;
+    }
+
+    /**
+     * 单枚抛射物能不能作为本炮塔的拦截目标。
+     *
+     * 对应原版 {@code OrderableUnit.a(int, BaseUnit, boolean, boolean)} 的角色：
+     * 扫描选目标时用它过滤，开火前再用同一份判定复核一次——
+     * 原版也是「rotation 归零那一帧重新 a(i, target, false, false)」，不是选完就不再验。
+     */
+    private static boolean isInterceptable(
+            CustomUnit customUnit,
+            TurretConfig turretConfig,
+            Projectile projectile,
+            float targetingGroundDistance,
+            float underDistance,
+            float overHeight,
+            boolean frontOnly,
+            float frontAngle,
+            float frontHalfAngle) {
+        if (projectile.isDestroyed || projectile.isInstantHit && !turretConfig.interceptProjectilesAllowInstantHit) {
+            return false;
+        }
+        AnimationSet excludeTags = turretConfig.interceptProjectilesWithoutTags;
+        if (excludeTags != null && projectile.animationSet != null && AnimationTag.a(projectile.animationSet, excludeTags)) {
+            return false;
+        }
+        AnimationSet includeTags = turretConfig.interceptProjectilesWithTags;
+        if (includeTags != null && (projectile.animationSet == null || !AnimationTag.a(projectile.animationSet, includeTags))) {
+            return false;
+        }
+        if (projectile.posZ <= overHeight) {
+            return false;
+        }
+        if (Utility.distanceSq(customUnit.posX, customUnit.posY, projectile.posX, projectile.posY) >= underDistance * underDistance) {
+            return false;
+        }
+        if (targetingGroundDistance >= 0.0f
+                && Utility.distanceSq(customUnit.posX, customUnit.posY, projectile.targetX, projectile.targetY) >= targetingGroundDistance * targetingGroundDistance) {
+            return false;
+        }
+        // RWX：扇区过滤——只处理落在炮塔正前方半角内的抛射物，背后/侧后的不接。
+        // 放在距离判定之后，常见情况（远处弹）能用更便宜的比较先排除。
+        if (frontOnly) {
+            float bearing = Utility.getAngleBetweenPoints(
+                    customUnit.posX, customUnit.posY, projectile.posX, projectile.posY);
+            if (!isWithinFrontSector(frontAngle, bearing, frontHalfAngle)) {
+                return false;
+            }
+        }
+        if (projectile.sourceUnit != null
+                && (projectile.sourceUnit.team.d(customUnit.team) || projectile.sourceUnit.team == customUnit.team)) {
+            return false;
+        }
+        if (projectile.lifeTimer <= 0.0f || a(projectile)) {
+            return false;
+        }
+        return true;
     }
 
     private static Projectile getTargetLock(BaseUnit unit, int turretIndex) {
