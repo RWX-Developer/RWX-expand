@@ -149,7 +149,11 @@ public class TurretConfig {
     public AnimationSet interceptProjectilesWithoutTags = null;
 
     // RWX：拦截发射间隔（毫秒）。-1 = 沿用该炮塔自己的 delay（再叠加 warmup 影响）。
-    public float interceptProjectilesFireDelay = -1.0f;
+    /**
+     * RWX：拦截炮塔自己的开火间隔覆盖值。null = 没写这个键，用炮塔自己的 delay；
+     * 写了才覆盖（含 0，表示不额外等待）。
+     */
+    public Float interceptProjectilesFireDelay = null;
 
     // RWX：是否允许拦截瞬间命中（Projectile.isInstantHit）的炮弹，默认不拦。
     public boolean interceptProjectilesAllowInstantHit = false;
@@ -331,7 +335,11 @@ public class TurretConfig {
         this.aimOffsetSpread = turretConfig.aimOffsetSpread;
         this.clearTurretTargetAfterFiring = turretConfig.clearTurretTargetAfterFiring;
         this.az = turretConfig.az;
+        this.interceptProjectiles = turretConfig.interceptProjectiles;
         this.interceptProjectilesWithTags = turretConfig.interceptProjectilesWithTags;
+        this.interceptProjectilesWithoutTags = turretConfig.interceptProjectilesWithoutTags;
+        this.interceptProjectilesFireDelay = turretConfig.interceptProjectilesFireDelay;
+        this.interceptProjectilesAllowInstantHit = turretConfig.interceptProjectilesAllowInstantHit;
         this.interceptProjectilesAndTargetingGroundUnderDistance = turretConfig.interceptProjectilesAndTargetingGroundUnderDistance;
         this.interceptProjectilesAndUnderDistance = turretConfig.interceptProjectilesAndUnderDistance;
         this.interceptProjectilesAndOverHeight = turretConfig.interceptProjectilesAndOverHeight;
@@ -539,11 +547,19 @@ public class TurretConfig {
             customUnitConfig.a(ProjectileInterceptorHook.a);
         }
         // RWX：拦截炮塔由 interceptProjectiles 显式开启；withTags 退化成「只拦这些标签」的过滤器。
-        turretConfig.interceptProjectiles = iniFile.getBoolean(str, "interceptProjectiles", Boolean.valueOf(turretConfig.interceptProjectiles)).booleanValue();
+        // 三态：没写这个键 = null，留给下面按旧规则推断（兼容老模组）
+        Boolean explicitIntercept = iniFile.getBoolean(str, "interceptProjectiles", (Boolean) null);
+        if (explicitIntercept != null) {
+            turretConfig.interceptProjectiles = explicitIntercept.booleanValue();
+        }
         turretConfig.interceptProjectilesWithTags = AnimationTag.a(iniFile.getString(str, "interceptProjectiles_withTags", (String) null), turretConfig.interceptProjectilesWithTags);
         turretConfig.interceptProjectilesWithoutTags = AnimationTag.a(iniFile.getString(str, "interceptProjectiles_withoutTags", (String) null), turretConfig.interceptProjectilesWithoutTags);
         turretConfig.interceptProjectilesAllowInstantHit = iniFile.getBoolean(str, "interceptProjectiles_allowInstantHit", Boolean.valueOf(turretConfig.interceptProjectilesAllowInstantHit)).booleanValue();
-        turretConfig.interceptProjectilesFireDelay = iniFile.getTime(str, "interceptProjectiles_fireDelay", Float.valueOf(turretConfig.interceptProjectilesFireDelay)).floatValue();
+        turretConfig.interceptProjectilesFireDelay = iniFile.getTime(str, "interceptProjectiles_fireDelay", (Float) null);
+        // 兼容：老模组只写 withTags/withoutTags、没写 interceptProjectiles 的，仍然算拦截炮塔。
+        if (explicitIntercept == null && (turretConfig.interceptProjectilesWithTags != null || turretConfig.interceptProjectilesWithoutTags != null)) {
+            turretConfig.interceptProjectiles = true;
+        }
         if (turretConfig.interceptProjectiles || turretConfig.interceptProjectilesWithTags != null || turretConfig.interceptProjectilesWithoutTags != null) {
             customUnitConfig.hasProjectileInterceptorTurret = true;
             customUnitConfig.a(ProjectileInterceptorHook.a);

@@ -8,13 +8,20 @@ import com.corrodinggames.rts.game.units.custom.*;
 import com.corrodinggames.rts.gameFramework.Utility;
 import io.github.rwx.geometry.PointF;
 
-/* JADX INFO: renamed from: com.corrodinggames.rts.game.units.custom.b.k */
-/* JADX INFO: loaded from: game-lib.jar:com/corrodinggames/rts/game/units/custom/b/k.class */
+/**
+ * 拦截炮塔钩子。
+ * RWX 改动只在三点：①开关显式化（缺 key 时按旧规则自动开启）②新增排除标签/瞬间命中过滤 ③拦截时累加 rotation 充能。
+ * 索敌与开火流程保持原版：遍历全部炮弹，命中的最后一个当作目标，不转向、不瞄准。
+ */
 public class ProjectileInterceptorHook extends CustomUnitRenderHook {
     public static final CustomUnitRenderHook a = new ProjectileInterceptorHook();
     static final PointF b = new PointF();
 
-    @Override // com.corrodinggames.rts.game.units.custom.hooks.CustomUnitRenderHook
+    /** 每台单位每个炮塔的拦截充能累计（毫秒），弱引用自动回收。 */
+    private static final java.util.Map<BaseUnit, long[]> RWX_CHARGE =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
+    @Override
     public void b(CustomUnit customUnit, float f) {
         CustomUnitConfig customUnitConfig = customUnit.unitConfig;
         int techLevel = customUnit.getTechLevel();
@@ -34,42 +41,21 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
                     customUnit.v = true;
                 }
             }
-            // RWX：开关改成 interceptProjectiles；withTags 只当过滤器，不再负责开启。
             if (turretConfig.interceptProjectiles) {
-                a(customUnit, turretConfig);
+                a(customUnit, turretConfig, f);
             }
         }
     }
 
-    /** RWX：炮管每 tick 最多转多少度。转到阈值内才开火。 */
-    private static final float TURN_PER_TICK = 12.0f;
-
-    /** RWX：开火允许的角度误差（度）。 */
-    private static final float AIM_TOLERANCE = 6.0f;
-
     public static void a(CustomUnit customUnit, TurretConfig turretConfig) {
+        a(customUnit, turretConfig, 0.0f);
+    }
+
+    public static void a(CustomUnit customUnit, TurretConfig turretConfig, float frameDelta) {
         if (turretConfig == null || !turretConfig.interceptProjectiles) {
             return;
         }
         if (!customUnit.a(turretConfig)) {
-            return;
-        }
-        int turretIndex = turretConfig.turretIndex;
-        int techLevel = customUnit.getTechLevel();
-        if (turretIndex < 0 || turretIndex >= techLevel || turretIndex >= customUnit.movementLevels.length) {
-            return;
-        }
-        UnitMovementData movementData = customUnit.movementLevels[turretIndex];
-        // 充能：默认沿用该炮塔自己的 delay，写了 interceptProjectiles_fireDelay 就用新键。
-        float delay = turretConfig.interceptProjectilesFireDelay > 0.0f
-                ? turretConfig.interceptProjectilesFireDelay
-                : customUnit.b(turretIndex);
-        if (movementData.rotation < delay) {
-            return;
-        }
-        // 预热（warmup）也要到位，否则等于绕过预热直接开火。
-        float warmup = customUnit.e(turretIndex);
-        if (warmup > 0.0f && movementData.speed < warmup) {
             return;
         }
         float f = turretConfig.interceptProjectilesAndTargetingGroundUnderDistance;
@@ -78,28 +64,23 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
         AnimationSet includeTags = turretConfig.interceptProjectilesWithTags;
         AnimationSet excludeTags = turretConfig.interceptProjectilesWithoutTags;
         Projectile projectile = null;
-        float bestDistanceSq = Float.MAX_VALUE;
         Object[] objArrA = Projectile.a.a();
         int i = Projectile.a.size;
         for (int i2 = 0; i2 < i; i2++) {
             Projectile projectile2 = (Projectile) objArrA[i2];
-            // 瞬间命中的炮弹默认不拦（可以在 INI 里打开）
             if (projectile2.isInstantHit && !turretConfig.interceptProjectilesAllowInstantHit) {
                 continue;
             }
-            // 排除标签优先
             if (excludeTags != null && projectile2.animationSet != null && AnimationTag.a(projectile2.animationSet, excludeTags)) {
                 continue;
             }
-            // 写了 withTags 才做包含过滤；没写就一视同仁
             if (includeTags != null && (projectile2.animationSet == null || !AnimationTag.a(projectile2.animationSet, includeTags))) {
                 continue;
             }
             if (projectile2.posZ <= f3) {
                 continue;
             }
-            float distanceSq = Utility.distanceSq(customUnit.posX, customUnit.posY, projectile2.posX, projectile2.posY);
-            if (distanceSq >= f2 * f2 || distanceSq >= bestDistanceSq) {
+            if (Utility.distanceSq(customUnit.posX, customUnit.posY, projectile2.posX, projectile2.posY) >= f2 * f2) {
                 continue;
             }
             if (f >= 0.0f && Utility.distanceSq(customUnit.posX, customUnit.posY, projectile2.targetX, projectile2.targetY) >= f * f) {
@@ -112,24 +93,44 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
                 continue;
             }
             projectile = projectile2;
-            bestDistanceSq = distanceSq;
         }
         if (projectile == null) {
             return;
         }
-        // 转向瞄准：炮管角度逐步转向目标，转到位才发射。
+        // 转向：借引擎自己的炮塔转向函数（a(float, float, int)），转速/加减速与普通索敌完全一致。
+        int turretIndex = turretConfig.turretIndex;
+        if (turretIndex < 0 || turretIndex >= customUnit.movementLevels.length) {
+            turretIndex = 0;
+        }
+        UnitMovementData movementData = customUnit.movementLevels[turretIndex];
         float wantAngle = Utility.getAngleBetweenPoints(customUnit.posX, customUnit.posY, projectile.posX, projectile.posY);
-        float diff = Utility.rotateTowardsAngle(movementData.targetX, wantAngle, 360.0f);
-        if (Utility.abs(diff) > AIM_TOLERANCE) {
-            movementData.targetX = Utility.rotateTowardsAngle(movementData.targetX + (diff > 0.0f ? TURN_PER_TICK : -TURN_PER_TICK), 0.0f, 360.0f);
+        float remaining = customUnit.a(frameDelta, wantAngle, turretIndex);
+        Float overrideDelay = turretConfig.interceptProjectilesFireDelay;
+        float delay = overrideDelay != null ? overrideDelay.floatValue() : customUnit.b(turretIndex);
+        float warmup = Math.max(0.0f, customUnit.e(turretIndex));
+        long[] chargeArr = RWX_CHARGE.get(customUnit);
+        if (chargeArr == null || turretIndex >= chargeArr.length) {
+            chargeArr = new long[Math.max(turretIndex + 1, customUnit.movementLevels.length)];
+            RWX_CHARGE.put(customUnit, chargeArr);
+        }
+        chargeArr[turretIndex] += (long) Math.max(0.0f, frameDelta * 1000.0f);
+        float charged = chargeArr[turretIndex];
+        movementData.rotation = Math.min(charged, delay);
+        if (charged < delay + warmup) {
             return;
         }
-        movementData.targetX = wantAngle;
+        // 炮管没转到位不开火（引擎同款小角度判定）
+        if (Utility.abs(remaining) > 2.0f) {
+            return;
+        }
         customUnit.b(turretConfig);
-        Projectile projectileA = customUnit.a((BaseUnit) null, projectile.posX, projectile.posY, turretIndex, (CustomProjectileTemplate) null, 0);
+        Projectile projectileA = customUnit.a((BaseUnit) null, projectile.posX, projectile.posY, turretConfig.turretIndex, (CustomProjectileTemplate) null, 0);
+        if (projectileA == null) {
+            return;
+        }
         projectileA.fliesToPosition = true;
         projectileA.parentProjectile = projectile;
-        // 开火后重置充能
+        chargeArr[turretIndex] = 0L;
         movementData.rotation = 0.0f;
     }
 
