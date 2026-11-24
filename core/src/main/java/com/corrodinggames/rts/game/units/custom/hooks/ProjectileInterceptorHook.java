@@ -164,7 +164,9 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
             waitArr[turretIndex] = 0.0f;
         }
 
-        // 5) 发射：照抄引擎 a(baseUnit,i) 的顺序 —— 扣资源、生成弹丸、设 parent。
+        // 5) 发射：照抄引擎 a(baseUnit,i) 的顺序 —— 先处理联炮冷却，再扣资源、生成弹丸、设 parent。
+        //    这一步不能省：拦截钩子直接调 6 参数生成弹丸，绕过了 CustomUnit.a(baseUnit,i) 里的联炮联动。
+        applyLinkedTurretCooldown(customUnit, turretConfig, turretIndex);
         customUnit.b(turretConfig);
         Projectile projectileA = customUnit.a((BaseUnit) null, projectile.posX, projectile.posY, turretConfig.turretIndex, (CustomProjectileTemplate) null, 0);
         if (projectileA == null) {
@@ -178,6 +180,33 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
         movementData.rotation = customUnit.b(turretIndex) + customUnit.t(turretIndex);
         if (!warmupNoReset) {
             movementData.speed = 0.0f;
+        }
+    }
+
+    /**
+     * 复刻 CustomUnit.a(BaseUnit, int) 里的联炮冷却联动：
+     * - linkDelayWithTurret：本炮开火时把引用它的那门炮冷却清零；
+     * - attachedTo（linkedTurretIndex）：子炮开火时，若父炮不能射击但有 recoilOffset，则给父炮上冷却。
+     * 拦截钩子直接走 6 参数生成弹丸，原本绕过了这段，附属炮塔会与主炮塔失步。
+     */
+    private static void applyLinkedTurretCooldown(CustomUnit customUnit, TurretConfig turretConfig, int turretIndex) {
+        TurretConfig[] turrets = customUnit.unitConfig.turrets;
+        for (int i = 0; i < turrets.length; i++) {
+            TurretConfig other = turrets[i];
+            if (other != null && i != turretIndex && other.linkedTurret != null
+                    && other.linkedTurret == turretConfig
+                    && customUnit.movementLevels[i].rotation < 9000.0f - ((customUnit.b(turretIndex) * 0.5f) - other.warmup)) {
+                customUnit.movementLevels[i].rotation = 0.0f;
+            }
+        }
+        if (turretConfig.linkedTurretIndex != -1) {
+            int parentIndex = turretConfig.linkedTurretIndex;
+            if (parentIndex < turrets.length) {
+                TurretConfig parent = turrets[parentIndex];
+                if (!parent.canShoot && parent.p != 0.0f) {
+                    customUnit.movementLevels[parentIndex].rotation = customUnit.b(parentIndex) + customUnit.t(parentIndex);
+                }
+            }
         }
     }
 

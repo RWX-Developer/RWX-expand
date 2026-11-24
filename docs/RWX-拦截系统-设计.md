@@ -116,6 +116,22 @@
 - 新模组推荐显式写 `interceptProjectiles: true`；`withTags` 现在只是「只拦这些标签」的过滤器，不再负责开启。
 - 三个 `interceptProjectiles_and*` 距离/高度键无条件解析，避免 luke 报「键未使用」。
 
+### 附属炮塔 / 主炮塔的关系
+
+引擎里其实有三套不同的“联动”，不要混为一谈：
+
+| 配置 | 落点 | 语义 |
+| --- | --- | --- |
+| `attachedTo: 主炮` | `TurretConfig.parentTurret` → `linkedTurretIndex` | 子炮待机角 `C(i)` = 父炮 `targetX + idleDir`；`limitingAngle` 也按父炮方向算；子炮有目标时仍可独立转向 |
+| `slave: true` | 父炮的 `childTurret` → `x` → `getLinkedTurretIndex(i)` | 父炮的 `targetX` 和 `isActive` 从子炮继承（双联炮：子炮负责索敌转向，父炮跟随开火） |
+| `linkDelayWithTurret: 另一炮` | `TurretConfig.linkedTurret` | 本炮开火时把引用它的另一炮 `rotation` 清零；不影响角度 |
+
+拦截钩子的处理：
+
+- 开火时已补回 `CustomUnit.a(BaseUnit, int)` 里的联炮冷却联动（`linkDelayWithTurret` + `attachedTo` 父炮 recoil），否则拦截弹走 6 参数生成弹丸会绕过这段，附属炮塔与主炮塔冷却失步。
+- 当前游戏内三处拦截炮（`antinuke_launcher`、`experimental_gunship`、`experimental_carrier`、`nautilus` 等）都是独立 `canShoot:false` 炮塔，没有 `attachedTo` / `slave`，所以不受角度继承影响。
+- 若以后把拦截炮挂到主炮上：必须写 `shouldResetTurret: false`，否则主炮转向会把拦截炮的目标角拉回去；`slave` 父炮不要单独开拦截，应由负责索敌的子炮承担。
+
 ### 验证到哪一步
 
 - `:core:compileJava`、`:desktop:packageUberJarForCurrentOS` 编译/打包通过（JDK 25 + Gradle 9.8）。
