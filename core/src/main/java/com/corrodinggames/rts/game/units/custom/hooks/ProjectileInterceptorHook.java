@@ -12,7 +12,7 @@ import io.github.rwx.geometry.PointF;
  * 拦截炮塔钩子。
  * RWX 改动：①开关显式化（缺 key 时按旧规则自动开启）②排除标签/瞬间命中过滤
  * ③拦截时复用引擎自己的炮塔状态机开火（冷却 / 预热 / 转向全部沿用引擎语义，不自造充能）
- * ④锁定同一枚抛射物持续瞄准，瞄它的飞行反向角（入射角），该角度稳定、不随距离抖动。
+ * ④锁定同一枚抛射物并每帧按它的 XY 方位持续跟踪瞄准（不看高度，高度只参与过滤）。
  *
  * 开火走引擎同款「rotation 归零就绪 → 扣费 → 发射 → rotation 重置为 b(i)+t(i)」，
  * rotation 依旧由引擎每帧递减，这里绝不再写正数把它"充回去"。
@@ -128,12 +128,17 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
         // ---- 以下全部沿用引擎炮塔状态机语义，不再自造 rotation 充能 ----
         UnitMovementData movementData = customUnit.movementLevels[turretIndex];
 
-        // 1) 转向：目标角取抛射物飞行方向的反向角（入射角）。这个角在弹道直线飞行时是稳定值，
-        //    不会像「炮塔→抛射物当前位置」那样随距离快速变化，炮塔能更快完成对准。
+        // 1) 转向：每帧都从锁定抛射物的当前 XY 重算方位角，持续跟踪它。
+        //    只看 posX/posY，不看 posZ；高度只参与上面的「能不能拦」过滤，不参与瞄准。
+        //    起点取炮塔实际位置 G(i) + 本级 shadowOffset，和引擎攻击敌人时一致。
         //    仍走引擎同一个 customUnit.a(frameDelta, angle, i)，转速/加减速与攻击敌人时完全一致。
-        float incomingAngle = Utility.normalizeAngle(projectile.angle + 180.0f, false);
-        float angleDelta = Utility.rotateTowardsAngle(movementData.targetX, incomingAngle, 360.0f);
-        float remaining = customUnit.a(frameDelta, incomingAngle, turretIndex);
+        PointF turretPos = customUnit.G(turretIndex);
+        PointF shadowOffset = customUnit.getShadowOffsetForLevel(turretIndex);
+        float wantAngle = Utility.getAngleBetweenPoints(
+                turretPos.x, turretPos.y,
+                projectile.posX + shadowOffset.x, projectile.posY + shadowOffset.y);
+        float angleDelta = Utility.rotateTowardsAngle(movementData.targetX, wantAngle, 360.0f);
+        float remaining = customUnit.a(frameDelta, wantAngle, turretIndex);
 
         float warmup = Math.max(0.0f, customUnit.e(turretIndex));
         boolean warmupNoReset = customUnit.s(turretIndex);
