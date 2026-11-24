@@ -208,6 +208,11 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
         }
     }
 
+    /** 引擎待机复位用：该炮塔是否正在锁定瞄准抛射物。 */
+    public static boolean isAiming(BaseUnit unit, int turretIndex) {
+        return getTargetLock(unit, turretIndex) != null;
+    }
+
     private static Projectile getTargetLock(BaseUnit unit, int turretIndex) {
         Projectile[] locked = RWX_TARGET_LOCK.get(unit);
         return locked != null && turretIndex < locked.length ? locked[turretIndex] : null;

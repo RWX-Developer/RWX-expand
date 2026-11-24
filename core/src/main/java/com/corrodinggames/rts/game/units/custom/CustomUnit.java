@@ -4052,6 +4052,10 @@ public class CustomUnit extends MovableUnit implements TransportUnitInterface, U
 
     @Override // com.corrodinggames.rts.game.units.OrderableUnit
     public boolean b(int i, float f) {
+        // RWX：拦截炮正在锁定抛射物时，禁止待机复位把炮管拉回 idleDir。
+        if (ProjectileInterceptorHook.isAiming(this, i)) {
+            return false;
+        }
         float fC;
         TurretConfig turretConfig = this.unitConfig.turrets[i];
         if (turretConfig.idleSweepAngle != 0.0f) {

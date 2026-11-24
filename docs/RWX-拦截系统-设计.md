@@ -131,6 +131,7 @@
 - 开火时已补回 `CustomUnit.a(BaseUnit, int)` 里的联炮冷却联动（`linkDelayWithTurret` + `attachedTo` 父炮 recoil），否则拦截弹走 6 参数生成弹丸会绕过这段，附属炮塔与主炮塔冷却失步。
 - 当前游戏内三处拦截炮（`antinuke_launcher`、`experimental_gunship`、`experimental_carrier`、`nautilus` 等）都是独立 `canShoot:false` 炮塔，没有 `attachedTo` / `slave`，所以不受角度继承影响。
 - 拦截炮塔在解析层已默认 `shouldResetTurret: false`（显式写 `true` 仍会被尊重，但会导致炮塔被拉回 `idleDir`、表现为不转或只转一点）；若挂到主炮上更不要写 `true`。`slave` 父炮不要单独开拦截，应由负责索敌的子炮承担。
+- 动态状态：只要该炮塔通过 `RWX_TARGET_LOCK` 锁定着抛射物，`CustomUnit.b(i, f)` 就返回 `false`，引擎这一帧不会执行待机复位/`idleSpin`；目标失效或开火后状态自动清除，炮塔才恢复普通待机行为。
 
 ### 验证到哪一步
 
