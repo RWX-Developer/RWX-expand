@@ -10,15 +10,23 @@ import io.github.rwx.geometry.PointF;
 
 /**
  * 拦截炮塔钩子。
- * RWX 改动只在三点：①开关显式化（缺 key 时按旧规则自动开启）②新增排除标签/瞬间命中过滤 ③拦截时累加 rotation 充能。
- * 索敌与开火流程保持原版：遍历全部炮弹，命中的最后一个当作目标，不转向、不瞄准。
+ * RWX 改动只在三点：①开关显式化（缺 key 时按旧规则自动开启）②新增排除标签/瞬间命中过滤
+ * ③拦截时复用引擎自己的炮塔状态机开火（冷却 / 预热 / 转向全部沿用引擎语义，不自造充能）。
+ *
+ * 索敌保持原版：遍历全部炮弹，命中的最后一个当作目标。开火走引擎同款
+ * 「rotation 归零就绪 → 扣费 → 发射 → rotation 重置为 b(i)+t(i)」，
+ * rotation 依旧由引擎每帧递减，这里绝不再写正数把它"充回去"。
  */
 public class ProjectileInterceptorHook extends CustomUnitRenderHook {
     public static final CustomUnitRenderHook a = new ProjectileInterceptorHook();
     static final PointF b = new PointF();
 
-    /** 每台单位每个炮塔的拦截充能累计（毫秒），弱引用自动回收。 */
-    private static final java.util.Map<BaseUnit, long[]> RWX_CHARGE =
+    /**
+     * fireDelay 额外等待累加器（frameDelta 帧单位）。
+     * 仅当 interceptProjectiles_fireDelay > 0 时启用；默认走引擎冷却、不碰这个 map。
+     * 弱引用自动回收，按下标为炮塔 index。
+     */
+    private static final java.util.Map<BaseUnit, float[]> RWX_FIREDELAY_WAIT =
             java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
 
     @Override
@@ -97,32 +105,58 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
         if (projectile == null) {
             return;
         }
-        // 转向：借引擎自己的炮塔转向函数（a(float, float, int)），转速/加减速与普通索敌完全一致。
+        // ---- 以下全部沿用引擎炮塔状态机语义，不再自造 rotation 充能 ----
         int turretIndex = turretConfig.turretIndex;
         if (turretIndex < 0 || turretIndex >= customUnit.movementLevels.length) {
             turretIndex = 0;
         }
         UnitMovementData movementData = customUnit.movementLevels[turretIndex];
+
+        // 1) 转向：直接调引擎的转向函数（它改 movementData.targetX，返回剩余角度差）
         float wantAngle = Utility.getAngleBetweenPoints(customUnit.posX, customUnit.posY, projectile.posX, projectile.posY);
         float remaining = customUnit.a(frameDelta, wantAngle, turretIndex);
-        Float overrideDelay = turretConfig.interceptProjectilesFireDelay;
-        float delay = overrideDelay != null ? overrideDelay.floatValue() : customUnit.b(turretIndex);
+
+        // 2) 预热：和引擎 advanceMovementLevelTowardTarget 同款，把 speed 累到 e(i)=warmup。
+        //    s(i)=warmupNoReset 为真时视为常驻就绪（引擎同款）。
         float warmup = Math.max(0.0f, customUnit.e(turretIndex));
-        long[] chargeArr = RWX_CHARGE.get(customUnit);
-        if (chargeArr == null || turretIndex >= chargeArr.length) {
-            chargeArr = new long[Math.max(turretIndex + 1, customUnit.movementLevels.length)];
-            RWX_CHARGE.put(customUnit, chargeArr);
+        boolean warmupNoReset = customUnit.s(turretIndex);
+        if (warmupNoReset) {
+            movementData.speed = warmup;
+        } else if (movementData.speed < warmup) {
+            movementData.speed = Math.min(warmup, movementData.speed + frameDelta);
         }
-        chargeArr[turretIndex] += (long) Math.max(0.0f, frameDelta * 1000.0f);
-        float charged = chargeArr[turretIndex];
-        movementData.rotation = Math.min(charged, delay);
-        if (charged < delay + warmup) {
+        boolean warmupReady = movementData.speed >= warmup;
+
+        // 3) 冷却门槛：引擎每帧已把 rotation 递减，归零才就绪（OrderableUnit:3296）。
+        //    绝不能写正数把它"充回去"——那是旧代码的 bug。
+        if (movementData.rotation != 0.0f) {
             return;
         }
         // 炮管没转到位不开火（引擎同款小角度判定）
         if (Utility.abs(remaining) > 2.0f) {
             return;
         }
+        if (!warmupReady) {
+            return;
+        }
+
+        // 4) 可选 fireDelay：这是"就绪之后额外等多久"，用独立累加器，绝不碰 rotation。
+        //    默认 -1/null 时完全跳过，行为与引擎普通开火一致。
+        Float overrideDelay = turretConfig.interceptProjectilesFireDelay;
+        if (overrideDelay != null && overrideDelay.floatValue() > 0.0f) {
+            float[] waitArr = RWX_FIREDELAY_WAIT.get(customUnit);
+            if (waitArr == null || turretIndex >= waitArr.length) {
+                waitArr = new float[Math.max(turretIndex + 1, customUnit.movementLevels.length)];
+                RWX_FIREDELAY_WAIT.put(customUnit, waitArr);
+            }
+            waitArr[turretIndex] += frameDelta;
+            if (waitArr[turretIndex] < overrideDelay.floatValue()) {
+                return;
+            }
+            waitArr[turretIndex] = 0.0f;
+        }
+
+        // 5) 发射：照抄引擎 a(baseUnit,i) 的顺序 —— 扣资源、生成弹丸、设 parent。
         customUnit.b(turretConfig);
         Projectile projectileA = customUnit.a((BaseUnit) null, projectile.posX, projectile.posY, turretConfig.turretIndex, (CustomProjectileTemplate) null, 0);
         if (projectileA == null) {
@@ -130,8 +164,13 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
         }
         projectileA.fliesToPosition = true;
         projectileA.parentProjectile = projectile;
-        chargeArr[turretIndex] = 0L;
-        movementData.rotation = 0.0f;
+
+        // 6) 重置冷却：引擎同款 rotation = b(i) + t(i)，之后由引擎每帧递减到 0 再次就绪。
+        //    非 warmupNoReset 炮塔发射后清空预热（引擎同款 speed=0）。
+        movementData.rotation = customUnit.b(turretIndex) + customUnit.t(turretIndex);
+        if (!warmupNoReset) {
+            movementData.speed = 0.0f;
+        }
     }
 
     public static boolean a(Projectile projectile) {

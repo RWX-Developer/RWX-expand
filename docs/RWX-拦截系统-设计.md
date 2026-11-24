@@ -84,31 +84,37 @@
 
 | 文件 | 改动 |
 | --- | --- |
-| `TurretConfig.java` | 新增 4 个字段与解析；`hasProjectileInterceptorTurret` 的置位改成看 `interceptProjectiles`（或写了过滤器） |
-| `hooks/ProjectileInterceptorHook.java` | 开关换成 `interceptProjectiles`；加瞬间命中过滤、排除标签、包含标签（只在写了时生效）、选最近、充能/预热门槛、转向瞄准、开火后重置充能 |
+| `TurretConfig.java` | 新增 4 个字段与解析；`hasProjectileInterceptorTurret` 的置位改成看 `interceptProjectiles`（或写了过滤器，兼容老模组） |
+| `hooks/ProjectileInterceptorHook.java` | 开关换成 `interceptProjectiles`；加瞬间命中过滤、排除标签、包含标签（只在写了时生效）；**开火改为完全复用引擎炮塔状态机** |
 
-### 关键字段（实测确认）
+### 关键字段（以引擎源码为准，单位统一为「帧」）
 
-- `b(i)` = 炮塔 `delay`（毫秒，已乘 `shootDelayMultiplier`）
-- `e(i)` = `warmup`（毫秒）
-- `movementLevels[i].rotation` = 已充能时间，0..delay
-- `movementLevels[i].speed` = 预热进度，0..warmup
+- `b(i)` = 炮塔 `delay`（帧，`delay: 2s` 经 `parseUnitValue` ×60 = 120，已乘 `shootDelayMultiplier`）
+- `t(i)` = `warmupShootDelayTransfer` 折算的延迟补偿（帧，通常为 0）
+- `e(i)` = `warmup`（帧）
+- `movementLevels[i].rotation` = **开火冷却倒数**：发射后 = `b(i)+t(i)`，引擎每帧 `moveTowardsZero(rotation, f)` 递减，**归零才就绪**（`OrderableUnit.java:899 / :3296 / :3312`）
+- `movementLevels[i].speed` = 预热进度，0..warmup（引擎 `advanceMovementLevelTowardTarget` 累加）
 - `movementLevels[i].targetX` = 炮管角度（度）
 
-拦截开火条件：`rotation >= (fireDelay>0 ? fireDelay : b(i))` 且 `speed >= warmup`，炮管角度差 <= 6° 才发射，每 tick 最多转 12°。
+### 当前拦截开火条件（与引擎同构）
 
-### 兼容性（要告诉模组作者）
+1. 资源够（`customUnit.a(turretConfig)`）
+2. 目标炮弹通过全部过滤（瞬间命中/标签/高度/距离/友军/已锁定）
+3. `rotation == 0`（引擎冷却就绪）
+4. 炮管角度差 `<= 2°`
+5. 预热 `speed >= warmup`
+6. （可选 `fireDelay > 0`）额外等待累加器到点
+7. 扣资源 → 发射弹丸 → `rotation = b(i)+t(i)`、`speed = 0`
 
-`interceptProjectiles_withTags` **不再负责开启拦截**。老模组只写 withTags 的话，现在不会拦截了，必须补一行：
+> **重要修正**：早期版本（14:49 / 15:47 两次提交）曾自造 `RWX_CHARGE` 毫秒累加并写 `rotation = min(charge, delay)`，方向与引擎的「倒数归零」完全相反、量纲也不一致，导致炮塔永远处于冷却中、**完全拦不住炮弹**。现已删除该机制，改为上面这套引擎同构逻辑。
 
-```
-interceptProjectiles: true
-```
+### 兼容性（模组作者注意）
 
-三个 `interceptProjectiles_and*` 距离/高度键仍然无条件解析，避免 luke 报「键未使用」。
+- 老模组只写 `interceptProjectiles_withTags`、没写 `interceptProjectiles` 的，`TurretConfig.java:559` 仍会自动推断为拦截炮塔（保持兼容，无需补键）。
+- 新模组推荐显式写 `interceptProjectiles: true`；`withTags` 现在只是「只拦这些标签」的过滤器，不再负责开启。
+- 三个 `interceptProjectiles_and*` 距离/高度键无条件解析，避免 luke 报「键未使用」。
 
 ### 验证到哪一步
 
-- 编译通过；headless 600 tick 启动正常。
-- 之前 `units/experimental_carrier/Experiemental_carrier.ini` 因为键判定未使用而报错，修成无条件解析后不再报错（这条是从真实报错里抓到的）。
-- **没有验证**拦截是否真的击中炮弹、转向是否看起来正常——需要一个 `interceptProjectiles: true` 的测试炮塔和带炮弹的对局。
+- `:core:compileJava` 编译通过（JDK 25 + Gradle 9.8）。
+- **尚未做**战斗场景验证：需要一个 `interceptProjectiles: true` + `withTags: nuke` 的测试炮塔和带 nuke 的对局，确认拦截弹真的生成并击中目标炮弹。原版（`42e1504`）逻辑已知可用，本次重写刻意保持索敌/发射同构，风险集中在转向阈值和预热衔接。
