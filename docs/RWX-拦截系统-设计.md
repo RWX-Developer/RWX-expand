@@ -132,6 +132,7 @@
 - 当前游戏内三处拦截炮（`antinuke_launcher`、`experimental_gunship`、`experimental_carrier`、`nautilus` 等）都是独立 `canShoot:false` 炮塔，没有 `attachedTo` / `slave`，所以不受角度继承影响。
 - 拦截炮塔在解析层已默认 `shouldResetTurret: false`（显式写 `true` 仍会被尊重，但会导致炮塔被拉回 `idleDir`、表现为不转或只转一点）；若挂到主炮上更不要写 `true`。`slave` 父炮不要单独开拦截，应由负责索敌的子炮承担。
 - 动态状态：只要该炮塔通过 `RWX_TARGET_LOCK` 锁定着抛射物，`CustomUnit.b(i, f)` 就返回 `false`，引擎这一帧不会执行待机复位/`idleSpin`；目标失效或开火后状态自动清除，炮塔才恢复普通待机行为。
+- 子炮触发父炮：`slave` 子炮的 `linkedTurretIndex` 指向父炮。子炮进入拦截瞄准时，会同时给父炮写入锁定状态，并把父炮 `targetX` 同步为子炮转到的角度（清掉父炮转向速度），父炮因此也进入“瞄准抛射物”状态且不会旋回原点，但父炮本身不额外发射拦截弹。目标失效或子炮开火后父炮状态一并清除。
 
 ### 验证到哪一步
 

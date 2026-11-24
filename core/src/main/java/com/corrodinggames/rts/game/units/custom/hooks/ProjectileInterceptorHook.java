@@ -77,6 +77,11 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
         if (turretIndex < 0 || turretIndex >= customUnit.movementLevels.length) {
             turretIndex = 0;
         }
+        // attachedTo/slave 子炮的 linkedTurretIndex 指向父炮；父炮只跟随角度/状态，不额外开火。
+        int parentIndex = turretConfig.linkedTurretIndex;
+        if (parentIndex < 0 || parentIndex >= customUnit.movementLevels.length || parentIndex == turretIndex) {
+            parentIndex = -1;
+        }
         float f = turretConfig.interceptProjectilesAndTargetingGroundUnderDistance;
         float f2 = turretConfig.interceptProjectilesAndUnderDistance;
         float f3 = turretConfig.interceptProjectilesAndOverHeight;
@@ -121,6 +126,9 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
         }
         if (projectile == null) {
             clearTargetLock(customUnit, turretIndex);
+            if (parentIndex != -1) {
+                clearTargetLock(customUnit, parentIndex);
+            }
             resetFireDelay(customUnit, turretIndex);
             return;
         }
@@ -139,6 +147,15 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
                 projectile.posX + shadowOffset.x, projectile.posY + shadowOffset.y);
         float angleDelta = Utility.rotateTowardsAngle(movementData.targetX, wantAngle, 360.0f);
         float remaining = customUnit.a(frameDelta, wantAngle, turretIndex);
+
+        // 子炮在拦截时，父炮同步进入瞄准状态并跟随子炮角度（父炮不额外发射）。
+        if (parentIndex != -1) {
+            setTargetLock(customUnit, parentIndex, projectile);
+            UnitMovementData parentData = customUnit.movementLevels[parentIndex];
+            parentData.targetX = movementData.targetX;
+            parentData.velocityX = 0.0f;
+            parentData.velocityY = 0.0f;
+        }
 
         float warmup = Math.max(0.0f, customUnit.e(turretIndex));
         boolean warmupNoReset = customUnit.s(turretIndex);
@@ -197,8 +214,11 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
         }
         projectileA.fliesToPosition = true;
         projectileA.parentProjectile = projectile;
-        // 目标已经交给拦截弹处理，本炮塔下一帧重新锁定新的抛射物。
+        // 目标已经交给拦截弹处理，本炮塔（及跟随的父炮）下一帧重新锁定新的抛射物。
         clearTargetLock(customUnit, turretIndex);
+        if (parentIndex != -1) {
+            clearTargetLock(customUnit, parentIndex);
+        }
 
         // 6) 重置冷却：引擎同款 rotation = b(i) + t(i)，之后由引擎每帧递减到 0 再次就绪。
         //    非 warmupNoReset 炮塔发射后清空预热（引擎同款 speed=0）。
