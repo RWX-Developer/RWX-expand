@@ -100,7 +100,7 @@
 
 1. 资源够（`customUnit.a(turretConfig)`）
 2. 目标炮弹通过全部过滤（瞬间命中/标签/高度/距离/友军/已锁定）。每炮塔会**锁定**当前目标：只要它还通过过滤就一直瞄它，避免每帧换目标来回摆；开火后清空锁定
-3. **炮管先转到拦截方向**：走引擎同一个 `customUnit.a(frameDelta, angle, i)`，转速/加减速与攻击敌人时一致（`turnSpeed` / `turnSpeedAcceleration` / `turnSpeedDeceleration`）。瞄的是**提前量拦截点**（按目标 `velocityX/Y + speed*cos/sin(angle)` 与本炮拦截弹速度求最早相遇时刻），不是抛射物当前位置；目标角从炮塔实际位置 `G(i)` 算到「拦截点 + 本级 shadowOffset」。剩余角度 `<= 2°`（固定阈值，不允许 `canAttackMaxAngle=181` 这类「免转向发射」配置绕过）
+3. **炮管先转到入射角**：目标角取抛射物飞行方向的反向角 `projectile.angle + 180`（归一化到 -180..180）。这是稳定角，不会像「炮塔→抛射物当前位置」那样随距离快速变化。先算炮塔当前角与入射角的差 `rotateTowardsAngle(targetX, incomingAngle, 360)`，再走引擎同一个 `customUnit.a(frameDelta, angle, i)`，转速/加减速与攻击敌人时一致（`turnSpeed` / `turnSpeedAcceleration` / `turnSpeedDeceleration`）。剩余角度 `<= 2°`（固定阈值，不允许 `canAttackMaxAngle=181` 这类「免转向发射」配置绕过）
 4. `rotation == 0`（引擎冷却就绪）
 5. 预热 `speed >= warmup`；预热只在第 3、4 步都通过后开始累，转向/冷却期间按 `warmupCallDownRate` 回落
 6. （可选 `fireDelay > 0`）额外等待累加器到点，未就绪时同样清零重来

@@ -12,7 +12,7 @@ import io.github.rwx.geometry.PointF;
  * 拦截炮塔钩子。
  * RWX 改动：①开关显式化（缺 key 时按旧规则自动开启）②排除标签/瞬间命中过滤
  * ③拦截时复用引擎自己的炮塔状态机开火（冷却 / 预热 / 转向全部沿用引擎语义，不自造充能）
- * ④锁定同一枚抛射物持续瞄准，并按双方速度求提前量，瞄「拦截点」而不是当前位置。
+ * ④锁定同一枚抛射物持续瞄准，瞄它的飞行反向角（入射角），该角度稳定、不随距离抖动。
  *
  * 开火走引擎同款「rotation 归零就绪 → 扣费 → 发射 → rotation 重置为 b(i)+t(i)」，
  * rotation 依旧由引擎每帧递减，这里绝不再写正数把它"充回去"。
@@ -35,9 +35,6 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
      */
     private static final java.util.Map<BaseUnit, Projectile[]> RWX_TARGET_LOCK =
             java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
-
-    /** 求提前量时复用的结果，避免每帧分配小数组。 */
-    private static final float[] RWX_AIM_POINT = new float[2];
 
     @Override
     public void b(CustomUnit customUnit, float f) {
@@ -131,18 +128,12 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
         // ---- 以下全部沿用引擎炮塔状态机语义，不再自造 rotation 充能 ----
         UnitMovementData movementData = customUnit.movementLevels[turretIndex];
 
-        // 1) 转向：和攻击敌人时走同一个引擎转向函数 customUnit.a(frameDelta, angle, i)，
-        //    转速/加减速完全取自 c(i)=turnSpeed、w(i)/y(i)，这里不另造转速。
-        //    目标角也按引擎同款算法：从炮塔实际位置 G(i) 指向目标 + 该级炮塔的 shadowOffset，
-        //    而不是从单位中心算，避免偏移炮塔瞄准点不一致。
-        PointF turretPos = customUnit.G(turretIndex);
-        PointF shadowOffset = customUnit.getShadowOffsetForLevel(turretIndex);
-        // 瞄拦截点而不是抛射物当前位置：按双方速度求最早相遇时刻，炮管一开始就转向未来位置。
-        float[] aimPoint = predictInterceptPoint(customUnit, turretConfig, projectile, turretPos);
-        float wantAngle = Utility.getAngleBetweenPoints(
-                turretPos.x, turretPos.y,
-                aimPoint[0] + shadowOffset.x, aimPoint[1] + shadowOffset.y);
-        float remaining = customUnit.a(frameDelta, wantAngle, turretIndex);
+        // 1) 转向：目标角取抛射物飞行方向的反向角（入射角）。这个角在弹道直线飞行时是稳定值，
+        //    不会像「炮塔→抛射物当前位置」那样随距离快速变化，炮塔能更快完成对准。
+        //    仍走引擎同一个 customUnit.a(frameDelta, angle, i)，转速/加减速与攻击敌人时完全一致。
+        float incomingAngle = Utility.normalizeAngle(projectile.angle + 180.0f, false);
+        float angleDelta = Utility.rotateTowardsAngle(movementData.targetX, incomingAngle, 360.0f);
+        float remaining = customUnit.a(frameDelta, incomingAngle, turretIndex);
 
         float warmup = Math.max(0.0f, customUnit.e(turretIndex));
         boolean warmupNoReset = customUnit.s(turretIndex);
@@ -150,7 +141,7 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
         boolean cooldownReady = movementData.rotation == 0.0f;
         // 拦截炮必须真的把炮管转到目标方向。这里刻意用固定小角度，
         // 不能被 canAttackMaxAngle=181 那种「免转向发射」配置绕过（那是导弹语义）。
-        boolean turretAligned = Utility.abs(remaining) <= 2.0f;
+        boolean turretAligned = Utility.abs(angleDelta) <= 2.0f || Utility.abs(remaining) <= 2.0f;
 
         // 2) 先转向、再预热：转向中或冷却中不允许攒预热，已攒的按引擎 warmupCallDownRate 回落。
         //    这样炮管到位后还要走完 warmup 才会开火，不会出现「弹比炮管快」。
@@ -195,7 +186,7 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
         //    这一步不能省：拦截钩子直接调 6 参数生成弹丸，绕过了 CustomUnit.a(baseUnit,i) 里的联炮联动。
         applyLinkedTurretCooldown(customUnit, turretConfig, turretIndex);
         customUnit.b(turretConfig);
-        Projectile projectileA = customUnit.a((BaseUnit) null, aimPoint[0], aimPoint[1], turretConfig.turretIndex, (CustomProjectileTemplate) null, 0);
+        Projectile projectileA = customUnit.a((BaseUnit) null, projectile.posX, projectile.posY, turretConfig.turretIndex, (CustomProjectileTemplate) null, 0);
         if (projectileA == null) {
             return;
         }
@@ -231,69 +222,6 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
         if (locked != null && turretIndex < locked.length) {
             locked[turretIndex] = null;
         }
-    }
-
-    /**
-     * 求最早拦截点：|目标当前位置 + 目标速度 * t - 炮塔位置| = 拦截弹速度 * t。
-     * 解不出来（目标太快/方向背离）时退化为瞄当前位置。
-     */
-    private static float[] predictInterceptPoint(CustomUnit customUnit, TurretConfig turretConfig,
-                                                 Projectile target, PointF origin) {
-        float ownSpeed = 5.0f;
-        int projectileId = turretConfig.a(customUnit);
-        CustomProjectileTemplate[] templates = customUnit.unitConfig.projectileTemplatesById;
-        if (templates != null && projectileId >= 0 && projectileId < templates.length) {
-            CustomProjectileTemplate template = templates[projectileId];
-            if (template != null) {
-                float configured = template.targetSpeed > 0.0f ? template.targetSpeed : template.w;
-                if (configured > 0.0f) {
-                    ownSpeed = configured;
-                }
-            }
-        }
-
-        float rx = target.posX - origin.x;
-        float ry = target.posY - origin.y;
-        float vx = target.velocityX + Utility.fastCos(target.angle) * target.speed;
-        float vy = target.velocityY + Utility.fastSin(target.angle) * target.speed;
-
-        float qa = vx * vx + vy * vy - ownSpeed * ownSpeed;
-        float qb = 2.0f * (rx * vx + ry * vy);
-        float qc = rx * rx + ry * ry;
-        float t = 0.0f;
-        if (qc > 0.0f) {
-            if (Utility.abs(qa) < 1.0E-6f) {
-                if (Utility.abs(qb) > 1.0E-6f) {
-                    t = -qc / qb;
-                }
-            } else {
-                float disc = qb * qb - 4.0f * qa * qc;
-                if (disc >= 0.0f) {
-                    float sq = (float) Math.sqrt(disc);
-                    float t1 = (-qb + sq) / (2.0f * qa);
-                    float t2 = (-qb - sq) / (2.0f * qa);
-                    t = Float.MAX_VALUE;
-                    if (t1 > 0.0f && t1 < t) {
-                        t = t1;
-                    }
-                    if (t2 > 0.0f && t2 < t) {
-                        t = t2;
-                    }
-                    if (t == Float.MAX_VALUE) {
-                        t = 0.0f;
-                    }
-                }
-            }
-        }
-        if (t < 0.0f) {
-            t = 0.0f;
-        }
-        if (t > 600.0f) {
-            t = 600.0f;
-        }
-        RWX_AIM_POINT[0] = target.posX + vx * t;
-        RWX_AIM_POINT[1] = target.posY + vy * t;
-        return RWX_AIM_POINT;
     }
 
     /**
