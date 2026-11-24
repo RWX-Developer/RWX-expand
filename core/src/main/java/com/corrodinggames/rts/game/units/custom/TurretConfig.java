@@ -246,6 +246,15 @@ public class TurretConfig {
     public float interceptProjectilesAndUnderDistance = 2000.0f;
     /* JADX INFO: renamed from: an */
     public float interceptProjectilesAndOverHeight = -999.0f;
+    /**
+     * RWX：拦截只在炮塔正前方扇区内进行（半角，度）。
+     *
+     * 参考方向沿用引擎自己的射界判定语义：单位朝向 + 本炮塔 idleDir
+     * （见 CustomUnit.a(TurretConfig,int,BaseUnit,boolean,boolean) 里的 limitingAngle 分支），
+     * 所以「正面」会跟着车体一起转。默认 90 = 正前方半圆；
+     * 写 180 或 <=0 表示不做扇区限制（恢复全向拦截）。
+     */
+    public float interceptProjectilesOnlyInFrontAngle = 90.0f;
     public int ap = -1;
     /* JADX INFO: renamed from: aq */
     public boolean shouldResetTurret = true;
@@ -343,6 +352,7 @@ public class TurretConfig {
         this.interceptProjectilesAndTargetingGroundUnderDistance = turretConfig.interceptProjectilesAndTargetingGroundUnderDistance;
         this.interceptProjectilesAndUnderDistance = turretConfig.interceptProjectilesAndUnderDistance;
         this.interceptProjectilesAndOverHeight = turretConfig.interceptProjectilesAndOverHeight;
+        this.interceptProjectilesOnlyInFrontAngle = turretConfig.interceptProjectilesOnlyInFrontAngle;
         this.onShootPlayAnimation = turretConfig.onShootPlayAnimation;
         this.imageDrawOffsetX = turretConfig.imageDrawOffsetX;
         this.imageDrawOffsetY = turretConfig.imageDrawOffsetY;
@@ -568,6 +578,8 @@ public class TurretConfig {
         turretConfig.interceptProjectilesAndTargetingGroundUnderDistance = iniFile.getFloat(str, "interceptProjectiles_andTargetingGroundUnderDistance", Float.valueOf(turretConfig.interceptProjectilesAndTargetingGroundUnderDistance)).floatValue();
         turretConfig.interceptProjectilesAndUnderDistance = iniFile.getFloat(str, "interceptProjectiles_andUnderDistance", Float.valueOf(turretConfig.interceptProjectilesAndUnderDistance)).floatValue();
         turretConfig.interceptProjectilesAndOverHeight = iniFile.getFloat(str, "interceptProjectiles_andOverHeight", Float.valueOf(turretConfig.interceptProjectilesAndOverHeight)).floatValue();
+        // RWX：拦截扇区半角。不写默认 90（正前方半圆）；写 180 或负数 = 不限方向，全向拦截。
+        turretConfig.interceptProjectilesOnlyInFrontAngle = iniFile.getFloat(str, "interceptProjectiles_onlyInFrontAngle", Float.valueOf(turretConfig.interceptProjectilesOnlyInFrontAngle)).floatValue();
         // RWX：拦截炮塔必须保留转向结果，否则引擎每帧把炮管拉回 idleDir，
         // 拦截钩子的持续瞄准会被抵消，表现为「炮塔不转或只转一点」。
         // 没显式写 shouldResetTurret 的拦截炮默认 false；模组作者显式写的仍尊重。

@@ -88,6 +88,11 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
         AnimationSet includeTags = turretConfig.interceptProjectilesWithTags;
         AnimationSet excludeTags = turretConfig.interceptProjectilesWithoutTags;
         Projectile locked = getTargetLock(customUnit, turretIndex);
+        // RWX：只拦炮塔正前方扇区。参考方向沿用引擎射界判定语义（单位朝向 + 本炮塔 idleDir），
+        // 所以车体转向时「正面」跟着一起转。半角 >=180 或 <=0 视为不限方向，保持全向拦截。
+        float rwxFrontHalfAngle = turretConfig.interceptProjectilesOnlyInFrontAngle;
+        boolean rwxFrontOnly = rwxFrontHalfAngle > 0.0f && rwxFrontHalfAngle < 180.0f;
+        float rwxFrontAngle = rwxFrontOnly ? rwxFrontFacingAngle(customUnit, turretConfig) : 0.0f;
         Projectile projectile = null;
         Object[] objArrA = Projectile.a.a();
         int i = Projectile.a.size;
@@ -110,6 +115,15 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
             }
             if (f >= 0.0f && Utility.distanceSq(customUnit.posX, customUnit.posY, projectile2.targetX, projectile2.targetY) >= f * f) {
                 continue;
+            }
+            // RWX：扇区过滤——只处理落在炮塔正前方半角内的抛射物，背后/侧后的不接。
+            // 放在距离判定之后，常见情况（远处弹）能用更便宜的比较先排除。
+            if (rwxFrontOnly) {
+                float rwxBearing = Utility.getAngleBetweenPoints(
+                        customUnit.posX, customUnit.posY, projectile2.posX, projectile2.posY);
+                if (!isWithinFrontSector(rwxFrontAngle, rwxBearing, rwxFrontHalfAngle)) {
+                    continue;
+                }
             }
             if (projectile2.sourceUnit != null && (projectile2.sourceUnit.team.d(customUnit.team) || projectile2.sourceUnit.team == customUnit.team)) {
                 continue;
@@ -231,6 +245,35 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
     /** 引擎待机复位用：该炮塔是否正在锁定瞄准抛射物。 */
     public static boolean isAiming(BaseUnit unit, int turretIndex) {
         return getTargetLock(unit, turretIndex) != null;
+    }
+
+    /**
+     * RWX：方向是否落在「正面扇区」内（纯判定，便于回归测试）。
+     *
+     * @param refAngle  炮塔正面参考角（单位朝向 + idleDir）
+     * @param bearing   目标相对炮塔的方位角
+     * @param halfAngle 扇区半角；&lt;=0 或 &gt;=180 视为不限方向，永远返回 true
+     */
+    public static boolean isWithinFrontSector(float refAngle, float bearing, float halfAngle) {
+        if (halfAngle <= 0.0f || halfAngle >= 180.0f) {
+            return true;
+        }
+        return Utility.abs(Utility.rotateTowardsAngle(refAngle, bearing, 360.0f)) <= halfAngle;
+    }
+
+    /**
+     * RWX：炮塔「正面」参考角。
+     *
+     * 与引擎自己的射界判定完全同款（CustomUnit.a(TurretConfig,int,BaseUnit,boolean,boolean)
+     * 里的 limitingAngle 分支）：linkedTurretIndex 有效时取父炮当前角，否则取单位朝向，
+     * 两者都再加本炮塔的 idleDir。所以车体一转，各炮塔的「正面」自动跟着转。
+     */
+    private static float rwxFrontFacingAngle(CustomUnit customUnit, TurretConfig turretConfig) {
+        int linked = turretConfig.linkedTurretIndex;
+        if (linked >= 0 && linked < customUnit.movementLevels.length) {
+            return customUnit.movementLevels[linked].targetX + turretConfig.idleDir;
+        }
+        return customUnit.rotationSpeed + turretConfig.idleDir;
     }
 
     private static Projectile getTargetLock(BaseUnit unit, int turretIndex) {
