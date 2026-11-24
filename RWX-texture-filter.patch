@@ -1,0 +1,73 @@
+diff --git a/desktop/src/main/kotlin/io/github/rwx/slick/SlickGraphicsEngine.kt b/desktop/src/main/kotlin/io/github/rwx/slick/SlickGraphicsEngine.kt
+index 44f7595..7ed90c2 100644
+--- a/desktop/src/main/kotlin/io/github/rwx/slick/SlickGraphicsEngine.kt
++++ b/desktop/src/main/kotlin/io/github/rwx/slick/SlickGraphicsEngine.kt
+@@ -28,6 +28,32 @@ import kotlin.math.roundToInt
+ import java.awt.Color as AwtColor
+ import java.awt.Font as AwtFont
+ 
++/** 诊断用：-Drwx.textureFilterStats=true 时每 60000 次贴图绘制打一行 NEAREST/LINEAR 计数。 */
++private object TextureFilterStats {
++    val enabled = System.getProperty("rwx.textureFilterStats", "false") == "true"
++    val nearestCount = java.util.concurrent.atomic.AtomicLong()
++    val linearCount = java.util.concurrent.atomic.AtomicLong()
++
++    private var firstDrawLogged = false
++
++    fun record(useLinear: Boolean) {
++        if (!enabled) return
++        if (!firstDrawLogged) {
++            firstDrawLogged = true
++            io.github.rwx.logger.info { "Slick texture filter stats: recording started" }
++        }
++        val total = if (useLinear) linearCount.incrementAndGet() else nearestCount.incrementAndGet()
++        if (total % 60000L == 0L) {
++            io.github.rwx.logger.info {
++                "Slick texture filter stats: nearest=" + nearestCount.get() + " linear=" + linearCount.get()
++            }
++        }
++    }
++}
++
++private val textureFilterFollowsPaintDisabled: Boolean =
++    System.getProperty("rwx.textureFilterFollowsPaint", "true") == "false"
++
+ class SlickGraphicsEngine private constructor(
+     private val storage: PlatformStorage,
+     private val targetTexture: SlickTexture? = null,
+@@ -541,6 +567,27 @@ class SlickGraphicsEngine private constructor(
+         }
+     }
+ 
++    /**
++     * RWX：贴图过滤方式跟随绘制状态，和原版一致。
++     * 原版每次绘制都按 paint 的抗锯齿/filterBitmap 位与贴图自带 imageSmoothing 标志
++     * 现挑 GL_LINEAR / GL_NEAREST（像素单位在 zoom>=1 时走 NEAREST，所以边缘是硬像素）。
++     * RWX 的 Slick 后端此前从不改过滤方式，贴图永远是 Image 创建时的默认 GL_LINEAR ——
++     * 像素画被双线性插值抹开，单位与地形整体发糊。Skia 后端本来就有等价逻辑（见 SkiaGraphicsEngine）。
++     * 想回到旧行为：-Drwx.textureFilterFollowsPaint=false。
++     */
++    private fun textureWantsLinearFilter(texture: Texture?, paint: Paint?): Boolean {
++        if (textureFilterFollowsPaintDisabled) return true
++        return texture?.o == true || paint?.isFilterBitmap() == true || paint?.c() == true
++    }
++
++    private fun applyTextureFilter(image: Image, linear: Boolean) {
++        TextureFilterStats.record(linear)
++        if ((image.filter == GL11.GL_LINEAR) == linear) return
++        // 不在这里 GL.flush()：地图加载时瓦片绘制量以百万计，每切一次都强制同步会把加载拖慢一倍。
++        // 渲染器是 ImmediateModeOGLRenderer（无批处理队列），改过滤方式即时生效，不需要 flush。
++        image.setFilter(if (linear) Image.FILTER_LINEAR else Image.FILTER_NEAREST)
++    }
++
+     private fun drawImageRegion(
+         image: Image,
+         srcLeft: Int,
+@@ -577,6 +624,7 @@ class SlickGraphicsEngine private constructor(
+         val pivotYTransformed = transform.y(pivotY)
+         val imageColor = colorForImage(paint)
+         val shader = slickShaderFor(shaderTexture, paint)
++        applyTextureFilter(image, textureWantsLinearFilter(shaderTexture, paint))
+         withSlickBlendModeForPaint(g, paint) {
+             withSlickShader(g, shader, paint, shaderTexture) {
+                 drawTexturedQuad(

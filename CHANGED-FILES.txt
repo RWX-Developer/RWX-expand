@@ -1,0 +1,12 @@
+ M assets/assets.txt
+ M core/src/main/java/com/corrodinggames/rts/game/units/OrderableUnit.java
+ M core/src/main/java/com/corrodinggames/rts/game/units/management/UnitSpatialIndex.java
+ M core/src/main/java/com/corrodinggames/rts/gameFramework/SettingsEngine.java
+ M core/src/main/java/com/corrodinggames/rts/gameFramework/utility/UnitList.java
+ M core/src/main/kotlin/io/github/rwx/i18n/I18n.kt
+ M desktop/src/main/kotlin/io/github/rwx/DesktopMain.kt
+ M desktop/src/main/kotlin/io/github/rwx/headless/HeadlessDesktopRunner.kt
+ M desktop/src/main/kotlin/io/github/rwx/slick/EmbeddedSlickGameContainer.kt
+ M desktop/src/main/kotlin/io/github/rwx/slick/SlickGraphicsEngine.kt
+ M settings.gradle.kts
+?? bench-mod/

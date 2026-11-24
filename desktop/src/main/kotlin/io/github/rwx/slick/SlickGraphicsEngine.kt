@@ -51,14 +51,8 @@ private object TextureFilterStats {
     }
 }
 
-/**
- * RWX：贴图过滤跟随 paint 的补丁现在是 opt-in，默认关闭。
- * 打开后能拿到和原版一致的 NEAREST 像素边缘，但实测会让游戏卡在 "Loading map data"
- * （渲染线程正常跑 60fps、无死锁、无异常，遮罩就是不撤）。关掉就正常。
- * 想试：-Drwx.textureFilterFollowsPaint=true。
- */
-private val textureFilterFollowsPaintEnabled: Boolean =
-    System.getProperty("rwx.textureFilterFollowsPaint", "false") == "true"
+private val textureFilterFollowsPaintDisabled: Boolean =
+    System.getProperty("rwx.textureFilterFollowsPaint", "true") == "false"
 
 /**
  * RWX：Slick 是否挂的是 VAOGLRenderer（顶点数组批处理）。
@@ -92,12 +86,7 @@ class SlickGraphicsEngine private constructor(
     private var width: Int = targetTexture?.width() ?: 1
     private var height: Int = targetTexture?.height() ?: 1
     private var transform = TransformState()
-    // RWX：save/restore 改用扁平栈。原来是 ArrayDeque<TransformState> + 每次 copy()，
-    // 单位绘制每个都要 save/restore，JFR 里 43% 的分配都是 TransformState.copy（12000 兵≈每秒几十万个）。
-    // 语义不变：clip 仍按引用共享快照（跟 copy() 的默认参数一致）。
-    private var transformStackVals = FloatArray(7 * 32)
-    private var transformStackClips = arrayOfNulls<RectF>(32)
-    private var transformDepth = 0
+    private val transformStack = ArrayDeque<TransformState>()
     private val paintColorScratch = Color(1f, 1f, 1f, 1f)
     private val imageColorScratch = Color(1f, 1f, 1f, 1f)
     private val clearColorScratch = Color(1f, 1f, 1f, 1f)
@@ -469,40 +458,12 @@ class SlickGraphicsEngine private constructor(
     }
 
     override fun i() {
-        val depth = transformDepth
-        if ((depth + 1) * 7 > transformStackVals.size) {
-            transformStackVals = transformStackVals.copyOf(transformStackVals.size * 2)
-            transformStackClips = java.util.Arrays.copyOf(transformStackClips, transformStackClips.size * 2)
-        }
-        val t = transform
-        val o = depth * 7
-        transformStackVals[o] = t.translateX
-        transformStackVals[o + 1] = t.translateY
-        transformStackVals[o + 2] = t.scaleX
-        transformStackVals[o + 3] = t.scaleY
-        transformStackVals[o + 4] = t.rotationDegrees
-        transformStackVals[o + 5] = t.rotationPivotX
-        transformStackVals[o + 6] = t.rotationPivotY
-        transformStackClips[depth] = t.clip
-        transformDepth = depth + 1
+        transformStack.addLast(transform.copy())
     }
 
     override fun j() {
-        val depth = transformDepth - 1
-        if (depth >= 0) {
-            transformDepth = depth
-            val o = depth * 7
-            val v = transformStackVals
-            val t = transform
-            t.translateX = v[o]
-            t.translateY = v[o + 1]
-            t.scaleX = v[o + 2]
-            t.scaleY = v[o + 3]
-            t.rotationDegrees = v[o + 4]
-            t.rotationPivotX = v[o + 5]
-            t.rotationPivotY = v[o + 6]
-            t.clip = transformStackClips[depth]
-            transformStackClips[depth] = null
+        if (transformStack.isNotEmpty()) {
+            transform = transformStack.removeLast()
             applyClip()
         }
     }
@@ -593,11 +554,7 @@ class SlickGraphicsEngine private constructor(
 
     private fun createTexture(bytes: ByteArray, sourceKey: String): Texture =
         try {
-            TexTrace.tryUpload(sourceKey, bytes.size)
-            val startedAt = System.nanoTime()
-            val image = Image(ByteArrayInputStream(bytes), sourceKey, false)
-            TexTrace.doneUpload(sourceKey, image.width, image.height, (System.nanoTime() - startedAt) / 1_000_000)
-            SlickTexture(image, sourceKey)
+            SlickTexture(Image(ByteArrayInputStream(bytes), sourceKey, false), sourceKey)
         } catch (_: SlickException) {
             fallbackTexture
         }
@@ -626,15 +583,12 @@ class SlickGraphicsEngine private constructor(
      * 想回到旧行为：-Drwx.textureFilterFollowsPaint=false。
      */
     private fun textureWantsLinearFilter(texture: Texture?, paint: Paint?): Boolean {
-        if (!textureFilterFollowsPaintEnabled) return true
+        if (textureFilterFollowsPaintDisabled) return true
         return texture?.o == true || paint?.isFilterBitmap() == true || paint?.c() == true
     }
 
     private fun applyTextureFilter(image: Image, linear: Boolean) {
         TextureFilterStats.record(linear)
-        // 渲染到离屏图层缓冲时不切过滤：LayerBufferManager 建缓存时每格要重画几万块瓦片，
-        // 逐块改纹理参数会把它拖到分钟级（表现为卡在 Loading map data）。上屏时再切回来。
-        if (targetTexture != null) return
         if ((image.filter == GL11.GL_LINEAR) == linear) return
         // 过滤方式是纹理对象上的状态，在批量提交里对「已经攒进队列的顶点」也生效，
         // 所以批处理模式必须先冲刷，否则前面那些 NEAREST 的四边形会被一起改成 LINEAR。
@@ -724,13 +678,11 @@ class SlickGraphicsEngine private constructor(
         color: Color,
     ) {
         Graphics.setCurrent(graphics)
-        if (DRAW_STATS) DrawStats.quads++
         val imageWidth = image.width
         val imageHeight = image.height
         val texture = image.texture ?: return
         color.bind()
         texture.bind()
-        if (DRAW_STATS) DrawStats.bindCalls++
         val textureWidthScale = image.textureWidth / imageWidth
         val textureHeightScale = image.textureHeight / imageHeight
         val leftU = srcLeft * textureWidthScale
@@ -1504,7 +1456,6 @@ class SlickGraphicsEngine private constructor(
                 .firstOrNull(storage::assetFileExists)
 
     private companion object {
-        val DRAW_STATS = System.getenv("RWX_DRAW_STATS") != null
         val BACKEND_CAPABILITIES = GraphicsBackendCapabilities(
             fixedLayerBufferPixelSize = 512,
             extraLayerBufferCells = 1,

@@ -24,7 +24,6 @@ include(":ui")
 include(":mod-api")
 include(":mod-tools")
 include(":slick2d-lwjgl3")
-include(":editor")
 include(":desktop")
 include(":android")
 

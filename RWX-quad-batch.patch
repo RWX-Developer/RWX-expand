@@ -1,0 +1,120 @@
+diff --git a/desktop/src/main/kotlin/io/github/rwx/slick/EmbeddedSlickGameContainer.kt b/desktop/src/main/kotlin/io/github/rwx/slick/EmbeddedSlickGameContainer.kt
+index e9d218b..5e84c74 100644
+--- a/desktop/src/main/kotlin/io/github/rwx/slick/EmbeddedSlickGameContainer.kt
++++ b/desktop/src/main/kotlin/io/github/rwx/slick/EmbeddedSlickGameContainer.kt
+@@ -146,6 +146,12 @@ internal class EmbeddedSlickGameContainer(
+                     )
+                     GL11.glViewport(0, 0, viewport.width, viewport.height)
+                     updateAndRender(getDelta())
++                    // 顶点数组批处理时四边形攒在队列里，交换缓冲前必须提交，否则这一帧什么都没画出来。
++                    // 走 Renderer.get() 而不是 Graphics.flushBuffer()：后者是各绘制类在类初始化时捕获的
++                    // 静态 SGL 引用，切换渲染器后可能还指着旧实例。
++                    if (org.newdawn.slick.opengl.renderer.Renderer.get() is org.newdawn.slick.opengl.renderer.VAOGLRenderer) {
++                        org.newdawn.slick.opengl.renderer.Renderer.get().flush()
++                    }
+                     uiOverlay.render(SlickCanvasHost.currentUiFrame(), width, height, graphics)
+                     updateFPS()
+                     awtCanvas.swapBuffers()
+diff --git a/desktop/src/main/kotlin/io/github/rwx/slick/SlickGraphicsEngine.kt b/desktop/src/main/kotlin/io/github/rwx/slick/SlickGraphicsEngine.kt
+index 44f7595..cbc090d 100644
+--- a/desktop/src/main/kotlin/io/github/rwx/slick/SlickGraphicsEngine.kt
++++ b/desktop/src/main/kotlin/io/github/rwx/slick/SlickGraphicsEngine.kt
+@@ -28,6 +28,39 @@ import kotlin.math.roundToInt
+ import java.awt.Color as AwtColor
+ import java.awt.Font as AwtFont
+ 
++/** 诊断用：-Drwx.textureFilterStats=true 时每 60000 次贴图绘制打一行 NEAREST/LINEAR 计数。 */
++private object TextureFilterStats {
++    val enabled = System.getProperty("rwx.textureFilterStats", "false") == "true"
++    val nearestCount = java.util.concurrent.atomic.AtomicLong()
++    val linearCount = java.util.concurrent.atomic.AtomicLong()
++
++    private var firstDrawLogged = false
++
++    fun record(useLinear: Boolean) {
++        if (!enabled) return
++        if (!firstDrawLogged) {
++            firstDrawLogged = true
++            io.github.rwx.logger.info { "Slick texture filter stats: recording started" }
++        }
++        val total = if (useLinear) linearCount.incrementAndGet() else nearestCount.incrementAndGet()
++        if (total % 60000L == 0L) {
++            io.github.rwx.logger.info {
++                "Slick texture filter stats: nearest=" + nearestCount.get() + " linear=" + linearCount.get()
++            }
++        }
++    }
++}
++
++private val textureFilterFollowsPaintDisabled: Boolean =
++    System.getProperty("rwx.textureFilterFollowsPaint", "true") == "false"
++
++/**
++ * RWX：Slick 是否挂的是 VAOGLRenderer（顶点数组批处理）。
++ * 批处理模式下四边形不会立刻提交，所以「改状态之前先冲刷」和「半透明不用冲刷」两处要区别对待。
++ */
++private val slickRendererBatchesQuads: Boolean =
++    org.newdawn.slick.opengl.renderer.Renderer.get() is org.newdawn.slick.opengl.renderer.VAOGLRenderer
++
+ class SlickGraphicsEngine private constructor(
+     private val storage: PlatformStorage,
+     private val targetTexture: SlickTexture? = null,
+@@ -541,6 +574,29 @@ class SlickGraphicsEngine private constructor(
+         }
+     }
+ 
++    /**
++     * RWX：贴图过滤方式跟随绘制状态，和原版一致。
++     * 原版每次绘制都按 paint 的抗锯齿/filterBitmap 位与贴图自带 imageSmoothing 标志
++     * 现挑 GL_LINEAR / GL_NEAREST（像素单位在 zoom>=1 时走 NEAREST，所以边缘是硬像素）。
++     * RWX 的 Slick 后端此前从不改过滤方式，贴图永远是 Image 创建时的默认 GL_LINEAR ——
++     * 像素画被双线性插值抹开，单位与地形整体发糊。Skia 后端本来就有等价逻辑（见 SkiaGraphicsEngine）。
++     * 想回到旧行为：-Drwx.textureFilterFollowsPaint=false。
++     */
++    private fun textureWantsLinearFilter(texture: Texture?, paint: Paint?): Boolean {
++        if (textureFilterFollowsPaintDisabled) return true
++        return texture?.o == true || paint?.isFilterBitmap() == true || paint?.c() == true
++    }
++
++    private fun applyTextureFilter(image: Image, linear: Boolean) {
++        TextureFilterStats.record(linear)
++        if ((image.filter == GL11.GL_LINEAR) == linear) return
++        // 过滤方式是纹理对象上的状态，在批量提交里对「已经攒进队列的顶点」也生效，
++        // 所以批处理模式必须先冲刷，否则前面那些 NEAREST 的四边形会被一起改成 LINEAR。
++        // 即时模式没有队列，不需要这句——而地图加载时瓦片数以百万计，每切一次都强制同步会拖慢一倍。
++        if (slickRendererBatchesQuads) org.newdawn.slick.opengl.renderer.Renderer.get().flush()
++        image.setFilter(if (linear) Image.FILTER_LINEAR else Image.FILTER_NEAREST)
++    }
++
+     private fun drawImageRegion(
+         image: Image,
+         srcLeft: Int,
+@@ -577,6 +633,7 @@ class SlickGraphicsEngine private constructor(
+         val pivotYTransformed = transform.y(pivotY)
+         val imageColor = colorForImage(paint)
+         val shader = slickShaderFor(shaderTexture, paint)
++        applyTextureFilter(image, textureWantsLinearFilter(shaderTexture, paint))
+         withSlickBlendModeForPaint(g, paint) {
+             withSlickShader(g, shader, paint, shaderTexture) {
+                 drawTexturedQuad(
+@@ -597,7 +654,9 @@ class SlickGraphicsEngine private constructor(
+                 )
+             }
+         }
+-        if (imageColor.a < 0.999f) {
++        // 顶点数组批处理时颜色是逐顶点记录的，半透明不需要中途冲刷；
++        // 即时模式下这一句是历史遗留的保险，留着以免改变原有提交顺序。
++        if (imageColor.a < 0.999f && !slickRendererBatchesQuads) {
+             g.flushBuffer()
+         }
+     }
+@@ -1085,6 +1144,9 @@ class SlickGraphicsEngine private constructor(
+     private fun applyClip(g: Graphics? = graphics) {
+         val active = g ?: return
+         val clip = transform.clip
++        // 批处理渲染器把顶点攒在客户端数组里，改 scissor 前必须先把它们送下去，
++        // 否则旧的四边形会被新裁剪区重新裁一遍。
++        if (slickRendererBatchesQuads) org.newdawn.slick.opengl.renderer.Renderer.get().flush()
+         if (clip == null || clip.a()) {
+             active.clearClip()
+         } else {

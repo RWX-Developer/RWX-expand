@@ -1,0 +1,246 @@
+diff --git a/core/src/main/java/com/corrodinggames/rts/game/units/OrderableUnit.java b/core/src/main/java/com/corrodinggames/rts/game/units/OrderableUnit.java
+index b217dd0..878249e 100644
+--- a/core/src/main/java/com/corrodinggames/rts/game/units/OrderableUnit.java
++++ b/core/src/main/java/com/corrodinggames/rts/game/units/OrderableUnit.java
+@@ -363,7 +363,7 @@ public abstract class OrderableUnit extends UnitBase {
+                 orderableUnit.resolveSoftCollisionWithUnit(baseUnit, f, true);
+             }
+         };
+-        aM = new UnitList();
++        aM = new UnitList(64);
+         aP = new UnitStateTracker();
+         aQ = new SingleTargetPassiveCallback(true);
+         aR = new SingleTargetPassiveCallback(false);
+@@ -471,6 +471,7 @@ public abstract class OrderableUnit extends UnitBase {
+         GameEngine gameEngine = GameEngine.getInstance();
+         gameEngine.performanceProfiler.a(ProfilerSection.update_do_all_collisions);
+         int i = gameEngine.gameTimeMillis;
++        boolean perfCollisions = gameEngine.settingsEngine.perfCollisions;
+         UnitList unitList = aM;
+         BaseUnit[] baseUnitArrA = BaseUnit.bE.a();
+         int size = BaseUnit.bE.size();
+@@ -496,14 +497,18 @@ public abstract class OrderableUnit extends UnitBase {
+                     }
+                     orderableUnit.nearbyCollisionSize = (byte) 0;
+                     unitList.clear();
+-                    gameEngine.unitSpatialIndex.b(orderableUnit.posX, orderableUnit.posY, f2, unitList);
++                    if (perfCollisions) {
++                        gameEngine.unitSpatialIndex.b(orderableUnit.posX, orderableUnit.posY, f2, 16.0f, unitList);
++                    } else {
++                        gameEngine.unitSpatialIndex.b(orderableUnit.posX, orderableUnit.posY, f2, unitList);
++                    }
+                     BaseUnit[] baseUnitArrA2 = unitList.a();
+                     int i4 = unitList.b;
+                     for (int i5 = 0; i5 < i4; i5++) {
+                         orderableUnit.resolveSoftCollisionWithUnit(baseUnitArrA2[i5], f, true);
+                     }
+                     if (orderableUnit.nearbyCollisionSize > 9 && orderableUnit.timeAliveStamp > i - 400) {
+-                        orderableUnit.nextCollisionQueryTick = gameEngine.gameTimeMillis + 5 + (i3 % 5);
++                        orderableUnit.nextCollisionQueryTick = gameEngine.gameTimeMillis + (perfCollisions ? 40 + (i3 % 20) : 5 + (i3 % 5));
+                         orderableUnit.collisionActive = true;
+                     }
+                 }
+@@ -511,7 +516,10 @@ public abstract class OrderableUnit extends UnitBase {
+         }
+         gameEngine.performanceProfiler.b(ProfilerSection.update_do_all_collisions);
+         gameEngine.performanceProfiler.a(ProfilerSection.update_do_all_collisions2);
+-        for (int i6 = 0; i6 < size; i6++) {
++        // RWX 性能模式：推挤每两帧做一次，步长加倍补回两帧总位移；关闭时逐帧原样。
++        boolean pushThisFrame = !perfCollisions || (gameEngine.currentTick & 1) == 0;
++        float pushScale = perfCollisions ? 2.0f : 1.0f;
++        for (int i6 = 0; i6 < size && pushThisFrame; i6++) {
+             if (baseUnitArrA[i6] instanceof OrderableUnit) {
+                 OrderableUnit orderableUnit2 = (OrderableUnit) baseUnitArrA[i6];
+                 if (orderableUnit2.movementActiveThisFrame && (b = orderableUnit2.nearbyCollisionSize) > 0 && orderableUnit2.I()) {
+@@ -519,7 +527,7 @@ public abstract class OrderableUnit extends UnitBase {
+                         orderableUnit2.collisionActive = true;
+                     }
+                     for (int i7 = 0; i7 < b; i7++) {
+-                        orderableUnit2.resolveSoftCollisionWithUnit(orderableUnit2.nearbyUnits[i7], f, false);
++                        orderableUnit2.resolveSoftCollisionWithUnit(orderableUnit2.nearbyUnits[i7], f * pushScale, false);
+                     }
+                 }
+             }
+diff --git a/core/src/main/java/com/corrodinggames/rts/game/units/management/UnitSpatialIndex.java b/core/src/main/java/com/corrodinggames/rts/game/units/management/UnitSpatialIndex.java
+index 40d6b20..521a479 100644
+--- a/core/src/main/java/com/corrodinggames/rts/game/units/management/UnitSpatialIndex.java
++++ b/core/src/main/java/com/corrodinggames/rts/game/units/management/UnitSpatialIndex.java
+@@ -76,15 +76,20 @@ public final class UnitSpatialIndex {
+     }
+ 
+     public final void b(float f, float f2, float f3, UnitList unitList) {
++        b(f, f2, f3, 50.0f, unitList);
++    }
++
++    /** RWX 性能模式：按用途收紧格边距（原版 50px 在 32 格上会多扫 ±1~2 格）。 */
++    public final void b(float f, float f2, float f3, float margin, UnitList unitList) {
+         UnitStatisticsManager[][] unitStatisticsManagerArr = this.e;
+         float f4 = f - f3;
+         float f5 = f + f3;
+         float f6 = f2 - f3;
+         float f7 = f2 + f3;
+-        int iA = a(f4 - 50.0f);
+-        int iA2 = a(f5 + 50.0f);
+-        int iB = b(f6 - 50.0f);
+-        int iB2 = b(f7 + 50.0f);
++        int iA = a(f4 - margin);
++        int iA2 = a(f5 + margin);
++        int iB = b(f6 - margin);
++        int iB2 = b(f7 + margin);
+         for (int i = iA; i <= iA2; i++) {
+             for (int i2 = iB; i2 <= iB2; i2++) {
+                 com.corrodinggames.rts.game.units.management.UnitList unitList2 = unitStatisticsManagerArr[i][i2].a;
+diff --git a/core/src/main/java/com/corrodinggames/rts/gameFramework/SettingsEngine.java b/core/src/main/java/com/corrodinggames/rts/gameFramework/SettingsEngine.java
+index 752ea52..85b6296 100644
+--- a/core/src/main/java/com/corrodinggames/rts/gameFramework/SettingsEngine.java
++++ b/core/src/main/java/com/corrodinggames/rts/gameFramework/SettingsEngine.java
+@@ -80,6 +80,9 @@ public class SettingsEngine {
+ 
+     public boolean newRender;
+ 
++    /** RWX 性能模式：拥挤军团时降低软碰撞的重复空间查询与宽边距扫描。默认开；写 false 回原版演算。 */
++    public boolean perfCollisions;
++
+     public boolean shaderEffects;
+ 
+     public boolean teamShaders;
+@@ -315,6 +318,7 @@ public class SettingsEngine {
+         this.showZoomButton = getBooleanPref("showZoomButton", true);
+         this.showFps = getBooleanPref("showFps", false);
+         this.newRender = getBooleanPref("newRender", false);
++        this.perfCollisions = getBooleanPref("perfCollisions", true);
+         this.shaderEffects = getBooleanPref("shaderEffects", false);
+         this.teamShaders = getBooleanPref("teamShaders", false);
+         this.sendReports = getBooleanPref("sendReports", true);
+@@ -490,6 +494,7 @@ public class SettingsEngine {
+         editorEdit.putBoolean("showZoomButton", this.showZoomButton);
+         editorEdit.putBoolean("showFps", this.showFps);
+         editorEdit.putBoolean("newRender", this.newRender);
++        editorEdit.putBoolean("perfCollisions", this.perfCollisions);
+         editorEdit.putBoolean("shaderEffects", this.shaderEffects);
+         editorEdit.putBoolean("teamShaders", this.teamShaders);
+         editorEdit.putBoolean("sendReports", this.sendReports);
+diff --git a/core/src/main/java/com/corrodinggames/rts/gameFramework/utility/UnitList.java b/core/src/main/java/com/corrodinggames/rts/gameFramework/utility/UnitList.java
+index 12377c8..c8d1739 100644
+--- a/core/src/main/java/com/corrodinggames/rts/gameFramework/utility/UnitList.java
++++ b/core/src/main/java/com/corrodinggames/rts/gameFramework/utility/UnitList.java
+@@ -23,6 +23,16 @@ public final class UnitList extends AbstractList<BaseUnit> implements Serializab
+         return i;
+     }
+ 
++    public UnitList() {
++    }
++
++    /** RWX 预热容量：避免稳态列表每次 clear 后从 12 起重新翻倍拷贝。 */
++    public UnitList(int initialCapacity) {
++        if (initialCapacity > 0) {
++            this.c = (BaseUnit[]) Array.newInstance(BaseUnit.class, initialCapacity);
++        }
++    }
++
+     public BaseUnit[] a() {
+         return this.c;
+     }
+diff --git a/desktop/src/main/kotlin/io/github/rwx/DesktopMain.kt b/desktop/src/main/kotlin/io/github/rwx/DesktopMain.kt
+index ff4e16a..45f4a22 100644
+--- a/desktop/src/main/kotlin/io/github/rwx/DesktopMain.kt
++++ b/desktop/src/main/kotlin/io/github/rwx/DesktopMain.kt
+@@ -25,11 +25,67 @@ import org.koin.core.component.KoinComponent
+ import org.koin.core.component.get
+ import org.koin.core.context.GlobalContext
+ import org.koin.dsl.module
++import java.lang.foreign.Arena
++import java.lang.foreign.FunctionDescriptor
++import java.lang.foreign.Linker
++import java.lang.foreign.MemorySegment
++import java.lang.foreign.SymbolLookup
++import java.lang.foreign.ValueLayout
+ import javax.swing.SwingUtilities
+ 
+ object DesktopMain : KoinComponent {
++    /**
++     * RWX：在触碰任何 AWT 窗口前把进程声明为 Per-Monitor v2 DPI 感知。
++     * 不这样做时 Windows 会把整个窗口按缩放比（如 125%）位图拉伸，游戏以
++     * 逻辑分辨率（1536x864）渲染后再放大 —— 画面整体发糊、边缘出现拉伸伪影。
++     */
++    private fun makeProcessDpiAware() {
++        if (!System.getProperty("os.name", "").contains("Windows", ignoreCase = true)) return
++        if (System.getProperty("rwx.dpiAware", "true") == "false") return
++        val linker = Linker.nativeLinker()
++        // 1) Win10 1703+：DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = (HANDLE)-4
++        try {
++            Arena.ofConfined().use { arena ->
++                val sym = SymbolLookup.libraryLookup("user32", arena).find("SetProcessDpiAwarenessContext")
++                if (sym.isPresent) {
++                    val ok = linker.downcallHandle(
++                        sym.get(),
++                        FunctionDescriptor.of(ValueLayout.JAVA_BOOLEAN, ValueLayout.ADDRESS),
++                    ).invokeExact(MemorySegment.ofAddress(-4L))
++                    if (ok == true) return
++                }
++            }
++        } catch (_: Throwable) {
++        }
++        // 2) Win8.1+：PROCESS_PER_MONITOR_DPI_AWARE = 2
++        try {
++            Arena.ofConfined().use { arena ->
++                val sym = SymbolLookup.libraryLookup("shcore", arena).find("SetProcessDpiAwareness")
++                if (sym.isPresent) {
++                    linker.downcallHandle(
++                        sym.get(),
++                        FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT),
++                    ).invokeExact(2)
++                    return
++                }
++            }
++        } catch (_: Throwable) {
++        }
++        // 3) 兜底：系统级感知（Win7+）
++        try {
++            Arena.ofConfined().use { arena ->
++                val sym = SymbolLookup.libraryLookup("user32", arena).find("SetProcessDPIAware")
++                if (sym.isPresent) {
++                    linker.downcallHandle(sym.get(), FunctionDescriptor.of(ValueLayout.JAVA_INT)).invokeExact()
++                }
++            }
++        } catch (_: Throwable) {
++        }
++    }
++
+     @JvmStatic
+     fun main(args: Array<String>) {
++        makeProcessDpiAware()
+         configureDesktopLogging()
+         val options = AppOptions.parseArgs(args, isDesktop = true)
+         if (options.headless) {
+diff --git a/desktop/src/main/kotlin/io/github/rwx/headless/HeadlessDesktopRunner.kt b/desktop/src/main/kotlin/io/github/rwx/headless/HeadlessDesktopRunner.kt
+index 959c0dd..a7eb8cd 100644
+--- a/desktop/src/main/kotlin/io/github/rwx/headless/HeadlessDesktopRunner.kt
++++ b/desktop/src/main/kotlin/io/github/rwx/headless/HeadlessDesktopRunner.kt
+@@ -53,13 +53,14 @@ internal object HeadlessDesktopRunner {
+                     logger.info { "Headless session started" }
+                     var steps = 0L
+                     val frameNanos = 1_000_000_000L / 60
++                    val pace = System.getProperty("bench.pace", "true") != "false"
+                     while (!stopping.get() && !Thread.currentThread().isInterrupted &&
+                         (tickLimit == null || steps < tickLimit)) {
+                         val startedAt = System.nanoTime()
+                         session.step()
+                         session.latestBattleRoomJoinError?.let { error(it) }
+                         steps++
+-                        LockSupport.parkNanos((frameNanos - (System.nanoTime() - startedAt)).coerceAtLeast(0))
++                        if (pace) LockSupport.parkNanos((frameNanos - (System.nanoTime() - startedAt)).coerceAtLeast(0))
+                     }
+                     logger.info { "Headless session stopped at tick ${session.tick}" }
+                 } finally {
+diff --git a/settings.gradle.kts b/settings.gradle.kts
+index 04ff5d8..068c2d2 100644
+--- a/settings.gradle.kts
++++ b/settings.gradle.kts
+@@ -26,3 +26,6 @@ include(":mod-tools")
+ include(":slick2d-lwjgl3")
+ include(":desktop")
+ include(":android")
++
++// 大叔加的台架模块，不属于上游：可控刷兵，仅用于性能基准
++include(":bench-mod")

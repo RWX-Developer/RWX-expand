@@ -47,9 +47,6 @@ internal class EmbeddedSlickGameContainer(
         this.width = width.coerceAtLeast(320)
         this.height = height.coerceAtLeast(240)
         installAwtInput()
-        // F12 截图走 toolkit 级监听：焦点在 Compose 面板或引擎屏蔽视野输入时也按得动。
-        SlickCanvasHost.onScreenshotHotkey = { (game as? SlickGame)?.requestScreenshot() }
-        SlickCanvasHost.installScreenshotHotkey()
         if (fullscreen) {
             logger.warn { "Fullscreen is ignored by the AWT Slick container" }
         }
@@ -86,18 +83,6 @@ internal class EmbeddedSlickGameContainer(
                 continue
             }
             renderFrame()
-            if (DRAW_STATS_ENABLED) {
-                DrawStats.frames++
-                if (DrawStats.frames % 60L == 0L) {
-                    println(
-                        "RWX_DRAWSTATS frames=" + DrawStats.frames +
-                            " quads=" + DrawStats.quads / DrawStats.frames +
-                            " bindCalls=" + DrawStats.bindCalls / DrawStats.frames +
-                            " realBinds=" + org.newdawn.slick.opengl.TextureImpl.realBinds / DrawStats.frames,
-                    )
-                    System.out.flush()
-                }
-            }
             // JAWT locks the AWT toolkit on Linux. Let Swing process menu input between frames.
             if (targetFPS != -1) syncFrame(targetFPS)
         }
@@ -169,13 +154,7 @@ internal class EmbeddedSlickGameContainer(
                     }
                     uiOverlay.render(SlickCanvasHost.currentUiFrame(), width, height, graphics)
                     updateFPS()
-                    // 快照与截图都在这一步读回：世界、HUD、Compose 覆盖层全部提交，
-                    // 还没交换缓冲，读到的就是屏幕上即将出现的这一帧。
-                    (game as? SlickGame)?.captureCompositedFrameSnapshot(this)
-                    val slickGame = game as? SlickGame
-                    if (slickGame == null || slickGame.shouldSwapBuffers()) {
-                        awtCanvas.swapBuffers()
-                    }
+                    awtCanvas.swapBuffers()
                 } catch (error: SlickException) {
                     logger.error(error) { "Slick AWT container failed" }
                     terminalFailure = error
@@ -234,11 +213,7 @@ internal class EmbeddedSlickGameContainer(
                 }
             }
         }
-        // 窗口失焦时原本一帧都不画：切到别的程序，画面就冻在旧快照上，回到战局看到的是残影。
-        // 只要 surface 还活着就继续渲染；重负由 targetFPS 的 syncFrame 兜着。
-        val shouldDraw = hasFocus() || alwaysRender ||
-                (awtCanvas as? SlickAwtGLCanvas)?.hasLiveDrawingSurface == true && awtCanvas.isShowing
-        if (shouldDraw) {
+        if (hasFocus() || alwaysRender) {
             if (clearEachFrame) {
                 GL11.glClear(GL11.GL_COLOR_BUFFER_BIT or GL11.GL_DEPTH_BUFFER_BIT)
             }

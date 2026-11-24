@@ -1,0 +1,63 @@
+diff --git a/core/src/main/java/com/corrodinggames/rts/game/GameLogic.java b/core/src/main/java/com/corrodinggames/rts/game/GameLogic.java
+index fe03acb..e3856a2 100644
+--- a/core/src/main/java/com/corrodinggames/rts/game/GameLogic.java
++++ b/core/src/main/java/com/corrodinggames/rts/game/GameLogic.java
+@@ -312,7 +312,9 @@ public class GameLogic extends GameEngine {
+         if (isSpaceGame() && getClass().equals(GameLogic.class)) {
+             throw new RuntimeException("inSpace but class is:" + getClass());
+         }
+-        System.gc();
++        if (GameEngine.isAndroidPlatform()) {
++            System.gc();
++        }
+         loadLevel("Asset Index");
+         this.assetIndex = new AssetIndex();
+         long jA = PerformanceProfiler.a();
+@@ -529,7 +531,9 @@ public class GameLogic extends GameEngine {
+         this.z = new Paint();
+         this.z.a(50, 255, 255, 255);
+         onInitialContentLoaded();
+-        System.gc();
++        if (GameEngine.isAndroidPlatform()) {
++            System.gc();
++        }
+         this.isInitialized = true;
+         GameEngine.log("Init completed");
+         PerformanceProfiler.a("Loading took:", jA);
+diff --git a/core/src/main/java/com/corrodinggames/rts/game/units/custom/CustomUnitConfigParser.java b/core/src/main/java/com/corrodinggames/rts/game/units/custom/CustomUnitConfigParser.java
+index 9d42f16..e199e52 100644
+--- a/core/src/main/java/com/corrodinggames/rts/game/units/custom/CustomUnitConfigParser.java
++++ b/core/src/main/java/com/corrodinggames/rts/game/units/custom/CustomUnitConfigParser.java
+@@ -969,19 +969,20 @@ public class CustomUnitConfigParser {
+         byte[] array = null;
+         byte[][] array2 = null;
+         ByteBuffer[] array3 = null;
+-        try {
+-            array = new byte[8000000];
+-            array[0] = instance.memoryProbeWriteByte;
+-            instance.memoryProbeReadByte = array[1];
+-            array2 = new byte[][]{new byte[3000000], new byte[3000000]};
+-            array2[0][0] = instance.memoryProbeWriteByte;
+-            array2[1][0] = instance.memoryProbeWriteByte;
+-            if (!GameEngine.isAndroidPlatform()) {
+-                array3 = new ByteBuffer[]{ByteBuffer.allocateDirect(5000000), ByteBuffer.allocateDirect(5000000), ByteBuffer.allocateDirect(5000000), ByteBuffer.allocateDirect(5000000)};
++        if (GameEngine.isAndroidPlatform()) {
++            // 桌面端跳过这段内存探针：它为了测一次可写性先分配 8MB+6MB（桌面上还要再加
++            // 4 个 5MB 直连缓冲），结尾再连调两次 System.gc()。大内存挂机机器上纯属启动浪费。
++            try {
++                array = new byte[8000000];
++                array[0] = instance.memoryProbeWriteByte;
++                instance.memoryProbeReadByte = array[1];
++                array2 = new byte[][]{new byte[3000000], new byte[3000000]};
++                array2[0][0] = instance.memoryProbeWriteByte;
++                array2[1][0] = instance.memoryProbeWriteByte;
++            } catch (final OutOfMemoryError outOfMemoryError) {
++                System.gc();
++                GameEngine.log("Failed to reserve memory pre-mod load");
+             }
+-        } catch (final OutOfMemoryError outOfMemoryError) {
+-            System.gc();
+-            GameEngine.log("Failed to reserve memory pre-mod load");
+         }
+         synchronized (CustomUnitConfig.allConfigs) {
+             CustomUnitConfig.allConfigs.clear();

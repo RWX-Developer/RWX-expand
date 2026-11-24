@@ -1,0 +1,5 @@
+上游 commit:  5397ac8f441c1542e9d590641d5b9e799f636771
+分支/标签: v1.1.4 (浅克隆)
+本包 jar 由该源码树构建：:desktop:packageUberJarForCurrentOS (Gradle 9.8.0 + Zulu JDK 25)
+构建命令: D:\\Game\\tools\\gradle-9.8.0\\bin\\gradle.bat :desktop:packageUberJarForCurrentOS
+改动全在 perfCollisions/bench.pace 开关后，patch 见 RWX-perf-collisions.patch；bench-mod 为新增模块(已含源码)

@@ -9,7 +9,6 @@ import io.github.rwx.di.coreModule
 import io.github.rwx.di.desktopModule
 import io.github.rwx.i18n.LocaleSettings
 import io.github.rwx.logger
-import io.github.rwx.probe.RwxProbe
 import io.github.rwx.render.canvas.GameFontMetrics
 import io.github.rwx.geometry.Viewport
 import io.github.rwx.session.GameSession
@@ -38,14 +37,9 @@ internal object HeadlessDesktopRunner {
                     val replay = options.autoReplay
                     val server = options.joinServer
                     val tickLimit = options.headlessTickLimit
-                    val savedGameName = options.headlessSavedGame
                     when {
                         options.headlessMapPath != null -> {
                             session.prepareMapAsync(options.headlessMapPath, viewport)
-                            awaitMap(session, stopping)
-                        }
-                        savedGameName != null -> {
-                            session.prepareSavedGameAsync(savedGameName, viewport)
                             awaitMap(session, stopping)
                         }
                         replay != null -> {
@@ -55,23 +49,6 @@ internal object HeadlessDesktopRunner {
                         server != null -> check(session.joinBattleRoom(server, null, false)) {
                             session.latestBattleRoomJoinError ?: "Unable to join server"
                         }
-                    }
-                    val teamLayout = options.headlessTeamLayout
-                    if (teamLayout != null) {
-                        val layout = when (teamLayout) {
-                            "2sides", "2" -> com.corrodinggames.rts.gameFramework.network.TeamLayoutType.layout_2sides
-                            "3sides", "3" -> com.corrodinggames.rts.gameFramework.network.TeamLayoutType.layout_3sides
-                            "ffa" -> com.corrodinggames.rts.gameFramework.network.TeamLayoutType.layout_ffa
-                            else -> null
-                        }
-                        check(layout != null) { "Unknown --team-layout=$teamLayout" }
-                        session.applyTeamLayout(layout)
-                        when (layout) {
-                            com.corrodinggames.rts.gameFramework.network.TeamLayoutType.layout_2sides -> check(session.applySides(2)) { "Unable to assign sides" }
-                            com.corrodinggames.rts.gameFramework.network.TeamLayoutType.layout_3sides -> check(session.applySides(3)) { "Unable to assign sides" }
-                            else -> Unit
-                        }
-                        logger.info { "Applied team layout ${layout.name}" }
                     }
                     logger.info { "Headless session started" }
                     var steps = 0L
@@ -83,10 +60,6 @@ internal object HeadlessDesktopRunner {
                         session.step()
                         session.latestBattleRoomJoinError?.let { error(it) }
                         steps++
-                        if (RwxProbe.isFinished()) {
-                            logger.info { "Probe reported game end at tick ${session.tick}" }
-                            break
-                        }
                         if (pace) LockSupport.parkNanos((frameNanos - (System.nanoTime() - startedAt)).coerceAtLeast(0))
                     }
                     logger.info { "Headless session stopped at tick ${session.tick}" }
