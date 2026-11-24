@@ -1341,7 +1341,10 @@ public abstract class BaseUnit extends SizedObject {
                     } else {
                         ds.a(0.0f);
                     }
-                    if (waypointAt.getCommandType() == UnitCommandType.attack) {
+                    if (orderableUnit.rwxIsUnreachableOrder(waypointAt)) {
+                        // RWX：目标不可达——紫线提示 1 秒，随后该指令由 OrderableUnit 自动撤销。
+                        ds.b(ArgbColor.a(220, 190, 0, 255));
+                    } else if (waypointAt.getCommandType() == UnitCommandType.attack) {
                         ds.b(ArgbColor.a(160, SlickToAndroidKeycodes.AndroidCodes.KEYCODE_STB_INPUT, 0, 0));
                     } else if (waypointAt.getCommandType() == UnitCommandType.attackMove) {
                         ds.b(ArgbColor.a(160, SlickToAndroidKeycodes.AndroidCodes.KEYCODE_STB_INPUT, SlickToAndroidKeycodes.AndroidCodes.KEYCODE_STB_INPUT, 0));

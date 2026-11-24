@@ -265,6 +265,11 @@ public abstract class OrderableUnit extends UnitBase {
     public static MultiTurretPassiveTargetCallback aS;
     public static MultiTurretPassiveTargetCallback aT;
     Path aU;
+    // RWX：发起本次 aU 求解时的队首指令，用于确认返回的「不可达」属于当前指令而不是被替换掉的旧指令。
+    private UnitCommand rwxPathRequestOrder;
+    // RWX：目标不可达的指令：先画 1 秒紫线，然后自动撤销该指令。
+    private UnitCommand rwxUnreachableOrder;
+    private int rwxUnreachableOrderExpireMs;
     static FastArrayList aV;
     public static final PositionData aW;
 
@@ -2486,6 +2491,7 @@ public abstract class OrderableUnit extends UnitBase {
     /* JADX INFO: renamed from: k */
     public void updateMovementLogic(float f) {
         GameEngine gameEngine = GameEngine.getInstance();
+        rwxExpireUnreachableOrder(gameEngine);
         if (this.targetUnit != null) {
             this.targetUnit = null;
         }
@@ -3835,7 +3841,25 @@ public abstract class OrderableUnit extends UnitBase {
     }
 
     /* JADX INFO: renamed from: az */
+    // RWX：玩家/引擎默认调用 = 全部清掉；只有 AI 才不许取消模组行动的点。
     public void clearAllWaypoints() {
+        clearAllWaypoints(false);
+    }
+
+    // RWX：rwxFromAi=true 时保护队首的模组行动点（WaypointAction / addWaypoint_prepend）。
+    public void clearAllWaypoints(boolean rwxFromAi) {
+        UnitCommand rwxHead = this.waypointCount > 0 ? this.waypoints[0] : null;
+        boolean rwxKeepHead = rwxFromAi && rwxHead != null && rwxHead.isForceMove;
+        if (rwxKeepHead) {
+            for (int rk2 = this.waypointCount - 1; rk2 >= 1; rk2--) {
+                removeWaypointAt(rk2);
+            }
+            if (this.waypointCount <= 1) {
+                this.wayPointTimer = 0.0f;
+                this.waypointDwellTimer = 0.0f;
+            }
+            return;
+        }
         int i = this.waypointCount;
         if (this.waypointCount > 0) {
             onCurrentWaypointRemoved(this.waypoints[0]);
@@ -4200,6 +4224,7 @@ public abstract class OrderableUnit extends UnitBase {
             }
             if (commandTarget != null) {
                 this.aU = commandTarget.path;
+                this.rwxPathRequestOrder = getCurrentWaypoint();
                 return;
             }
         }
@@ -4207,6 +4232,7 @@ public abstract class OrderableUnit extends UnitBase {
             i = 2;
         }
         this.aU = createPathToTarget(f, f2, i, z, true, z2);
+        this.rwxPathRequestOrder = getCurrentWaypoint();
     }
 
     /* JADX INFO: renamed from: a */
@@ -4253,6 +4279,13 @@ public abstract class OrderableUnit extends UnitBase {
             TileMap tileMap = gameEngine.tileMap;
             LinkedList linkedListA = this.aU.a();
             if (linkedListA != null) {
+                // RWX：求解器判定目标不可达时，紫线提示 1 秒，到期自动撤销该指令。
+                // 只认「本次请求对应的队首指令」，防止旧请求的结果误伤刚下达的新指令。
+                boolean rwxUnreachableForCurrentOrder = this.aU.endUnreachable && this.rwxPathRequestOrder == getCurrentWaypoint();
+                this.rwxPathRequestOrder = null;
+                if (rwxUnreachableForCurrentOrder) {
+                    rwxFlagUnreachableOrder(gameEngine);
+                }
                 this.pathPositionProvider = this.aU.a(this);
                 Path path = this.aU;
                 this.activePathCount = 0;
@@ -4302,6 +4335,49 @@ public abstract class OrderableUnit extends UnitBase {
                 this.totalPathPositions = this.activePathCount;
             }
         }
+    }
+
+    // RWX：目标不可达 → 记录该指令，渲染层据此画 1 秒紫线。
+    private void rwxFlagUnreachableOrder(GameEngine gameEngine) {
+        UnitCommand currentWaypoint = getCurrentWaypoint();
+        if (currentWaypoint == null) {
+            return;
+        }
+        UnitCommandType type = currentWaypoint.commandType;
+        if (type != UnitCommandType.move && type != UnitCommandType.attackMove && type != UnitCommandType.patrol) {
+            return;
+        }
+        if (this.rwxUnreachableOrder == currentWaypoint) {
+            return;
+        }
+        this.rwxUnreachableOrder = currentWaypoint;
+        this.rwxUnreachableOrderExpireMs = gameEngine.gameTimeMillis + 1000;
+        io.github.rwx.probe.RwxPerf.out("RWX_UNREACHABLE order marked purple: type=" + type
+                + " x=" + (int) currentWaypoint.getTargetX() + " y=" + (int) currentWaypoint.getTargetY()
+                + " tick=" + gameEngine.currentTick);
+    }
+
+    // RWX：紫线显示满 1 秒后撤销这条走不到的指令。
+    private void rwxExpireUnreachableOrder(GameEngine gameEngine) {
+        if (this.rwxUnreachableOrder == null || gameEngine.gameTimeMillis < this.rwxUnreachableOrderExpireMs) {
+            return;
+        }
+        UnitCommand expired = this.rwxUnreachableOrder;
+        this.rwxUnreachableOrder = null;
+        for (int i = this.waypointCount - 1; i >= 0; i--) {
+            if (getWaypointAt(i) == expired) {
+                removeWaypointAt(i);
+                io.github.rwx.probe.RwxPerf.out("RWX_UNREACHABLE order removed: type=" + expired.commandType
+                        + " x=" + (int) expired.getTargetX() + " y=" + (int) expired.getTargetY()
+                        + " tick=" + gameEngine.currentTick);
+                return;
+            }
+        }
+    }
+
+    // RWX：渲染层判断某条指令是否处于「不可达」提示期（紫线）。
+    public boolean rwxIsUnreachableOrder(UnitCommand unitCommand) {
+        return unitCommand != null && unitCommand == this.rwxUnreachableOrder;
     }
 
     /* JADX INFO: renamed from: aL */
