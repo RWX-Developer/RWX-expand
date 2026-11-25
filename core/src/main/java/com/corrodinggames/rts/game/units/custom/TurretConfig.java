@@ -255,6 +255,28 @@ public class TurretConfig {
      * 写 180 或 <=0 表示不做扇区限制（恢复全向拦截）。
      */
     public float interceptProjectilesOnlyInFrontAngle = 90.0f;
+    /**
+     * RWX：挂了父炮塔（`attachedTo`）的拦截炮塔是否允许**独立旋转**。
+     *
+     * 默认 false = 引擎原版行为：父炮塔转多少，子炮塔跟着转多少。
+     * 引擎 `CustomUnit.a(int,float)` 会把父炮塔的角度增量原封不动加到所有
+     * `linkedTurretIndex` 指向它的子炮塔上，所以父炮塔一对地瞄准，挂在它上面的
+     * 拦截炮就被拖着走，永远指不到来袭弹。
+     *
+     * 置 true 后：本炮塔不再吃父炮的角度增量，待机复位也回到自己的角度，
+     * 只由拦截钩子按来袭弹方位驱动。父炮塔自身行为不变。
+     */
+    public boolean interceptProjectilesIndependentRotation = false;
+
+    /**
+     * RWX：本炮塔的角度是否跟随父炮塔。
+     *
+     * 非 `attachedTo` 炮塔恒为 false；`attachedTo` 且写了
+     * `interceptProjectiles_independentRotation: true` 的也为 false。
+     */
+    public boolean followsParentTurret() {
+        return linkedTurretIndex != -1 && !interceptProjectilesIndependentRotation;
+    }
     public int ap = -1;
     /* JADX INFO: renamed from: aq */
     public boolean shouldResetTurret = true;
@@ -353,6 +375,7 @@ public class TurretConfig {
         this.interceptProjectilesAndUnderDistance = turretConfig.interceptProjectilesAndUnderDistance;
         this.interceptProjectilesAndOverHeight = turretConfig.interceptProjectilesAndOverHeight;
         this.interceptProjectilesOnlyInFrontAngle = turretConfig.interceptProjectilesOnlyInFrontAngle;
+        this.interceptProjectilesIndependentRotation = turretConfig.interceptProjectilesIndependentRotation;
         this.onShootPlayAnimation = turretConfig.onShootPlayAnimation;
         this.imageDrawOffsetX = turretConfig.imageDrawOffsetX;
         this.imageDrawOffsetY = turretConfig.imageDrawOffsetY;
@@ -580,6 +603,8 @@ public class TurretConfig {
         turretConfig.interceptProjectilesAndOverHeight = iniFile.getFloat(str, "interceptProjectiles_andOverHeight", Float.valueOf(turretConfig.interceptProjectilesAndOverHeight)).floatValue();
         // RWX：拦截扇区半角。不写默认 90（正前方半圆）；写 180 或负数 = 不限方向，全向拦截。
         turretConfig.interceptProjectilesOnlyInFrontAngle = iniFile.getFloat(str, "interceptProjectiles_onlyInFrontAngle", Float.valueOf(turretConfig.interceptProjectilesOnlyInFrontAngle)).floatValue();
+        // RWX：父炮塔挂在身上的拦截炮是否允许独立旋转（默认 false，跟随父炮）。
+        turretConfig.interceptProjectilesIndependentRotation = iniFile.getBoolean(str, "interceptProjectiles_independentRotation", Boolean.valueOf(turretConfig.interceptProjectilesIndependentRotation)).booleanValue();
         // RWX：拦截炮塔必须保留转向结果，否则引擎每帧把炮管拉回 idleDir，
         // 拦截钩子的持续瞄准会被抵消，表现为「炮塔不转或只转一点」。
         // 没显式写 shouldResetTurret 的拦截炮默认 false；模组作者显式写的仍尊重。

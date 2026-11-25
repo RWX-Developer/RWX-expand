@@ -110,6 +110,20 @@
 
 > **重要修正**：早期版本（14:49 / 15:47 两次提交）曾自造 `RWX_CHARGE` 毫秒累加并写 `rotation = min(charge, delay)`，方向与引擎的「倒数归零」完全相反、量纲也不一致，导致炮塔永远处于冷却中、**完全拦不住炮弹**。现已删除该机制，改为上面这套引擎同构逻辑。
 
+### 正面扇区：只是优先级，不是拒绝条件
+`interceptProjectiles_onlyInFrontAngle`（默认 90°）约束的是「优先打谁」，**不是「只肯打谁」**：
+
+- 选目标时先看正前方半角内有没有合法弹，有就用它（`preferred`）；没有就退回全向（`fallback`）。
+- 已经锁定的目标**不参与扇区重排**：只要它还在、还能拦，就一直瞄它，不会因为转到侧后方就丢锁。
+- 参考角与引擎射界判定同款：`单位朝向 + idleDir`（`attachedTo` 子炮取父炮当前角 + `idleDir`）。
+- 写 `180` 或负数 = 不限方向（退化为纯「取遍历到的最后一枚」）。
+
+这条规则是踩坑后改的：早前把扇区当**硬门槛**过滤，后果是所有拦截炮只肯打正前方，来袭弹从背后/侧后进入时一发不放——建筑根本不转身，载具在导弹绕到侧后时也哑火。无头实测（原版 `antiNukeLauncherC` + `nukeLauncherC`，扇区 90°）全程 0 拦截弹，核弹一路飞到距目标 72；改成优先级后正面第 67 帧开火击落、背面第 71 帧开火击落。
+
+### 不要照抄 `r(i)` = `canShoot`
+
+模组里拦截炮塔普遍写 `canShoot: false`——该字段的语义是「不参与对单位/建筑的常规攻击」，不是「不能开火」，它们的开火许可来自 `interceptProjectiles: true`。早期版本在开火前查了 `canShoot`，导致真正的拦截炮塔「只转不射」。同理，预热进度也不能交给引擎 `speed`：`updateAttackTargeting` 末尾会对没有攻击目标的炮塔按 `warmupCallDownRate` 把 `speed` 抹回 0，把钩子每帧加的进度吃掉，所以预热由钩子自己记账（`RWX_WARMUP`），只在开火成功时清零。
+
 ### 兼容性（模组作者注意）
 
 - 老模组只写 `interceptProjectiles_withTags`、没写 `interceptProjectiles` 的，`TurretConfig.java:559` 仍会自动推断为拦截炮塔（保持兼容，无需补键）。
@@ -126,17 +140,44 @@
 | `slave: true` | 父炮的 `childTurret` → `x` → `getLinkedTurretIndex(i)` | 父炮的 `targetX` 和 `isActive` 从子炮继承（双联炮：子炮负责索敌转向，父炮跟随开火） |
 | `linkDelayWithTurret: 另一炮` | `TurretConfig.linkedTurret` | 本炮开火时把引用它的另一炮 `rotation` 清零；不影响角度 |
 
+#### 新键：`interceptProjectiles_independentRotation`（默认 `false`）
+
+`attachedTo` 挂到父炮塔上的拦截炮，默认仍然跟随父炮：引擎 `CustomUnit.a(int,float)` 会把父炮塔的角度增量**原封不动**加到所有 `linkedTurretIndex` 指向它的子炮上。于是父炮塔一对地瞄准，挂在它身上的拦截炮就被拖着走，永远指不到来袭弹——现象是「炮跟着主炮转，但对导弹一声不响」。
+
+在子炮塔段里写这个键可以解除角度联动：
+
+```ini
+[turret_antiMissile]
+attachedTo: turret_main
+interceptProjectiles: true
+interceptProjectiles_independentRotation: true
+```
+
+- `false`（默认）= 原版行为，父炮转多少子炮跟多少，模组不需要改任何东西。
+- `true` = 本炮塔不再吃父炮的角度增量（`CustomUnit.a` 跳过它），待机复位也回自己的角度（`C(i)` 返回自身 `targetX`），只由拦截钩子按来袭弹方位驱动；父炮塔自身行为不变，也不会被子炮塔反向拽角度。
+- 只影响角度解耦：挂点位置、绘制层级、`linkedTurretIndex` 本身都照旧保留。
+- 「正面扇区」的参考角在这种情况下退回**车体朝向 + idleDir**，不再跟着父炮对地瞄准乱跳。
+
+
 拦截钩子的处理：
 
 - 开火时已补回 `CustomUnit.a(BaseUnit, int)` 里的联炮冷却联动（`linkDelayWithTurret` + `attachedTo` 父炮 recoil），否则拦截弹走 6 参数生成弹丸会绕过这段，附属炮塔与主炮塔冷却失步。
 - 当前游戏内三处拦截炮（`antinuke_launcher`、`experimental_gunship`、`experimental_carrier`、`nautilus` 等）都是独立 `canShoot:false` 炮塔，没有 `attachedTo` / `slave`，所以不受角度继承影响。
 - 拦截炮塔在解析层已默认 `shouldResetTurret: false`（显式写 `true` 仍会被尊重，但会导致炮塔被拉回 `idleDir`、表现为不转或只转一点）；若挂到主炮上更不要写 `true`。`slave` 父炮不要单独开拦截，应由负责索敌的子炮承担。
 - 动态状态：只要该炮塔通过 `RWX_TARGET_LOCK` 锁定着抛射物，`CustomUnit.b(i, f)` 就返回 `false`，引擎这一帧不会执行待机复位/`idleSpin`；目标失效或开火后状态自动清除，炮塔才恢复普通待机行为。
-- 子炮触发父炮：`slave` 子炮的 `linkedTurretIndex` 指向父炮。子炮进入拦截瞄准时，会同时给父炮写入锁定状态，并把父炮 `targetX` 同步为子炮转到的角度（清掉父炮转向速度），父炮因此也进入“瞄准抛射物”状态且不会旋回原点，但父炮本身不额外发射拦截弹。目标失效或子炮开火后父炮状态一并清除。
+- 子炮触发父炮：`slave` 子炮的 `linkedTurretIndex` 指向父炮。子炮进入拦截瞄准时，会同时给父炮写入锁定状态，并把父炮 `targetX` 同步为子炮转到的角度（清掉父炮转向速度），父炮因此也进入“瞄准抛射物”状态且不会旋回原点，但父炮本身不额外发射拦截弹。目标失效或子炮开火后父炮状态一并清除。**写了 `interceptProjectiles_independentRotation: true` 的子炮不走这条**，否则独立旋转等于换了个方向继续联动。
 
 ### 验证到哪一步
 
 - `:core:compileJava`、`:desktop:packageUberJarForCurrentOS` 编译/打包通过（JDK 25 + Gradle 9.8）。
-- 已用最小无头场景验证：`itest:shooter` 发射带 `nuke` 标签的靶弹，`itest:blocker` 开启拦截；日志确认选中目标、炮管到位（`remaining=0.0` / `turretX=180.0`）并连续生成拦截弹（`RWX_INTERCEPT fired=1` ... `fired=30`）。
+- **原版对象无头回归**：`desktop/src/test/kotlin/io/github/rwx/scenario/NukeInterceptHeadlessTest.kt` 直接用原版 `nukeLauncherC` 打原版 `antiNukeLauncherC`（不加载任何模组拦截炮），四个用例都带硬断言：
+  | 用例 | 场景 | 期望 |
+  | --- | --- | --- |
+  | A | 正面 900 来袭 | 开火并击落（实测第 67 帧首次拦截，核弹距目标 547 处被摧毁） |
+  | B | 背面 900 来袭 | **仍然开火并击落**（第 71 帧）——证明扇区不是拒绝条件 |
+  | C | 关掉 `interceptProjectiles` | 0 拦截弹，核弹飞到距目标 18 才命中——证明 A/B 的拦截弹确实来自这条链路 |
+  | D | 正、背两枚同帧升空 | 炮塔第 68 帧先对准扇区内那枚、第 74 帧才转到另一侧（扇区只是优先级） |
+- 单元测试：`InterceptFrontSectorTest`（扇区判定 7 例）、`InterceptAimToleranceTest`（容差 4 例）、`LeftClickRepairTest`（左键修复 5 例）、`TurretIndependentRotationTest`（父炮塔独立旋转 4 例）、`SlickGamePausedFrameTest`（暂停 4 例）。
+- 台架注意：非 Android 下 `/SD/mods/units` 会退化成相对路径，必须给 `FileHelper.activeFileLoader` 设 `CustomPathFileLoader(scenarioRoot, "scenario")`，否则模组单位加载不到；默认禁用的模组用 `-Drwx.forceMods=` 打开；`-Drwx.intercept.debug=1` 才会写 `logs/rwx-intercept.log`。
 - 测试场景踩过的坑：`rawSection` 同名段会整段替换 typed turret，必须把 `projectile` / `turnSpeed` 等原生键写全；拦截炮塔已由解析层默认 `shouldResetTurret: false`，不再需要在每个 INI 里单独写。
 - 验证用的临时 mod、探针和配置已在验证后移除，正式仓库只保留引擎同构的开火逻辑。

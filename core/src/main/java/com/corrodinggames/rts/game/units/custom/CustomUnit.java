@@ -2714,10 +2714,15 @@ public class CustomUnit extends MovableUnit implements TransportUnitInterface, U
         float f;
         float f2;
         TurretConfig turretConfig = this.unitConfig.turrets[i];
-        if (turretConfig.linkedTurretIndex != -1) {
-            f = this.movementLevels[turretConfig.linkedTurretIndex].targetX;
-        } else {
+        if (!turretConfig.followsParentTurret()) {
+            // RWX：独立旋转的子炮塔待机时不回到父炮方向——回到自己当前角度，
+            // 等于「保持不动」，不会被待机复位拽回父炮塔的朝向。
+            if (turretConfig.interceptProjectilesIndependentRotation) {
+                return this.movementLevels[i].targetX;
+            }
             f = this.rotationSpeed;
+        } else {
+            f = this.movementLevels[turretConfig.linkedTurretIndex].targetX;
         }
         if (this.isRotating && bc() > 0.95d) {
             f2 = f + turretConfig.idleDirReversing;
@@ -4197,7 +4202,13 @@ public class CustomUnit extends MovableUnit implements TransportUnitInterface, U
         this.movementLevels[i].targetX += f;
         if (this.unitConfig.hasAttachedTurrets) {
             for (int i2 = 0; i2 < this.unitConfig.turrets.length; i2++) {
-                if (this.unitConfig.turrets[i2].linkedTurretIndex == i) {
+                TurretConfig child = this.unitConfig.turrets[i2];
+                if (child.linkedTurretIndex == i) {
+                    // RWX：声明了 interceptProjectiles_independentRotation 的子炮塔不吃父炮的角度增量，
+                    // 否则父炮塔一对地瞄准，挂在它上面的拦截炮就被拖着走、永远瞄不到来袭弹。
+                    if (!child.followsParentTurret()) {
+                        continue;
+                    }
                     this.movementLevels[i2].targetX += f;
                     this.movementLevels[i2].a(2);
                 }

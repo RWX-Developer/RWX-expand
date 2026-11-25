@@ -188,7 +188,9 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
         boolean aligned = Utility.abs(remaining) <= tolerance;
 
         // 子炮在拦截时，父炮同步进入瞄准状态并跟随子炮角度（父炮不额外发射）。
-        if (parentIndex != -1) {
+        // RWX：但声明了 interceptProjectiles_independentRotation 的子炮是「自己转自己的」，
+        // 不该反过来把父炮塔拽到自己角度上，否则独立旋转等于换了个方向继续联动。
+        if (parentIndex != -1 && !turretConfig.interceptProjectilesIndependentRotation) {
             setTargetLock(customUnit, parentIndex, projectile);
             UnitMovementData parentData = customUnit.movementLevels[parentIndex];
             parentData.targetY = parentData.targetX;
@@ -339,9 +341,15 @@ public class ProjectileInterceptorHook extends CustomUnitRenderHook {
      * 里的 limitingAngle 分支）：linkedTurretIndex 有效时取父炮当前角，否则取单位朝向，
      * 两者都再加本炮塔的 idleDir。所以车体一转，各炮塔的「正面」自动跟着转。
      */
-    private static float rwxFrontFacingAngle(CustomUnit customUnit, TurretConfig turretConfig) {
+    public static float rwxFrontFacingAngle(CustomUnit customUnit, TurretConfig turretConfig) {
         int linked = turretConfig.linkedTurretIndex;
-        if (linked >= 0 && linked < customUnit.movementLevels.length) {
+        // 注意：linked == 自身下标时要当成「没挂父炮」。否则参考角就是这门前一帧自己的角度，
+        // 扇区会跟着炮管跑——炮管指哪哪就是正面，优先级等于废掉。
+        // 独立旋转的子炮同理：它自己转自己的，用父炮角度当正面会随父炮对地瞄准乱跳，
+        // 退回车体朝向最稳定。
+        if (linked >= 0 && linked < customUnit.movementLevels.length
+                && linked != turretConfig.turretIndex
+                && !turretConfig.interceptProjectilesIndependentRotation) {
             return customUnit.movementLevels[linked].targetX + turretConfig.idleDir;
         }
         return customUnit.rotationSpeed + turretConfig.idleDir;
