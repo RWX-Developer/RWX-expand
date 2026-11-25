@@ -79,3 +79,11 @@
 #                                             行动按工厂分组配置并成为生产线的一部分，可单厂执行
 # 验证：:unit-counter-mod:build 成功；7+4 测试全绿。
 # jar：unit-counter-mod-1.1.4.jar 已重新部署，旧包备份为 .bak-20261125-171732。
+
+# ===== 2026-11-25 资源栏 HOI4 风格优化 =====
+#   M unit-counter-mod/.../FactoryWindow.kt   资源区改为深色资源条：状态灯 + “资源”标题 + 状态文本；
+#                                             资金/自定义资源各用独立 chip（资源图标 + 显示名 + 紧凑数值）；
+#                                             资源条横向滚动，资金金色高亮，数值自动 1.0K/1.0M 缩写
+#   M unit-counter-mod/.../ModIcons.kt        新增 Resource 菱形宝石图标
+# 验证：:unit-counter-mod:build 成功；7+4 测试全绿。
+# jar：unit-counter-mod-1.1.4.jar 已重新部署，旧包备份为 .bak-20261125-173225。

@@ -40,6 +40,24 @@ internal object ModIcons {
         Box(Modifier.size(iconSize).background(color, RoundedCornerShape(2.dp)))
     }
 
+    /** 资源图标：菱形宝石，用于 HOI4 风格资源条。 */
+    @Composable
+    fun Resource(color: Color, iconSize: Dp = 12.dp) {
+        Box(Modifier.size(iconSize), contentAlignment = androidx.compose.ui.Alignment.Center) {
+            Box(
+                Modifier
+                    .size(iconSize * 0.62f)
+                    .rotate(45f)
+                    .background(color, RoundedCornerShape(1.dp)),
+            )
+            Box(
+                Modifier
+                    .size(iconSize * 0.18f)
+                    .background(Color(0xCCFFFFFF), RoundedCornerShape(1.dp)),
+            )
+        }
+    }
+
     @Composable
     fun Play(color: Color, iconSize: Dp = 16.dp) {
         Box(Modifier.size(iconSize), contentAlignment = androidx.compose.ui.Alignment.Center) {

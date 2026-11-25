@@ -3,6 +3,7 @@ package unitcounter.mod
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -215,28 +216,81 @@ private fun StatusLamp(view: FactoryUiState) {
 
 @Composable
 private fun ResourceBar(view: FactoryUiState) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(view.status, color = TEXT_DIM, fontSize = 11.sp)
-        Box(Modifier.weight(1f))
-        Text(
-            "${view.pool.creditsLabel} ${formatAmount(view.pool.credits)}",
-            color = OK,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold,
-        )
-    }
-    val custom = view.pool.custom.entries.toList()
-    if (custom.isNotEmpty()) {
-        Row {
-            custom.forEach { (name, amount) ->
-                Text(" $name ${formatAmount(amount)}", color = TEXT_DIM, fontSize = 11.sp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(7.dp))
+            .background(Color(0xCC0A1118))
+            .border(1.dp, Color(0x334FC3F7), RoundedCornerShape(7.dp))
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            StatusLamp(view)
+            Text(" 资源", color = TEXT_DIM, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            Box(Modifier.weight(1f))
+            Text(view.status, color = TEXT_DIM, fontSize = 10.sp, maxLines = 1)
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            ResourceChip(
+                label = view.pool.creditsLabel,
+                amount = view.pool.credits,
+                color = Color(0xFFFFC94D),
+                emphasized = true,
+            )
+            view.pool.custom.forEach { (name, amount) ->
+                ResourceChip(
+                    label = name,
+                    amount = amount,
+                    color = ModIcons.colorFor(name),
+                    emphasized = false,
+                )
             }
         }
     }
 }
 
-private fun formatAmount(value: Double): String =
-    if (value % 1.0 == 0.0) value.toLong().toString() else String.format("%.1f", value)
+@Composable
+private fun ResourceChip(
+    label: String,
+    amount: Double,
+    color: Color,
+    emphasized: Boolean,
+) {
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(if (emphasized) color.copy(alpha = 0.16f) else Color(0x261E2A36))
+            .border(1.dp, color.copy(alpha = 0.32f), RoundedCornerShape(4.dp))
+            .padding(horizontal = 6.dp, vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        ModIcons.Resource(color, 10.dp)
+        Text(
+            " $label",
+            color = if (emphasized) color else TEXT_DIM,
+            fontSize = 10.sp,
+            fontWeight = if (emphasized) FontWeight.Bold else FontWeight.Normal,
+        )
+        Text(" ${formatAmount(amount)}", color = TEXT, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+private fun formatAmount(value: Double): String {
+    val magnitude = kotlin.math.abs(value)
+    return when {
+        magnitude >= 1_000_000 -> String.format("%.1fM", value / 1_000_000)
+        magnitude >= 1_000 -> String.format("%.1fK", value / 1_000)
+        value % 1.0 == 0.0 -> value.toLong().toString()
+        else -> String.format("%.1f", value)
+    }
+}
 
 @Composable
 private fun LineEditor(
