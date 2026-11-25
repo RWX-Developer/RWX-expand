@@ -1,55 +1,69 @@
 package unitcounter.mod
 
-import io.github.rwx.mod.api.UnitId
-import io.github.rwx.mod.api.UnitInstanceId
-import io.github.rwx.mod.api.UnitRuntimeRef
-import io.github.rwx.mod.api.UnitRuntimeState
-import io.github.rwx.mod.api.WorldPosition
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class UnitCountsTest {
-    private fun unit(instance: Long, team: Int, building: Boolean = false) = UnitRuntimeState(
-        ref = UnitRuntimeRef(UnitInstanceId(instance), UnitId("test:unit"), team),
-        position = WorldPosition(0f, 0f),
-        rotationDegrees = 0f,
-        isBuilding = building,
+    private fun breakdown(
+        raw: List<RawUnit>,
+        localFaction: Int? = 1,
+    ): UnitBreakdown = buildBreakdown(
+        rawUnits = raw,
+        teamLabel = { "队伍$it" },
+        factionOf = { if (it == 1 || it == 2) 1 else if (it == 3 || it == 4) 2 else it },
+        factionLabel = { "阵营$it" },
+        localFactionId = localFaction,
     )
 
     @Test
-    fun `counts friendlies enemies and buildings separately`() {
-        val counts = countUnits(
+    fun `teams are counted separately and allied teams are summed`() {
+        val result = breakdown(
             listOf(
-                unit(1, 0),
-                unit(2, 0, building = true),
-                unit(3, 1),
-                unit(4, 1),
-                unit(5, 2, building = true),
-                unit(6, 0),
+                RawUnit(1, false), RawUnit(1, true), RawUnit(1, false),
+                RawUnit(2, false), RawUnit(2, true),
+                RawUnit(3, false), RawUnit(3, false), RawUnit(4, true),
             ),
-            localTeamId = 0,
         )
-        assertEquals(2, counts.friendlyUnits)
-        assertEquals(1, counts.friendlyBuildings)
-        assertEquals(2, counts.enemyUnits)
-        assertEquals(1, counts.enemyBuildings)
-        assertEquals(3, counts.friendlyTotal)
-        assertEquals(3, counts.enemyTotal)
+        assertEquals(5, result.friendlyUnits)
+        assertEquals(3, result.enemyUnits)
+        assertEquals(2, result.factions.size)
+
+        val allies = result.factions.first { it.factionId == 1 }
+        assertTrue(allies.isLocal)
+        assertEquals(3, allies.totalUnits)
+        assertEquals(2, allies.totalBuildings)
+        assertEquals(2, allies.teams.size)
+        assertEquals(2, allies.teams.first { it.teamId == 1 }.units)
+        assertEquals(1, allies.teams.first { it.teamId == 1 }.buildings)
+        assertEquals(1, allies.teams.first { it.teamId == 2 }.units)
+
+        val enemies = result.factions.first { it.factionId == 2 }
+        assertEquals(2, enemies.totalUnits)
+        assertEquals(1, enemies.totalBuildings)
     }
 
     @Test
-    fun `no local team means every unit is counted as enemy`() {
-        val counts = countUnits(listOf(unit(1, 0), unit(2, 1, building = true)), localTeamId = null)
-        assertEquals(0, counts.friendlyTotal)
-        assertEquals(1, counts.enemyUnits)
-        assertEquals(1, counts.enemyBuildings)
+    fun `local faction is ordered first`() {
+        val result = breakdown(listOf(RawUnit(3, false), RawUnit(1, false)), localFaction = 1)
+        assertEquals(1, result.factions[0].factionId)
+        assertEquals(2, result.factions[1].factionId)
     }
 
     @Test
-    fun `empty world yields zero counts`() {
-        val counts = countUnits(emptyList(), localTeamId = 3)
-        assertEquals(0, counts.friendlyTotal)
-        assertEquals(0, counts.enemyTotal)
-        assertEquals(3, counts.localTeamId)
+    fun `empty world yields no factions`() {
+        val result = breakdown(emptyList())
+        assertEquals(0, result.friendlyUnits)
+        assertEquals(0, result.enemyUnits)
+        assertTrue(result.factions.isEmpty())
+        assertEquals(false, result.hidden)
+    }
+
+    @Test
+    fun `unknown local faction counts every unit as enemy`() {
+        val result = breakdown(listOf(RawUnit(1, false), RawUnit(3, true)), localFaction = null)
+        assertEquals(0, result.friendlyUnits)
+        assertEquals(2, result.enemyUnits)
+        assertTrue(result.factions.none { it.isLocal })
     }
 }

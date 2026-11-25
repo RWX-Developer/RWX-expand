@@ -10,67 +10,59 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.corrodinggames.rts.game.PlayerTeam
+import com.corrodinggames.rts.gameFramework.GameEngine
 import io.github.rwx.mod.JvmMod
 import io.github.rwx.mod.api.HudId
 import io.github.rwx.mod.api.LogLevel
 import io.github.rwx.mod.api.ModTask
 import io.github.rwx.mod.api.ScheduledTask
 import io.github.rwx.mod.api.UnitQuery
-import io.github.rwx.mod.api.UnitRuntimeState
 import kotlinx.coroutines.delay
 import java.util.concurrent.atomic.AtomicReference
 
-internal data class UnitCounts(
-    val friendlyUnits: Int = 0,
-    val enemyUnits: Int = 0,
-    val friendlyBuildings: Int = 0,
-    val enemyBuildings: Int = 0,
-    val localTeamId: Int? = null,
-) {
-    val friendlyTotal: Int get() = friendlyUnits + friendlyBuildings
-    val enemyTotal: Int get() = enemyUnits + enemyBuildings
-}
-
-/** 纯统计，便于单独测试；destroyed 已由 UnitQuery 默认过滤。 */
-internal fun countUnits(states: List<UnitRuntimeState>, localTeamId: Int?): UnitCounts {
-    var fu = 0
-    var eu = 0
-    var fb = 0
-    var eb = 0
-    for (state in states) {
-        val friendly = localTeamId != null && state.ref.teamId == localTeamId
-        if (state.isBuilding) {
-            if (friendly) fb++ else eb++
-        } else if (friendly) {
-            fu++
-        } else {
-            eu++
-        }
-    }
-    return UnitCounts(fu, eu, fb, eb, localTeamId)
-}
-
 /**
  * 游戏内敌我单位计数 HUD。
- * 统计在仿真线程按 tick 采样，Compose 层只读快照，避免跨线程直接摸引擎。
+ *
+ * - 按玩家队伍（teamId）细分部队/建筑数量；
+ * - teamColorId 相同的队伍视为结盟，额外列出阵营总量；
+ * - GameEngine.isMenuOpen 为真时 HUD 不显示，也不采样计数。
+ *
+ * 采样固定在仿真线程，Compose 层只读快照，不跨线程摸引擎。
  */
 class UnitCounterMod : JvmMod() {
-    private val snapshot = AtomicReference(UnitCounts())
+    private val snapshot = AtomicReference(UnitBreakdown())
     private var sampler: ScheduledTask? = null
     private val hudId = HudId("unitcounter:hud")
 
     override fun init() {
         val api = this.api
-        sampler = api.game.repeat(10, ModTask { context ->
-            val teamId = context.game.localTeam()?.teamId
-            snapshot.set(countUnits(context.unitWorld.query(UnitQuery()), teamId))
+        sampler = api.game.repeat(5, ModTask { context ->
+            val engine = GameEngine.getInstance()
+            if (engine == null || engine.isMenuOpen) {
+                snapshot.set(UnitBreakdown(hidden = true))
+                return@ModTask
+            }
+            val localTeamId = context.game.localTeam()?.teamId
+            val localFactionId = localTeamId?.let { PlayerTeam.k(it)?.teamColorId }
+            val raw = context.unitWorld.query(UnitQuery()).map { state ->
+                RawUnit(state.ref.teamId, state.isBuilding)
+            }
+            snapshot.set(
+                buildBreakdown(
+                    rawUnits = raw,
+                    teamLabel = { id -> teamLabel(id) },
+                    factionOf = { id -> factionOf(id) },
+                    factionLabel = { id -> "阵营 ${PlayerTeam.getTeamSlotLabel(id)}" },
+                    localFactionId = localFactionId,
+                ).copy(hidden = false)
+            )
         })
         if (!api.game.headless) {
             api.ui.registerHud(hudId, order = 20) { UnitCounterCard(rememberSnapshot(snapshot)) }
@@ -78,21 +70,30 @@ class UnitCounterMod : JvmMod() {
         }
     }
 
+    private fun teamLabel(teamId: Int): String {
+        val team = PlayerTeam.k(teamId)
+        val name = team?.teamName?.takeIf { it.isNotBlank() }
+        return name ?: "队伍 ${PlayerTeam.getTeamSlotLabel(teamId)}"
+    }
+
+    private fun factionOf(teamId: Int): Int = PlayerTeam.k(teamId)?.teamColorId ?: teamId
+
     @Composable
-    private fun rememberSnapshot(ref: AtomicReference<UnitCounts>): State<UnitCounts> {
+    private fun rememberSnapshot(ref: AtomicReference<UnitBreakdown>): State<UnitBreakdown> {
         val state = remember { mutableStateOf(ref.get()) }
         LaunchedEffect(Unit) {
             while (true) {
                 state.value = ref.get()
-                delay(150)
+                delay(100)
             }
         }
         return state
     }
 
     @Composable
-    private fun UnitCounterCard(state: State<UnitCounts>) {
+    private fun UnitCounterCard(state: State<UnitBreakdown>) {
         val counts = state.value
+        if (counts.hidden) return
         Column(
             modifier = Modifier
                 .padding(12.dp)
@@ -100,23 +101,26 @@ class UnitCounterMod : JvmMod() {
                 .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
             BasicText(
-                text = if (counts.localTeamId == null) {
-                    "单位统计：等待本方队伍"
-                } else {
-                    "我方 ${counts.friendlyTotal}    敌军 ${counts.enemyTotal}"
-                },
+                text = "我方 ${counts.friendlyUnits}    敌军 ${counts.enemyUnits}",
                 style = TextStyle(color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold),
             )
-            if (counts.localTeamId != null) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    BasicText(
-                        text = "部队 ${counts.friendlyUnits} / ${counts.enemyUnits}",
-                        style = TextStyle(color = Color(0xFFB0E0FF), fontSize = 12.sp),
-                    )
-                    BasicText(
-                        text = "    建筑 ${counts.friendlyBuildings} / ${counts.enemyBuildings}",
-                        style = TextStyle(color = Color(0xFFFFD090), fontSize = 12.sp),
-                    )
+            counts.factions.forEach { faction ->
+                val side = if (faction.isLocal) "我方" else "敌方"
+                BasicText(
+                    text = "$side ${faction.label}：总 ${faction.total}（部队 ${faction.totalUnits} / 建筑 ${faction.totalBuildings}）",
+                    style = TextStyle(
+                        color = if (faction.isLocal) Color(0xFF7CFFB2) else Color(0xFFFF9A9A),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                    ),
+                )
+                faction.teams.forEach { team ->
+                    Row(modifier = Modifier.padding(start = 12.dp)) {
+                        BasicText(
+                            text = "${team.label}：部队 ${team.units} / 建筑 ${team.buildings}",
+                            style = TextStyle(color = Color(0xFFD8E8F5), fontSize = 12.sp),
+                        )
+                    }
                 }
             }
         }

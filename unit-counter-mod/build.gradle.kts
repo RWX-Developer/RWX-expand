@@ -13,6 +13,8 @@ kotlin {
 dependencies {
     // 平台类由宿主 classloader 提供（JvmModLoader 以平台 classloader 为父）
     compileOnly(project(":mod-api"))
+    // 只读引擎的 PlayerTeam（同阵营判定）与 GameEngine.isMenuOpen
+    compileOnly(project(":core"))
     compileOnly(libs.compose.runtime)
     compileOnly(libs.compose.foundation)
     compileOnly(libs.kotlinx.coroutines.core)
