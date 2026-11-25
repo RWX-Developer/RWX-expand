@@ -11,6 +11,7 @@ internal data class FactoryUiState(
     val pool: ResourcePool = ResourcePool(),
     val lines: List<ProductionLine> = emptyList(),
     val status: String = "",
+    val hidden: Boolean = false,
 )
 
 /**
@@ -29,6 +30,11 @@ internal class FactoryManager {
         pending.add(action)
     }
 
+    /** 菜单打开时隐藏 HUD 并停止计数。 */
+    fun setHidden() {
+        snapshot.set(snapshot.get().copy(hidden = true))
+    }
+
     fun addLine(targets: Set<String>, factoryIds: Set<Long>, auto: Boolean) {
         val line = ProductionLine(nextLineId.getAndIncrement(), targets, factoryIds, !auto)
         linesRef.updateAndGet { it + line }
@@ -41,6 +47,17 @@ internal class FactoryManager {
     fun toggleLine(id: Int) {
         linesRef.updateAndGet { lines ->
             lines.map { if (it.id == id) it.copy(enabled = !it.enabled) else it }
+        }
+    }
+
+    /** 给已有生产线增减工厂；一旦手动改动，该线转为手动分配。 */
+    fun adjustLineFactories(id: Int, factoryId: Long, add: Boolean) {
+        linesRef.updateAndGet { lines ->
+            lines.map { line ->
+                if (line.id != id) return@map line
+                val next = if (add) line.factoryIds + factoryId else line.factoryIds - factoryId
+                line.copy(factoryIds = next, manualFactorySelection = true)
+            }
         }
     }
 
@@ -95,7 +112,7 @@ internal class FactoryManager {
             if (queued > 0) append(" · 本轮入队 $queued")
             if (skipped > 0) append(" · 资源不足/无匹配 $skipped")
         }
-        snapshot.set(FactoryUiState(teamId, factories, pool, lines, status))
+        snapshot.set(FactoryUiState(teamId, factories, pool, lines, status, hidden = false))
     }
 
     fun runCollectiveAction(api: Api, actionId: String) {

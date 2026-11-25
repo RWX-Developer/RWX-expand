@@ -41,3 +41,11 @@
 # 流程：菜单「生产管理」→ 增加生产线 → 勾单位 → 自动/手动选工厂 → 开始生产；
 #       工厂按可生产名单筛选，不能生产的剔除；资源(credits+自定义)不足不入队。
 #       工厂 ACTION 节全部行动可集体执行。测试 11 例全绿。
+
+# ===== 2026-11-25 生产管理 UI 优化 =====
+#   A unit-counter-mod/.../ModIcons.kt        Box 拼装的工厂/单位/播放/暂停/加减/关闭图标
+#   M unit-counter-mod/.../FactoryWindow.kt   改为 FactoryHud：左下角折叠面板，图像化卡片/状态灯
+#   M unit-counter-mod/.../FactoryManager.kt  加 setHidden + adjustLineFactories（生产线增减工厂）
+#   M unit-counter-mod/.../UnitCounterMod.kt  注册第二个 HUD 取代独立窗口与菜单入口
+# 改动：生产管理从 registerWindow 移到 registerHud，定位左下角；单位/行动只显示 displayName；
+#       每条生产线提供工厂增减按钮；图像化图标+彩色卡片+状态灯；菜单打开时隐藏。

@@ -20,10 +20,8 @@ import com.corrodinggames.rts.game.PlayerTeam
 import com.corrodinggames.rts.gameFramework.GameEngine
 import io.github.rwx.mod.JvmMod
 import io.github.rwx.mod.api.HudId
-import io.github.rwx.mod.api.LocalizedText
 import io.github.rwx.mod.api.LogLevel
 import io.github.rwx.mod.api.ModTask
-import io.github.rwx.mod.api.ModWindowId
 import io.github.rwx.mod.api.ScheduledTask
 import io.github.rwx.mod.api.UnitQuery
 import kotlinx.coroutines.delay
@@ -42,9 +40,8 @@ class UnitCounterMod : JvmMod() {
     private val snapshot = AtomicReference(UnitBreakdown())
     private var sampler: ScheduledTask? = null
     private val hudId = HudId("unitcounter:hud")
-    private val factoryWindowId = ModWindowId("unitcounter:factory")
+    private val factoryHudId = HudId("unitcounter:factory")
     private val factoryManager = FactoryManager()
-    private val menuItemId = 777001
 
     override fun init() {
         val api = this.api
@@ -52,6 +49,7 @@ class UnitCounterMod : JvmMod() {
             val engine = GameEngine.getInstance()
             if (engine == null || engine.isMenuOpen) {
                 snapshot.set(UnitBreakdown(hidden = true))
+                factoryManager.setHidden()
                 return@ModTask
             }
             factoryManager.tick(context)
@@ -72,13 +70,8 @@ class UnitCounterMod : JvmMod() {
         })
         if (!api.game.headless) {
             api.ui.registerHud(hudId, order = 20) { UnitCounterCard(rememberSnapshot(snapshot)) }
-            api.ui.registerWindow(factoryWindowId, LocalizedText(literal = "生产管理")) { windowContext ->
-                FactoryWindow(api, factoryManager, windowContext)
-            }
-            api.ui.addInGameMenuItem(menuId = menuItemId, text = LocalizedText(literal = "生产管理")) {
-                api.ui.openWindow(factoryWindowId)
-            }
-            api.game.log(LogLevel.INFO, "UnitCounter HUD + factory manager registered")
+            api.ui.registerHud(factoryHudId, order = 21) { FactoryHud(api, factoryManager) }
+            api.game.log(LogLevel.INFO, "UnitCounter HUD + factory HUD registered")
         }
     }
 
@@ -141,7 +134,7 @@ class UnitCounterMod : JvmMod() {
     override fun dispose() {
         sampler?.cancel()
         sampler = null
-        api.ui.removeInGameMenuItem(menuItemId)
         api.ui.unregisterHud(hudId)
+        api.ui.unregisterHud(factoryHudId)
     }
 }
