@@ -23,12 +23,13 @@ internal data class FactoryInfo(
     val actions: List<FactoryAction> = emptyList(),
 )
 
-/** 一条生产线：一组目标单位 + 分配到的工厂。 */
+/** 一条生产线：目标单位 + 工厂 + 每座工厂要执行的行动。 */
 internal data class ProductionLine(
     val id: Int,
     val targetUnitTypeIds: Set<String>,
     val factoryIds: Set<Long>,
     val manualFactorySelection: Boolean,
+    val actionsByFactory: Map<Long, Set<String>> = emptyMap(),
     val enabled: Boolean = true,
 )
 
@@ -44,6 +45,7 @@ internal data class ResourceCost(
 internal data class ResourcePool(
     val credits: Double = 0.0,
     val custom: Map<String, Double> = emptyMap(),
+    val creditsLabel: String = "$",
 ) {
     fun canAfford(cost: ResourceCost): Boolean {
         if (cost.credits > credits) return false

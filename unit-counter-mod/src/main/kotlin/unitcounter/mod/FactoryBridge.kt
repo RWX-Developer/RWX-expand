@@ -5,6 +5,7 @@ import com.corrodinggames.rts.game.units.BaseUnit
 import com.corrodinggames.rts.game.units.OrderableUnit
 import com.corrodinggames.rts.game.units.custom.CustomUnitConfig
 import com.corrodinggames.rts.game.units.custom.condition.StoredResourceEntry
+import com.corrodinggames.rts.game.units.custom.condition.resources.Resource
 import io.github.rwx.mod.api.Api
 import io.github.rwx.mod.api.UnitCommandRequest
 import io.github.rwx.mod.api.UnitCommandType
@@ -65,39 +66,51 @@ internal object FactoryBridge {
         return out
     }
 
-    /** 队伍资源池：credits + 自定义资源（键为 Resource.b）。 */
+    /** 只读玩家所属队伍自己的资源：credits + 自定义资源，键统一用显示名。 */
     fun readPool(teamId: Int): ResourcePool {
         val team = PlayerTeam.k(teamId) ?: return ResourcePool()
         val custom = linkedMapOf<String, Double>()
         val stored = team.getCustomResources()
         if (stored != null) {
-            readStoredResources(stored.b).forEach { (key, amount) ->
-                if (!key.equals("credits", ignoreCase = true)) custom[key] = amount
+            readResourceAmounts(stored.b).forEach { (resource, amount) ->
+                if (resource === Resource.D || resource.b.equals("credits", ignoreCase = true)) return@forEach
+                val label = resource.displayName()
+                custom[label] = (custom[label] ?: 0.0) + amount
             }
         }
-        return ResourcePool(team.credits.toDouble(), custom)
+        return ResourcePool(team.credits.toDouble(), custom, Resource.D.displayName())
     }
 
-    /** 按注册名读取单位造价（credits + 自定义资源）。 */
+    /** 按注册名读取单位造价；自定义资源同样用显示名，方便和资源栏直接比对。 */
     fun readCost(unitTypeId: String): ResourceCost {
         val config = findConfig(unitTypeId) ?: return ResourceCost()
         val price = config.price ?: return ResourceCost()
-        val custom = readStoredResources(price.k?.b).filterKeys {
-            !it.equals("credits", ignoreCase = true)
-        }.filterValues { it > 0.0 }
+        val custom = linkedMapOf<String, Double>()
+        readResourceAmounts(price.k?.b).forEach { (resource, amount) ->
+            if (resource === Resource.D || resource.b.equals("credits", ignoreCase = true)) return@forEach
+            if (amount <= 0.0) return@forEach
+            val label = resource.displayName()
+            custom[label] = (custom[label] ?: 0.0) + amount
+        }
         return ResourceCost(price.a().toDouble(), custom)
     }
 
+    private fun Resource.displayName(): String =
+        runCatching { i() }.getOrNull()?.takeIf { it.isNotBlank() }
+            ?: b?.takeIf { it.isNotBlank() }
+            ?: "资源"
+
     /** FastArrayList.a() 返回原始 Object[]，需逐元素转型为 StoredResourceEntry。 */
-    @Suppress("UNCHECKED_CAST")
-    private fun readStoredResources(list: com.corrodinggames.rts.gameFramework.utility.FastArrayList<StoredResourceEntry>?): Map<String, Double> {
+    private fun readResourceAmounts(
+        list: com.corrodinggames.rts.gameFramework.utility.FastArrayList<StoredResourceEntry>?,
+    ): Map<Resource, Double> {
         if (list == null) return emptyMap()
-        val out = linkedMapOf<String, Double>()
+        val out = linkedMapOf<Resource, Double>()
         val array = list.a() ?: return out
         for (raw in array) {
             val entry = raw as? StoredResourceEntry ?: continue
-            val key = entry.a?.b ?: continue
-            out[key] = entry.b
+            val resource = entry.a ?: continue
+            out[resource] = entry.b
         }
         return out
     }

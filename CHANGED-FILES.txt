@@ -68,3 +68,14 @@
 # 修复：主菜单不会继续显示上一局工厂；进入新局时重新扫描当前工厂；HUD 可用鼠标拖动位置。
 # 验证：:unit-counter-mod:build 成功；7+4 测试全绿。
 # jar：unit-counter-mod-1.1.4.jar 已重新部署，旧包备份为 .bak-20261125-170355。
+
+# ===== 2026-11-25 资源显示名 / 生产线增减 / 行动按工厂 =====
+#   M unit-counter-mod/.../FactoryBridge.kt   资源改为 Resource.i() 显示名（资金用 Resource.D）；只读本方队伍资源；
+#                                             造价中的自定义资源同样用显示名，保证与资源栏键一致
+#   M unit-counter-mod/.../FactoryLogic.kt    ProductionLine 新增 actionsByFactory；ResourcePool 新增 creditsLabel
+#   M unit-counter-mod/.../FactoryManager.kt  新增 adjustLineUnits / adjustLineAction / runFactoryAction；
+#                                             目标单位-工厂-行动三者联动收敛；行动只在线启动或新增时执行一次
+#   M unit-counter-mod/.../FactoryWindow.kt   资源栏用显示名；生产线支持单位增减、工厂增减；
+#                                             行动按工厂分组配置并成为生产线的一部分，可单厂执行
+# 验证：:unit-counter-mod:build 成功；7+4 测试全绿。
+# jar：unit-counter-mod-1.1.4.jar 已重新部署，旧包备份为 .bak-20261125-171732。

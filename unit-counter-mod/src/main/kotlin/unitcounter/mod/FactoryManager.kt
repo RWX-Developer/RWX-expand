@@ -25,6 +25,8 @@ internal class FactoryManager {
 
     /** UI 线程提交的意图，仿真线程 tick 时消费。 */
     private val pending = java.util.concurrent.ConcurrentLinkedQueue<() -> Unit>()
+    /** 生产线里配置的行动只在线启动/行动新增时执行一次，避免每 tick 刷屏。 */
+    private val pendingActionRuns = java.util.concurrent.ConcurrentLinkedQueue<Triple<Int, Long, String>>()
 
     fun submit(action: () -> Unit) {
         pending.add(action)
@@ -39,12 +41,23 @@ internal class FactoryManager {
     fun reset() {
         linesRef.set(emptyList())
         pending.clear()
+        pendingActionRuns.clear()
         snapshot.set(FactoryUiState(hidden = true))
     }
 
-    fun addLine(targets: Set<String>, factoryIds: Set<Long>, auto: Boolean) {
-        val line = ProductionLine(nextLineId.getAndIncrement(), targets, factoryIds, !auto)
+    fun addLine(
+        targets: Set<String>,
+        factoryIds: Set<Long>,
+        auto: Boolean,
+        actionsByFactory: Map<Long, Set<String>> = emptyMap(),
+    ) {
+        val id = nextLineId.getAndIncrement()
+        val line = normalizeLine(
+            ProductionLine(id, targets, factoryIds, !auto, actionsByFactory),
+            snapshot.get().factories,
+        )
         linesRef.updateAndGet { it + line }
+        if (line.enabled) enqueueLineActions(id, actionsByFactory)
     }
 
     fun removeLine(id: Int) {
@@ -52,8 +65,34 @@ internal class FactoryManager {
     }
 
     fun toggleLine(id: Int) {
+        var shouldRunActions = false
+        var actionsToRun: Map<Long, Set<String>> = emptyMap()
         linesRef.updateAndGet { lines ->
-            lines.map { if (it.id == id) it.copy(enabled = !it.enabled) else it }
+            lines.map { line ->
+                if (line.id != id) line else {
+                    val next = line.copy(enabled = !line.enabled)
+                    shouldRunActions = next.enabled
+                    actionsToRun = next.actionsByFactory
+                    next
+                }
+            }
+        }
+        if (shouldRunActions) enqueueLineActions(id, actionsToRun)
+    }
+
+    /** 给已有生产线增减目标单位；移除单位时同步剔除不再能生产的工厂与行动。 */
+    fun adjustLineUnits(id: Int, unitTypeId: String, add: Boolean) {
+        linesRef.updateAndGet { lines ->
+            lines.map { line ->
+                if (line.id != id) return@map line
+                val available = availableTargetIds(snapshot.get().factories)
+                val targets = when {
+                    add && unitTypeId in available -> line.targetUnitTypeIds + unitTypeId
+                    !add -> line.targetUnitTypeIds - unitTypeId
+                    else -> line.targetUnitTypeIds
+                }
+                normalizeLine(line.copy(targetUnitTypeIds = targets), snapshot.get().factories)
+            }
         }
     }
 
@@ -62,16 +101,39 @@ internal class FactoryManager {
         linesRef.updateAndGet { lines ->
             lines.map { line ->
                 if (line.id != id) return@map line
-                val next = if (add && factoryId in eligibleFactoryIds(snapshot.get().factories, line.targetUnitTypeIds)) {
-                    line.factoryIds + factoryId
-                } else if (add) {
-                    line.factoryIds
-                } else {
-                    line.factoryIds - factoryId
+                val eligible = eligibleFactoryIds(snapshot.get().factories, line.targetUnitTypeIds)
+                val next = when {
+                    add && factoryId in eligible -> line.factoryIds + factoryId
+                    add -> line.factoryIds
+                    else -> line.factoryIds - factoryId
                 }
-                line.copy(factoryIds = next, manualFactorySelection = true)
+                normalizeLine(line.copy(factoryIds = next, manualFactorySelection = true), snapshot.get().factories)
             }
         }
+    }
+
+    /** 按工厂配置生产线行动；行动必须属于该工厂且该工厂对这条线可用。 */
+    fun adjustLineAction(id: Int, factoryId: Long, actionId: String, add: Boolean) {
+        val factories = snapshot.get().factories
+        val factory = factories.firstOrNull { it.instanceId == factoryId } ?: return
+        if (factory.actions.none { it.actionId == actionId }) return
+        linesRef.updateAndGet { lines ->
+            lines.map { line ->
+                if (line.id != id) return@map line
+                if (factoryId !in eligibleFactoryIds(factories, line.targetUnitTypeIds)) return@map line
+                val current = line.actionsByFactory[factoryId].orEmpty()
+                val nextActions = if (add) current + actionId else current - actionId
+                val updated = line.actionsByFactory.toMutableMap()
+                if (nextActions.isEmpty()) updated.remove(factoryId) else updated[factoryId] = nextActions
+                line.copy(actionsByFactory = updated)
+            }
+        }
+        if (add) enqueueLineActions(id, mapOf(factoryId to setOf(actionId)))
+    }
+
+    fun runFactoryAction(api: Api, factoryId: Long, actionId: String) {
+        val teamId = snapshot.get().teamId ?: return
+        FactoryBridge.runAction(api, teamId, listOf(factoryId), actionId)
     }
 
     fun clearLines() {
@@ -89,16 +151,10 @@ internal class FactoryManager {
         val factories = FactoryBridge.scanMyFactories(api, teamId)
         val pool = FactoryBridge.readPool(teamId)
 
-        // 生产线里的工厂 ID 也必须与可生产能力保持一致，避免 UI 展示无效分配。
-        val lines = linesRef.get().map { line ->
-            val eligible = eligibleFactoryIds(factories, line.targetUnitTypeIds)
-            if (line.manualFactorySelection) {
-                line.copy(factoryIds = line.factoryIds intersect eligible)
-            } else {
-                line.copy(factoryIds = emptySet())
-            }
-        }
+        // 目标单位、工厂、行动都按当前局内可生产能力收敛，避免 UI 展示旧局/不可用项。
+        val lines = linesRef.get().map { normalizeLine(it, factories) }
         if (lines != linesRef.get()) linesRef.set(lines)
+        drainPendingActionRuns(api, teamId, factories, lines)
 
         var queued = 0
         var skipped = 0
@@ -156,12 +212,55 @@ internal class FactoryManager {
         if (ids.isNotEmpty()) FactoryBridge.runAction(api, teamId, ids, actionId)
     }
 
+    private fun availableTargetIds(factories: List<FactoryInfo>): Set<String> = factories
+        .flatMapTo(LinkedHashSet()) { factory -> factory.canBuild.map { it.unitTypeId } }
+
     private fun eligibleFactoryIds(
         factories: List<FactoryInfo>,
         targetUnitTypeIds: Set<String>,
     ): Set<Long> = factories
         .filter { factory -> factory.canBuild.any { it.unitTypeId in targetUnitTypeIds } }
         .mapTo(LinkedHashSet()) { it.instanceId }
+
+    /** 目标单位、工厂、行动三者互相收敛：任何一项失效都同步清掉相关分配。 */
+    private fun normalizeLine(line: ProductionLine, factories: List<FactoryInfo>): ProductionLine {
+        val targets = line.targetUnitTypeIds intersect availableTargetIds(factories)
+        val eligible = eligibleFactoryIds(factories, targets)
+        val factoriesForLine = if (line.manualFactorySelection) line.factoryIds intersect eligible else emptySet()
+        val actionsForLine = when {
+            line.manualFactorySelection -> line.actionsByFactory.filterKeys { it in factoriesForLine }
+            else -> line.actionsByFactory.filterKeys { it in eligible }
+        }
+        return line.copy(
+            targetUnitTypeIds = targets,
+            factoryIds = factoriesForLine,
+            actionsByFactory = actionsForLine,
+        )
+    }
+
+    private fun enqueueLineActions(lineId: Int, actionsByFactory: Map<Long, Set<String>>) {
+        actionsByFactory.forEach { (factoryId, actionIds) ->
+            actionIds.forEach { actionId -> pendingActionRuns.add(Triple(lineId, factoryId, actionId)) }
+        }
+    }
+
+    private fun drainPendingActionRuns(
+        api: Api,
+        teamId: Int,
+        factories: List<FactoryInfo>,
+        lines: List<ProductionLine>,
+    ) {
+        while (true) {
+            val (lineId, factoryId, actionId) = pendingActionRuns.poll() ?: break
+            val line = lines.firstOrNull { it.id == lineId } ?: continue
+            if (!line.enabled) continue
+            if (line.manualFactorySelection && factoryId !in line.factoryIds) continue
+            if (factoryId !in eligibleFactoryIds(factories, line.targetUnitTypeIds)) continue
+            val factory = factories.firstOrNull { it.instanceId == factoryId } ?: continue
+            if (factory.actions.none { it.actionId == actionId }) continue
+            FactoryBridge.runAction(api, teamId, listOf(factoryId), actionId)
+        }
+    }
 
     private fun drainPending() {
         while (true) {
