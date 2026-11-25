@@ -10,3 +10,12 @@
  M desktop/src/main/kotlin/io/github/rwx/slick/SlickGraphicsEngine.kt
  M settings.gradle.kts
 ?? bench-mod/
+
+# ===== 2026-11-25 HEAD=d6abcb9 =====
+# 拦截炮塔：新增 interceptProjectiles_independentRotation（默认 false）
+#   M core/.../custom/TurretConfig.java        新增字段 + 解析键 + 拷贝 + followsParentTurret()
+#   M core/.../custom/CustomUnit.java          a(int,float) 不再把父炮角度增量传给独立子炮；C(i) 自身角度
+#   M core/.../custom/hooks/ProjectileInterceptorHook.java  独立子炮不反向拽父炮；扇区参考角退回车体
+#   A desktop/src/test/.../ui/TurretIndependentRotationTest.kt   4 例
+#   M desktop/src/test/.../scenario/NukeInterceptHeadlessTest.kt 原版核弹四用例 + 硬断言
+# 测试：desktop 全量 25 例通过（1 场景 + 4 暂停 + 4 容差 + 7 扇区 + 5 左键修复 + 4 独立旋转）
