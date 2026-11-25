@@ -70,15 +70,19 @@ internal object FactoryBridge {
     fun readPool(teamId: Int): ResourcePool {
         val team = PlayerTeam.k(teamId) ?: return ResourcePool()
         val custom = linkedMapOf<String, Double>()
+        val hidden = linkedSetOf<String>()
         val stored = team.getCustomResources()
         if (stored != null) {
             readResourceAmounts(stored.b).forEach { (resource, amount) ->
                 if (resource === Resource.D || resource.b.equals("credits", ignoreCase = true)) return@forEach
                 val label = resource.displayName()
                 custom[label] = (custom[label] ?: 0.0) + amount
+                // INI 的 hidden:true 存进 Resource.r，由 Resource.a() 读回。
+                // 资源仍然留在 custom 里参与造价判断，只是 UI 不展示。
+                if (runCatching { resource.a() }.getOrDefault(false)) hidden += label
             }
         }
-        return ResourcePool(team.credits.toDouble(), custom, Resource.D.displayName())
+        return ResourcePool(team.credits, custom, Resource.D.displayName(), hidden)
     }
 
     /** 按注册名读取单位造价；自定义资源同样用显示名，方便和资源栏直接比对。 */

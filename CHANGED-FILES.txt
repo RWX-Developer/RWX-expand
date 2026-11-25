@@ -87,3 +87,13 @@
 #   M unit-counter-mod/.../ModIcons.kt        新增 Resource 菱形宝石图标
 # 验证：:unit-counter-mod:build 成功；7+4 测试全绿。
 # jar：unit-counter-mod-1.1.4.jar 已重新部署，旧包备份为 .bak-20261125-173225。
+
+# ===== 2026-11-25 隐藏资源过滤 + 生产线 HOI4 卡片 =====
+#   M unit-counter-mod/.../FactoryBridge.kt   Resource.a() 读取 hidden:true；资源仍留在 ResourcePool
+#                                             参与造价判断，但记录到 ResourcePool.hidden 不显示
+#   M unit-counter-mod/.../FactoryLogic.kt    ResourcePool 新增 hidden: Set<String>
+#   M unit-counter-mod/.../FactoryWindow.kt   资源栏过滤 hidden；生产线改为可折叠 HOI4 风格卡片：
+#                                             产品色块+线号+运行状态，摘要行显示目标/工厂数/行动数，
+#                                             展开后编辑目标、工厂、按工厂行动
+# 验证：:unit-counter-mod:build 成功；7+4 测试全绿。
+# jar：unit-counter-mod-1.1.4.jar 已重新部署，旧包备份为 .bak-20261125-174134。

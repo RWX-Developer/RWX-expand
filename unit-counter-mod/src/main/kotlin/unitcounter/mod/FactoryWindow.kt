@@ -38,6 +38,8 @@ import kotlinx.coroutines.delay
 
 private val PANEL_BG = Color(0xEE101820)
 private val CARD_BG = Color(0x331E2A36)
+private val LINE_BG = Color(0xE6141D25)
+private val LINE_BORDER = Color(0x335A7186)
 private val ACCENT = Color(0xFF4FC3F7)
 private val OK = Color(0xFF69F0AE)
 private val WARN = Color(0xFFFFD54F)
@@ -244,14 +246,16 @@ private fun ResourceBar(view: FactoryUiState) {
                 color = Color(0xFFFFC94D),
                 emphasized = true,
             )
-            view.pool.custom.forEach { (name, amount) ->
-                ResourceChip(
-                    label = name,
-                    amount = amount,
-                    color = ModIcons.colorFor(name),
-                    emphasized = false,
-                )
-            }
+            view.pool.custom
+                .filterKeys { it !in view.pool.hidden }
+                .forEach { (name, amount) ->
+                    ResourceChip(
+                        label = name,
+                        amount = amount,
+                        color = ModIcons.colorFor(name),
+                        emphasized = false,
+                    )
+                }
         }
     }
 }
@@ -411,105 +415,160 @@ private fun LineCard(
     } else {
         eligibleFactories
     }
+    val targetNames = line.targetUnitTypeIds
+        .mapNotNull { id -> allBuilds.firstOrNull { it.unitTypeId == id }?.displayName }
+        .joinToString(" / ")
+        .ifBlank { "未设目标" }
+    val actionCount = line.actionsByFactory.values.sumOf { it.size }
+    val accent = line.targetUnitTypeIds.firstOrNull()?.let(ModIcons::colorFor) ?: ACCENT
+    var expanded by remember(line.id) { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .clip(RoundedCornerShape(8.dp))
-            .background(if (line.enabled) CARD_BG else Color(0x22FFFFFF))
+            .background(if (line.enabled) LINE_BG else Color(0x99101820))
+            .border(
+                1.dp,
+                if (line.enabled) LINE_BORDER else Color(0x22FFFFFF),
+                RoundedCornerShape(8.dp),
+            )
             .padding(8.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp),
     ) {
+        // 顶行：产品图标 + 线号 + 状态/开关 + 删除，类似 HOI4 生产线条目。
         Row(verticalAlignment = Alignment.CenterVertically) {
-            StatusLamp(view.copy(status = if (line.enabled) "" else "暂停"))
-            Text(" 生产线 ${line.id}", color = TEXT, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            Box(
+                Modifier
+                    .size(18.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(accent.copy(alpha = 0.18f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                ModIcons.Unit(accent, 10.dp)
+            }
+            Text(" 生产线 ${line.id}", color = TEXT, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             Box(Modifier.weight(1f))
+            Text(
+                if (line.enabled) "运行" else "暂停",
+                color = if (line.enabled) OK else WARN,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+            )
             IconButton(onClick = onToggle) {
                 if (line.enabled) ModIcons.Pause(WARN) else ModIcons.Play(OK)
             }
             IconButton(onClick = onRemove) { ModIcons.Close(DANGER) }
         }
 
-        // 目标单位：已有项可移除，未选项可添加。
-        Text("目标单位", color = TEXT_DIM, fontSize = 11.sp)
-        Row {
-            line.targetUnitTypeIds.forEach { id ->
-                val name = allBuilds.firstOrNull { it.unitTypeId == id }?.displayName ?: id
-                Chip(name, ModIcons.colorFor(id))
-                IconButton(onClick = { onUnitAdjust(id, false) }) { ModIcons.Minus(DANGER) }
-            }
-        }
-        val addableUnits = allBuilds.filterNot { it.unitTypeId in line.targetUnitTypeIds }
-        if (addableUnits.isNotEmpty()) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("添加", color = TEXT_DIM, fontSize = 11.sp)
-                addableUnits.forEach { option ->
-                    IconButton(onClick = { onUnitAdjust(option.unitTypeId, true) }) {
-                        ModIcons.Plus(ACCENT)
-                    }
-                }
+        // 摘要行：目标产品 / 工厂数 / 行动数。
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(targetNames, color = TEXT, fontSize = 11.sp, maxLines = 1)
+            Box(Modifier.weight(1f))
+            Text("工厂 ${assignedFactories.size}", color = TEXT_DIM, fontSize = 10.sp)
+            if (actionCount > 0) {
+                Text(" · 行动 $actionCount", color = WARN, fontSize = 10.sp)
             }
         }
 
-        // 工厂：手动线显示增减；自动线展示当前自动覆盖的工厂。
-        Text(
-            if (line.manualFactorySelection) "工厂（手动）" else "工厂（自动 ${eligibleFactories.size} 座）",
-            color = TEXT_DIM,
-            fontSize = 11.sp,
-        )
-        if (line.manualFactorySelection) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded }
+                .padding(vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(if (expanded) "收起详情" else "展开详情", color = ACCENT, fontSize = 10.sp)
+            Box(Modifier.weight(1f))
+            Text(
+                if (line.manualFactorySelection) "手动分配" else "自动分配",
+                color = TEXT_DIM,
+                fontSize = 10.sp,
+            )
+        }
+
+        if (expanded) {
+            SectionTitle("目标单位")
             Row {
-                line.factoryIds.forEach { id ->
-                    val name = view.factories.firstOrNull { it.instanceId == id }?.label ?: "#$id"
-                    Chip(name, OK)
-                    IconButton(onClick = { onFactoryAdjust(id, false) }) { ModIcons.Minus(DANGER) }
+                line.targetUnitTypeIds.forEach { id ->
+                    val name = allBuilds.firstOrNull { it.unitTypeId == id }?.displayName ?: id
+                    Chip(name, ModIcons.colorFor(id))
+                    IconButton(onClick = { onUnitAdjust(id, false) }) { ModIcons.Minus(DANGER) }
                 }
             }
-            val addableFactories = eligibleFactories.filterNot { it.instanceId in line.factoryIds }
-            if (addableFactories.isNotEmpty()) {
+            val addableUnits = allBuilds.filterNot { it.unitTypeId in line.targetUnitTypeIds }
+            if (addableUnits.isNotEmpty()) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("添加", color = TEXT_DIM, fontSize = 11.sp)
-                    addableFactories.forEach { factory ->
-                        IconButton(onClick = { onFactoryAdjust(factory.instanceId, true) }) {
+                    Text("添加", color = TEXT_DIM, fontSize = 10.sp)
+                    addableUnits.forEach { option ->
+                        IconButton(onClick = { onUnitAdjust(option.unitTypeId, true) }) {
                             ModIcons.Plus(ACCENT)
                         }
                     }
                 }
             }
-        }
 
-        // 行动属于生产线的一部分，但按具体工厂设置。
-        val factoriesWithActions = assignedFactories.filter { factory ->
-            val buildActionIds = factory.canBuild.mapTo(mutableSetOf()) { it.actionId }
-            factory.actions.any { it.actionId !in buildActionIds }
-        }
-        if (factoriesWithActions.isNotEmpty()) {
-            Text("行动（按工厂）", color = WARN, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-            factoriesWithActions.forEach { factory ->
+            SectionTitle("工厂")
+            if (line.manualFactorySelection) {
+                Row {
+                    line.factoryIds.forEach { id ->
+                        val name = view.factories.firstOrNull { it.instanceId == id }?.label ?: "#$id"
+                        Chip(name, OK)
+                        IconButton(onClick = { onFactoryAdjust(id, false) }) { ModIcons.Minus(DANGER) }
+                    }
+                }
+                val addableFactories = eligibleFactories.filterNot { it.instanceId in line.factoryIds }
+                if (addableFactories.isNotEmpty()) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("添加", color = TEXT_DIM, fontSize = 10.sp)
+                        addableFactories.forEach { factory ->
+                            IconButton(onClick = { onFactoryAdjust(factory.instanceId, true) }) {
+                                ModIcons.Plus(ACCENT)
+                            }
+                        }
+                    }
+                }
+            } else {
+                Text(
+                    "自动覆盖 ${eligibleFactories.size} 座可生产工厂",
+                    color = TEXT_DIM,
+                    fontSize = 10.sp,
+                )
+            }
+
+            val factoriesWithActions = assignedFactories.filter { factory ->
                 val buildActionIds = factory.canBuild.mapTo(mutableSetOf()) { it.actionId }
-                val actions = factory.actions.filterNot { it.actionId in buildActionIds }
-                Text(" ${factory.label}", color = TEXT_DIM, fontSize = 11.sp)
-                actions.forEach { action ->
-                    val selected = action.actionId in line.actionsByFactory[factory.instanceId].orEmpty()
-                    Row(
-                        modifier = Modifier
-                            .padding(start = 10.dp)
-                            .clip(RoundedCornerShape(5.dp))
-                            .background(if (selected) Color(0x33FFD54F) else Color.Transparent)
-                            .clickable { onActionAdjust(factory.instanceId, action.actionId, !selected) }
-                            .padding(horizontal = 6.dp, vertical = 3.dp)
-                            .fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Box(
-                            Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(if (selected) WARN else Color(0x44FFFFFF)),
-                        )
-                        Text(" ${action.displayName}", color = TEXT, fontSize = 11.sp)
-                        Box(Modifier.weight(1f))
-                        if (selected) {
-                            IconButton(onClick = { onActionRun(factory.instanceId, action.actionId) }) {
-                                ModIcons.Play(OK, 10.dp)
+                factory.actions.any { it.actionId !in buildActionIds }
+            }
+            if (factoriesWithActions.isNotEmpty()) {
+                SectionTitle("行动", WARN)
+                factoriesWithActions.forEach { factory ->
+                    val buildActionIds = factory.canBuild.mapTo(mutableSetOf()) { it.actionId }
+                    val actions = factory.actions.filterNot { it.actionId in buildActionIds }
+                    Text(" ${factory.label}", color = TEXT_DIM, fontSize = 10.sp)
+                    actions.forEach { action ->
+                        val selected = action.actionId in line.actionsByFactory[factory.instanceId].orEmpty()
+                        Row(
+                            modifier = Modifier
+                                .padding(start = 10.dp)
+                                .clip(RoundedCornerShape(5.dp))
+                                .background(if (selected) Color(0x33FFD54F) else Color.Transparent)
+                                .clickable { onActionAdjust(factory.instanceId, action.actionId, !selected) }
+                                .padding(horizontal = 6.dp, vertical = 3.dp)
+                                .fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(
+                                Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(if (selected) WARN else Color(0x44FFFFFF)),
+                            )
+                            Text(" ${action.displayName}", color = TEXT, fontSize = 10.sp)
+                            Box(Modifier.weight(1f))
+                            if (selected) {
+                                IconButton(onClick = { onActionRun(factory.instanceId, action.actionId) }) {
+                                    ModIcons.Play(OK, 10.dp)
+                                }
                             }
                         }
                     }
@@ -517,6 +576,11 @@ private fun LineCard(
             }
         }
     }
+}
+
+@Composable
+private fun SectionTitle(label: String, color: Color = TEXT_DIM) {
+    Text(label, color = color, fontSize = 10.sp, fontWeight = FontWeight.Bold)
 }
 
 @Composable

@@ -46,6 +46,8 @@ internal data class ResourcePool(
     val credits: Double = 0.0,
     val custom: Map<String, Double> = emptyMap(),
     val creditsLabel: String = "$",
+    /** INI 里 hidden:true 的资源：仍参与造价判断，但不在资源栏显示。 */
+    val hidden: Set<String> = emptySet(),
 ) {
     fun canAfford(cost: ResourceCost): Boolean {
         if (cost.credits > credits) return false
