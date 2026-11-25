@@ -17,6 +17,7 @@ dependencies {
     compileOnly(project(":core"))
     compileOnly(libs.compose.runtime)
     compileOnly(libs.compose.foundation)
+    compileOnly(libs.compose.material3)
     compileOnly(libs.kotlinx.coroutines.core)
 
     testImplementation(project(":mod-api"))

@@ -29,3 +29,15 @@
 # 玩法：每 10 tick 在仿真线程按队伍统计存活单位/建筑，Compose HUD 只读快照；
 #       游戏内模组菜单需手动启用（新 JVM mod 默认 disabled）。
 # jar：unit-counter-mod-1.1.4.jar 已放 D:/Game/RWX-整合包/mods/units/
+
+# ===== 2026-11-25 工厂生产线分配机制 =====
+#   A unit-counter-mod/.../FactoryLogic.kt   生产线筛选/资源门控纯逻辑
+#   A unit-counter-mod/.../FactoryBridge.kt  引擎桥接：扫工厂/造价/资源、下 BUILD/CUSTOM_ACTION 命令
+#   A unit-counter-mod/.../FactoryManager.kt 调度器：UI 意图队列 + 每 tick 扫描/匹配/入队
+#   A unit-counter-mod/.../FactoryWindow.kt  展开式生产管理窗口
+#   A unit-counter-mod/src/test/.../FactoryLogicTest.kt 7 例
+#   M unit-counter-mod/.../UnitCounterMod.kt  注册窗口 + 游戏内菜单入口 + tick 调度
+#   M unit-counter-mod/build.gradle.kts       compileOnly core + material3
+# 流程：菜单「生产管理」→ 增加生产线 → 勾单位 → 自动/手动选工厂 → 开始生产；
+#       工厂按可生产名单筛选，不能生产的剔除；资源(credits+自定义)不足不入队。
+#       工厂 ACTION 节全部行动可集体执行。测试 11 例全绿。
