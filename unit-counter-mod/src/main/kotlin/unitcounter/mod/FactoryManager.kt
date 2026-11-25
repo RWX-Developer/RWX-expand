@@ -50,12 +50,18 @@ internal class FactoryManager {
         }
     }
 
-    /** 给已有生产线增减工厂；一旦手动改动，该线转为手动分配。 */
+    /** 给已有生产线增减工厂；只能加入确实能生产该线目标单位的工厂。 */
     fun adjustLineFactories(id: Int, factoryId: Long, add: Boolean) {
         linesRef.updateAndGet { lines ->
             lines.map { line ->
                 if (line.id != id) return@map line
-                val next = if (add) line.factoryIds + factoryId else line.factoryIds - factoryId
+                val next = if (add && factoryId in eligibleFactoryIds(snapshot.get().factories, line.targetUnitTypeIds)) {
+                    line.factoryIds + factoryId
+                } else if (add) {
+                    line.factoryIds
+                } else {
+                    line.factoryIds - factoryId
+                }
                 line.copy(factoryIds = next, manualFactorySelection = true)
             }
         }
@@ -75,8 +81,17 @@ internal class FactoryManager {
         }
         val factories = FactoryBridge.scanMyFactories(api, teamId)
         val pool = FactoryBridge.readPool(teamId)
-        val lines = linesRef.get()
-        val previous = snapshot.get()
+
+        // 生产线里的工厂 ID 也必须与可生产能力保持一致，避免 UI 展示无效分配。
+        val lines = linesRef.get().map { line ->
+            val eligible = eligibleFactoryIds(factories, line.targetUnitTypeIds)
+            if (line.manualFactorySelection) {
+                line.copy(factoryIds = line.factoryIds intersect eligible)
+            } else {
+                line.copy(factoryIds = emptySet())
+            }
+        }
+        if (lines != linesRef.get()) linesRef.set(lines)
 
         var queued = 0
         var skipped = 0
@@ -133,6 +148,13 @@ internal class FactoryManager {
         }
         if (ids.isNotEmpty()) FactoryBridge.runAction(api, teamId, ids, actionId)
     }
+
+    private fun eligibleFactoryIds(
+        factories: List<FactoryInfo>,
+        targetUnitTypeIds: Set<String>,
+    ): Set<Long> = factories
+        .filter { factory -> factory.canBuild.any { it.unitTypeId in targetUnitTypeIds } }
+        .mapTo(LinkedHashSet()) { it.instanceId }
 
     private fun drainPending() {
         while (true) {

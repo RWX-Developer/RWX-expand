@@ -237,20 +237,22 @@ private fun LineEditor(
         }
         if (!autoAssign) {
             Text("选工厂", color = ACCENT, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            view.factories.forEach { factory ->
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(if (factory.instanceId in selectedFactories) Color(0x3369F0AE) else Color.Transparent)
-                        .clickable { onFactoryToggle(factory.instanceId) }
-                        .padding(horizontal = 6.dp, vertical = 4.dp)
-                        .fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    ModIcons.Factory(OK, 14.dp)
-                    Text(" ${factory.label}", color = TEXT, fontSize = 12.sp)
+            view.factories
+                .filter { factory -> factory.canBuild.any { it.unitTypeId in selectedUnits } }
+                .forEach { factory ->
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (factory.instanceId in selectedFactories) Color(0x3369F0AE) else Color.Transparent)
+                            .clickable { onFactoryToggle(factory.instanceId) }
+                            .padding(horizontal = 6.dp, vertical = 4.dp)
+                            .fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        ModIcons.Factory(OK, 14.dp)
+                        Text(" ${factory.label}", color = TEXT, fontSize = 12.sp)
+                    }
                 }
-            }
         }
 
         WideButton(label = "开始生产", color = OK, enabled = selectedUnits.isNotEmpty(), onClick = onSubmit)
@@ -299,15 +301,17 @@ private fun LineCard(
                 }
             }
         }
-        // 增减工厂按钮条：列出本队工厂，点击 + 加入该生产线
+        // 增减工厂按钮条：只列出能生产该线目标单位的工厂。
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("工厂", color = TEXT_DIM, fontSize = 11.sp)
-            view.factories.forEach { factory ->
-                val inLine = factory.instanceId in line.factoryIds
-                IconButton(onClick = { onFactoryAdjust(factory.instanceId, !inLine) }) {
-                    if (inLine) ModIcons.Minus(DANGER) else ModIcons.Plus(ACCENT)
+            view.factories
+                .filter { factory -> factory.canBuild.any { it.unitTypeId in line.targetUnitTypeIds } }
+                .forEach { factory ->
+                    val inLine = factory.instanceId in line.factoryIds
+                    IconButton(onClick = { onFactoryAdjust(factory.instanceId, !inLine) }) {
+                        if (inLine) ModIcons.Minus(DANGER) else ModIcons.Plus(ACCENT)
+                    }
                 }
-            }
         }
     }
 }

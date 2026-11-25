@@ -1,6 +1,6 @@
 package unitcounter.mod
 
-/** 工厂可生产的一种单位（来自 INI ACTION 节，注册名用于下 BUILD 命令）。 */
+/** 工厂可生产的一种单位（来自 INI ACTION 节，actionId 用于注入生产队列）。 */
 internal data class BuildOption(
     val actionId: String,
     val unitTypeId: String,

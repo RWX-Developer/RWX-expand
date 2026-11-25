@@ -30,18 +30,25 @@ internal object FactoryBridge {
             val builds = mutableListOf<BuildOption>()
             val allActions = mutableListOf<FactoryAction>()
             for (action in actions) {
+                // ISLOCKED / ISVISIBLE：不可用的行动既不显示也不参与生产。
+                // isNotAvailable 对应 INI 的 isLocked（含 Alt 变体），b(action) 对应 isVisible。
+                if (action.isNotAvailable(orderable) || !action.b(orderable)) continue
                 val actionId = action.getActionIdString()
                 if (actionId.isNullOrBlank() || actionId == "<null index>") continue
                 val name = runCatching { action.getDisplayName() }.getOrNull()
                     ?.takeIf { it.isNotBlank() }
                     ?: actionId
-                // 收集全部 ACTION 节行动（生产/升级/自定义），供集体执行。
+                // 收集全部可用 ACTION 节行动（生产/升级/自定义），供集体执行。
                 allActions += FactoryAction(actionId, name)
 
                 val unitType = action.attachedUnitType ?: action.getUnitType() ?: continue
                 if (unitType.isBuildingUnit()) continue
                 val typeId = unitType.v() ?: continue
-                builds += BuildOption(actionId, typeId, name, action.getQueueSize())
+                // 单位显示名取 displayText（getUnitName），不是内部注册名。
+                val unitName = CustomUnitConfig.c(unitType)?.getUnitName()
+                    ?.takeIf { it.isNotBlank() }
+                    ?: name
+                builds += BuildOption(actionId, typeId, unitName, action.getQueueSize())
             }
             // 没有生产单位但有其他行动的工厂也纳入（可集体执行行动）。
             if (builds.isEmpty() && allActions.isEmpty()) continue
@@ -109,15 +116,22 @@ internal object FactoryBridge {
         return null
     }
 
-    /** 让指定工厂开始生产某单位：走 BUILD 命令，queueSize 由 ACTION 节给出。 */
+    /**
+     * 让指定工厂开始生产某单位。
+     *
+     * 工厂造兵不是 builder 在地图落点建造建筑，不能走 BUILD：
+     * BUILD 需要 target point，并且最终调用的是建造建筑流程，不会进入工厂生产队列。
+     * 正确做法是把 ACTION 节对应的生产 action id 作为 CUSTOM_ACTION 提交，
+     * 引擎侧 Command 会找到该 action 并进入 FactoryQueueManager。
+     */
     fun enqueue(api: Api, teamId: Int, factory: FactoryInfo, option: BuildOption): Boolean {
+        if (option.actionId.isBlank()) return false
         val result = api.commands.submit(
             UnitCommandRequest(
                 teamId = teamId,
                 unitIds = listOf(UnitInstanceId(factory.instanceId)),
-                type = UnitCommandType.BUILD,
-                buildUnitTypeId = option.unitTypeId,
-                buildQueueSize = option.queueSize.coerceAtLeast(1),
+                type = UnitCommandType.CUSTOM_ACTION,
+                actionId = option.actionId,
                 queued = true,
             )
         )

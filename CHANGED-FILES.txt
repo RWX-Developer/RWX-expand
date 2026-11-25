@@ -49,3 +49,13 @@
 #   M unit-counter-mod/.../UnitCounterMod.kt  注册第二个 HUD 取代独立窗口与菜单入口
 # 改动：生产管理从 registerWindow 移到 registerHud，定位左下角；单位/行动只显示 displayName；
 #       每条生产线提供工厂增减按钮；图像化图标+彩色卡片+状态灯；菜单打开时隐藏。
+
+# ===== 2026-11-25 生产管理可用性与队列修复 =====
+#   M unit-counter-mod/.../FactoryBridge.kt   按 isNotAvailable/b 过滤 ISLOCKED/ISVISIBLE 不可用的行动；
+#                                             单位显示名改取 CustomUnitConfig.c(unitType).getUnitName()（displayText）；
+#                                             工厂造兵命令由 BUILD 改为 CUSTOM_ACTION + actionId，真正注入工厂生产队列
+#   M unit-counter-mod/.../FactoryLogic.kt    注释同步：BuildOption 用 actionId 入队
+#   M unit-counter-mod/.../FactoryManager.kt  生产线工厂 ID 按可生产能力收敛；手动加减工厂拒绝不能生产者
+#   M unit-counter-mod/.../FactoryWindow.kt   手动选厂与生产线 +/- 只显示能生产目标单位的工厂
+# 验证：:unit-counter-mod:build 成功；FactoryLogicTest 7 例 + UnitCountsTest 4 例全绿。
+# jar：unit-counter-mod-1.1.4.jar 已重新部署到 D:/Game/RWX-整合包/mods/units/（旧 jar 已备份）。
