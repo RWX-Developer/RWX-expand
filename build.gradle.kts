@@ -42,5 +42,8 @@ subprojects {
         useJUnitPlatform()
         systemProperty("user.language", "en")
         systemProperty("user.country", "US")
+        // 无头场景测试会创建 GameEngine 单例（"A game engine already exists"），
+        // 一个 JVM 只能跑一场。每个测试类单开进程，避免多场无头测试互相踩。
+        forkEvery = 1
     }
 }

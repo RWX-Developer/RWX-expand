@@ -178,6 +178,8 @@ interceptProjectiles_independentRotation: true
   | C | 关掉 `interceptProjectiles` | 0 拦截弹，核弹飞到距目标 18 才命中——证明 A/B 的拦截弹确实来自这条链路 |
   | D | 正、背两枚同帧升空 | 炮塔第 68 帧先对准扇区内那枚、第 74 帧才转到另一侧（扇区只是优先级） |
 - 单元测试：`InterceptFrontSectorTest`（扇区判定 7 例）、`InterceptAimToleranceTest`（容差 4 例）、`LeftClickRepairTest`（左键修复 5 例）、`TurretIndependentRotationTest`（父炮塔独立旋转 4 例）、`SlickGamePausedFrameTest`（暂停 4 例）。
+- 真实单位验证：`AttachedTurretRotationHeadlessTest` 直接拿模组里的「铠甲」防空车（`turret_4` 是 `attachedTo` + `interceptProjectiles`）调 `CustomUnit.a(父炮下标, 10°)`：
+  默认联动时子炮角 10°（跟父炮走）；写 `interceptProjectiles_independentRotation: true` 后子炮角纹丝不动、父炮自己照转，待机角 `C(子)` 也等于自身角度。
 - 台架注意：非 Android 下 `/SD/mods/units` 会退化成相对路径，必须给 `FileHelper.activeFileLoader` 设 `CustomPathFileLoader(scenarioRoot, "scenario")`，否则模组单位加载不到；默认禁用的模组用 `-Drwx.forceMods=` 打开；`-Drwx.intercept.debug=1` 才会写 `logs/rwx-intercept.log`。
 - 测试场景踩过的坑：`rawSection` 同名段会整段替换 typed turret，必须把 `projectile` / `turnSpeed` 等原生键写全；拦截炮塔已由解析层默认 `shouldResetTurret: false`，不再需要在每个 INI 里单独写。
 - 验证用的临时 mod、探针和配置已在验证后移除，正式仓库只保留引擎同构的开火逻辑。
