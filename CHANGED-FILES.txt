@@ -19,3 +19,13 @@
 #   A desktop/src/test/.../ui/TurretIndependentRotationTest.kt   4 例
 #   M desktop/src/test/.../scenario/NukeInterceptHeadlessTest.kt 原版核弹四用例 + 硬断言
 # 测试：desktop 全量 25 例通过（1 场景 + 4 暂停 + 4 容差 + 7 扇区 + 5 左键修复 + 4 独立旋转）
+
+# ===== 2026-11-25 新增 JVM mod：unit-counter-mod =====
+#   A unit-counter-mod/build.gradle.kts
+#   A unit-counter-mod/src/main/resources/mod.toml (id=unitcounter:hud)
+#   A unit-counter-mod/src/main/kotlin/unitcounter/mod/UnitCounterMod.kt
+#   A unit-counter-mod/src/test/kotlin/unitcounter/mod/UnitCountsTest.kt (3 例)
+#   M settings.gradle.kts  include(":unit-counter-mod")
+# 玩法：每 10 tick 在仿真线程按队伍统计存活单位/建筑，Compose HUD 只读快照；
+#       游戏内模组菜单需手动启用（新 JVM mod 默认 disabled）。
+# jar：unit-counter-mod-1.1.4.jar 已放 D:/Game/RWX-整合包/mods/units/

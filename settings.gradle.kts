@@ -29,3 +29,6 @@ include(":android")
 
 // 大叔加的台架模块，不属于上游：可控刷兵，仅用于性能基准
 include(":bench-mod")
+
+// 游戏内敌我单位计数 HUD（JVM mod）
+include(":unit-counter-mod")
