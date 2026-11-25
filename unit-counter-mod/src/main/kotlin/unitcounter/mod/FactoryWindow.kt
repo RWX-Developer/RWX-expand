@@ -47,14 +47,6 @@ private val DANGER = Color(0xFFFF8A80)
 private val TEXT = Color(0xFFE8F1F8)
 private val TEXT_DIM = Color(0xFF9FB3C8)
 
-private fun Map<Long, Set<String>>.withAction(factoryId: Long, actionId: String): Map<Long, Set<String>> {
-    val current = this[factoryId].orEmpty()
-    val next = if (actionId in current) current - actionId else current + actionId
-    val updated = toMutableMap()
-    if (next.isEmpty()) updated.remove(factoryId) else updated[factoryId] = next
-    return updated
-}
-
 /**
  * 游戏页面左下角的工厂生产管理 HUD（图像化、可折叠）。
  * 收起时只有一个工厂图标按钮；展开后可建生产线、增减工厂、选单位、集体行动。
@@ -90,9 +82,6 @@ internal fun FactoryHud(api: Api, manager: FactoryManager) {
     var expanded by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf(false) }
     var selectedUnits by remember { mutableStateOf(setOf<String>()) }
-    var selectedFactories by remember { mutableStateOf(setOf<Long>()) }
-    var selectedActions by remember { mutableStateOf<Map<Long, Set<String>>>(emptyMap()) }
-    var autoAssign by remember { mutableStateOf(true) }
 
     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.BottomStart) {
         Column(
@@ -157,23 +146,12 @@ internal fun FactoryHud(api: Api, manager: FactoryManager) {
                             onUnitToggle = { id ->
                                 selectedUnits = if (id in selectedUnits) selectedUnits - id else selectedUnits + id
                             },
-                            autoAssign = autoAssign,
-                            onAutoChange = { autoAssign = it },
-                            selectedFactories = selectedFactories,
-                            onFactoryToggle = { id ->
-                                selectedFactories = if (id in selectedFactories) selectedFactories - id else selectedFactories + id
-                            },
-                            selectedActions = selectedActions,
-                            onActionToggle = { factoryId, actionId ->
-                                selectedActions = selectedActions.withAction(factoryId, actionId)
-                            },
                             onSubmit = {
                                 manager.submit {
-                                    manager.addLine(selectedUnits, selectedFactories, autoAssign, selectedActions)
+                                    // 新线默认自动分配工厂；工厂/行动在生产线卡片里继续配置。
+                                    manager.addLine(selectedUnits, emptySet(), auto = true)
                                 }
                                 selectedUnits = emptySet()
-                                selectedFactories = emptySet()
-                                selectedActions = emptyMap()
                                 editing = false
                             },
                         )
@@ -186,6 +164,7 @@ internal fun FactoryHud(api: Api, manager: FactoryManager) {
                             view = view,
                             onToggle = { manager.submit { manager.toggleLine(line.id) } },
                             onRemove = { manager.submit { manager.removeLine(line.id) } },
+                            onModeChange = { auto -> manager.submit { manager.setLineAuto(line.id, auto) } },
                             onUnitAdjust = { id, add ->
                                 manager.submit { manager.adjustLineUnits(line.id, id, add) }
                             },
@@ -301,12 +280,6 @@ private fun LineEditor(
     view: FactoryUiState,
     selectedUnits: Set<String>,
     onUnitToggle: (String) -> Unit,
-    autoAssign: Boolean,
-    onAutoChange: (Boolean) -> Unit,
-    selectedFactories: Set<Long>,
-    onFactoryToggle: (Long) -> Unit,
-    selectedActions: Map<Long, Set<String>>,
-    onActionToggle: (Long, String) -> Unit,
     onSubmit: () -> Unit,
 ) {
     Column(
@@ -333,65 +306,22 @@ private fun LineEditor(
             }
         }
 
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            MiniToggle(checked = autoAssign, label = "自动分配工厂", onToggle = { onAutoChange(!autoAssign) })
-        }
-        if (!autoAssign) {
-            Text("选工厂", color = ACCENT, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            view.factories
-                .filter { factory -> factory.canBuild.any { it.unitTypeId in selectedUnits } }
-                .forEach { factory ->
-                    Row(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(if (factory.instanceId in selectedFactories) Color(0x3369F0AE) else Color.Transparent)
-                            .clickable { onFactoryToggle(factory.instanceId) }
-                            .padding(horizontal = 6.dp, vertical = 4.dp)
-                            .fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        ModIcons.Factory(OK, 14.dp)
-                        Text(" ${factory.label}", color = TEXT, fontSize = 12.sp)
-                    }
-                }
-        }
+        Text(
+            if (selectedUnits.isEmpty()) {
+                "选择目标单位后创建生产线"
+            } else {
+                "已选 ${selectedUnits.size} 种目标单位"
+            },
+            color = TEXT_DIM,
+            fontSize = 11.sp,
+        )
 
-        // 行动属于生产线的一部分，但按具体工厂配置；生产 action 由单位选择承载，这里只列其他行动。
-        if (selectedUnits.isNotEmpty()) {
-            Text("按工厂设置行动", color = WARN, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            view.factories
-                .filter { factory -> factory.canBuild.any { it.unitTypeId in selectedUnits } }
-                .forEach { factory ->
-                    val buildActionIds = factory.canBuild.mapTo(mutableSetOf()) { it.actionId }
-                    val actions = factory.actions.filterNot { it.actionId in buildActionIds }
-                    if (actions.isNotEmpty()) {
-                        Text(" ${factory.label}", color = TEXT_DIM, fontSize = 11.sp)
-                        actions.forEach { action ->
-                            val checked = action.actionId in selectedActions[factory.instanceId].orEmpty()
-                            Row(
-                                modifier = Modifier
-                                    .padding(start = 10.dp)
-                                    .clip(RoundedCornerShape(5.dp))
-                                    .background(if (checked) Color(0x33FFD54F) else Color.Transparent)
-                                    .clickable { onActionToggle(factory.instanceId, action.actionId) }
-                                    .padding(horizontal = 6.dp, vertical = 3.dp)
-                                    .fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Box(
-                                    Modifier
-                                        .size(8.dp)
-                                        .clip(CircleShape)
-                                        .background(if (checked) WARN else Color(0x44FFFFFF)),
-                                )
-                                Text(" ${action.displayName}", color = TEXT, fontSize = 11.sp)
-                            }
-                        }
-                    }
-                }
-        }
-
-        WideButton(label = "开始生产", color = OK, enabled = selectedUnits.isNotEmpty(), onClick = onSubmit)
+        WideButton(
+            label = "创建生产线",
+            color = OK,
+            enabled = selectedUnits.isNotEmpty(),
+            onClick = onSubmit,
+        )
     }
 }
 
@@ -401,6 +331,7 @@ private fun LineCard(
     view: FactoryUiState,
     onToggle: () -> Unit,
     onRemove: () -> Unit,
+    onModeChange: (Boolean) -> Unit,
     onUnitAdjust: (String, Boolean) -> Unit,
     onFactoryAdjust: (Long, Boolean) -> Unit,
     onActionAdjust: (Long, String, Boolean) -> Unit,
@@ -420,6 +351,7 @@ private fun LineCard(
         .joinToString(" / ")
         .ifBlank { "未设目标" }
     val actionCount = line.actionsByFactory.values.sumOf { it.size }
+    val queuedCount = assignedFactories.sumOf { it.queued }
     val accent = line.targetUnitTypeIds.firstOrNull()?.let(ModIcons::colorFor) ?: ACCENT
     var expanded by remember(line.id) { mutableStateOf(false) }
 
@@ -465,6 +397,9 @@ private fun LineCard(
             Text(targetNames, color = TEXT, fontSize = 11.sp, maxLines = 1)
             Box(Modifier.weight(1f))
             Text("工厂 ${assignedFactories.size}", color = TEXT_DIM, fontSize = 10.sp)
+            if (queuedCount > 0) {
+                Text(" · 队列 $queuedCount", color = OK, fontSize = 10.sp)
+            }
             if (actionCount > 0) {
                 Text(" · 行动 $actionCount", color = WARN, fontSize = 10.sp)
             }
@@ -508,6 +443,11 @@ private fun LineCard(
             }
 
             SectionTitle("工厂")
+            MiniToggle(
+                checked = !line.manualFactorySelection,
+                label = "自动分配工厂",
+                onToggle = { onModeChange(!line.manualFactorySelection) },
+            )
             if (line.manualFactorySelection) {
                 Row {
                     line.factoryIds.forEach { id ->

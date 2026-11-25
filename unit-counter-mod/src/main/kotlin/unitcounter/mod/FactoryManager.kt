@@ -22,6 +22,8 @@ internal class FactoryManager {
     val snapshot = AtomicReference(FactoryUiState())
     private val linesRef = AtomicReference<List<ProductionLine>>(emptyList())
     private val nextLineId = AtomicInteger(1)
+    /** 每条线/每座工厂的目标单位轮转游标，避免多目标时只生产第一个。 */
+    private val unitCursors = mutableMapOf<String, Int>()
 
     /** UI 线程提交的意图，仿真线程 tick 时消费。 */
     private val pending = java.util.concurrent.ConcurrentLinkedQueue<() -> Unit>()
@@ -42,6 +44,7 @@ internal class FactoryManager {
         linesRef.set(emptyList())
         pending.clear()
         pendingActionRuns.clear()
+        unitCursors.clear()
         snapshot.set(FactoryUiState(hidden = true))
     }
 
@@ -61,7 +64,27 @@ internal class FactoryManager {
     }
 
     fun removeLine(id: Int) {
+        unitCursors.keys.removeAll { it.startsWith("$id:") }
         linesRef.updateAndGet { lines -> lines.filterNot { it.id == id } }
+    }
+
+    /** 切换自动/手动工厂分配；转手动时以当前所有可生产工厂作为初始选择。 */
+    fun setLineAuto(id: Int, auto: Boolean) {
+        val factories = snapshot.get().factories
+        linesRef.updateAndGet { lines ->
+            lines.map { line ->
+                if (line.id != id) return@map line
+                if (auto) {
+                    normalizeLine(line.copy(manualFactorySelection = false, factoryIds = emptySet()), factories)
+                } else {
+                    val eligible = eligibleFactoryIds(factories, line.targetUnitTypeIds)
+                    normalizeLine(
+                        line.copy(manualFactorySelection = true, factoryIds = eligible),
+                        factories,
+                    )
+                }
+            }
+        }
     }
 
     fun toggleLine(id: Int) {
@@ -154,7 +177,12 @@ internal class FactoryManager {
         // 目标单位、工厂、行动都按当前局内可生产能力收敛，避免 UI 展示旧局/不可用项。
         val lines = linesRef.get().map { normalizeLine(it, factories) }
         if (lines != linesRef.get()) linesRef.set(lines)
-        drainPendingActionRuns(api, teamId, factories, lines)
+
+        // 队列未清空时绝不补单：每座工厂最多同时拥有一项生产/行动。
+        val busyFactories = factories
+            .filter { it.queued > 0 }
+            .mapTo(mutableSetOf()) { it.instanceId }
+        busyFactories += drainPendingActionRuns(api, teamId, factories, lines)
 
         var queued = 0
         var skipped = 0
@@ -177,10 +205,18 @@ internal class FactoryManager {
                 continue
             }
             for ((factoryId, typeIds) in affordable) {
+                if (factoryId in busyFactories || typeIds.isEmpty()) {
+                    skipped += typeIds.size
+                    continue
+                }
                 val factory = factories.first { it.instanceId == factoryId }
-                for (typeId in typeIds) {
-                    val option = factory.canBuild.first { it.unitTypeId == typeId }
-                    if (FactoryBridge.enqueue(api, teamId, factory, option)) queued++ else skipped++
+                val typeId = nextUnitType(line.id, factoryId, typeIds)
+                val option = factory.canBuild.first { it.unitTypeId == typeId }
+                if (FactoryBridge.enqueue(api, teamId, factory, option)) {
+                    queued++
+                    busyFactories += factoryId
+                } else {
+                    skipped++
                 }
             }
         }
@@ -214,6 +250,14 @@ internal class FactoryManager {
 
     private fun availableTargetIds(factories: List<FactoryInfo>): Set<String> = factories
         .flatMapTo(LinkedHashSet()) { factory -> factory.canBuild.map { it.unitTypeId } }
+
+    /** 多目标生产线按工厂轮转，保证不会永远只生产列表里的第一个单位。 */
+    private fun nextUnitType(lineId: Int, factoryId: Long, typeIds: List<String>): String {
+        val key = "$lineId:$factoryId"
+        val index = (unitCursors[key] ?: 0) % typeIds.size
+        unitCursors[key] = (index + 1) % typeIds.size
+        return typeIds[index]
+    }
 
     private fun eligibleFactoryIds(
         factories: List<FactoryInfo>,
@@ -249,7 +293,9 @@ internal class FactoryManager {
         teamId: Int,
         factories: List<FactoryInfo>,
         lines: List<ProductionLine>,
-    ) {
+    ): MutableSet<Long> {
+        val acted = mutableSetOf<Long>()
+        val deferred = mutableListOf<Triple<Int, Long, String>>()
         while (true) {
             val (lineId, factoryId, actionId) = pendingActionRuns.poll() ?: break
             val line = lines.firstOrNull { it.id == lineId } ?: continue
@@ -257,9 +303,18 @@ internal class FactoryManager {
             if (line.manualFactorySelection && factoryId !in line.factoryIds) continue
             if (factoryId !in eligibleFactoryIds(factories, line.targetUnitTypeIds)) continue
             val factory = factories.firstOrNull { it.instanceId == factoryId } ?: continue
+            if (factory.queued > 0) {
+                // 工厂正在生产时不插队，下个 tick 再尝试。
+                deferred += Triple(lineId, factoryId, actionId)
+                continue
+            }
             if (factory.actions.none { it.actionId == actionId }) continue
-            FactoryBridge.runAction(api, teamId, listOf(factoryId), actionId)
+            if (FactoryBridge.runAction(api, teamId, listOf(factoryId), actionId, queued = true) > 0) {
+                acted += factoryId
+            }
         }
+        deferred.forEach(pendingActionRuns::add)
+        return acted
     }
 
     private fun drainPending() {

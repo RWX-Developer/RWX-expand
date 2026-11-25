@@ -97,3 +97,16 @@
 #                                             展开后编辑目标、工厂、按工厂行动
 # 验证：:unit-counter-mod:build 成功；7+4 测试全绿。
 # jar：unit-counter-mod-1.1.4.jar 已重新部署，旧包备份为 .bak-20261125-174134。
+
+# ===== 2026-11-25 生产线创建流程 + 队列按完成补单 =====
+#   M unit-counter-mod/.../FactoryWindow.kt   增加生产线改为“只选目标单位→创建”，默认自动分配；
+#                                             工厂自动/手动切换与工厂/行动配置移到生产线卡片展开区
+#   M unit-counter-mod/.../FactoryManager.kt  新增 setLineAuto；工厂队列未空时不补单；
+#                                             每座工厂每 tick 最多入队一项；多目标按工厂轮转；
+#                                             行动入队同样检查队列，忙时延后，不插队
+#   M unit-counter-mod/.../FactoryBridge.kt   读取 FactoryQueueInterface.f(false) 队列长度；
+#                                             runAction 支持 queued=true
+#   M unit-counter-mod/.../FactoryLogic.kt    FactoryInfo.queued 当前队列长度
+# 修复：不再每 tick 给工厂堆大量单位队列；生产完成后才补下一项，避免瞬间清空资金。
+# 验证：:unit-counter-mod:build 成功；7+4 测试全绿。
+# jar：unit-counter-mod-1.1.4.jar 已重新部署，旧包备份为 .bak-20261125-180411。

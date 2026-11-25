@@ -4,6 +4,7 @@ import com.corrodinggames.rts.game.PlayerTeam
 import com.corrodinggames.rts.game.units.BaseUnit
 import com.corrodinggames.rts.game.units.OrderableUnit
 import com.corrodinggames.rts.game.units.custom.CustomUnitConfig
+import com.corrodinggames.rts.game.units.buildings.FactoryQueueInterface
 import com.corrodinggames.rts.game.units.custom.condition.StoredResourceEntry
 import com.corrodinggames.rts.game.units.custom.condition.resources.Resource
 import io.github.rwx.mod.api.Api
@@ -28,6 +29,9 @@ internal object FactoryBridge {
             if (unit.isDestroyed || unit.team?.teamId != teamId) continue
             val orderable = unit as? OrderableUnit ?: continue
             val actions = orderable.getAvailableActions() ?: continue
+            val queued = runCatching {
+                (orderable as? FactoryQueueInterface)?.f(false) ?: 0
+            }.getOrDefault(0)
             val builds = mutableListOf<BuildOption>()
             val allActions = mutableListOf<FactoryAction>()
             for (action in actions) {
@@ -61,6 +65,7 @@ internal object FactoryBridge {
                 teamId = teamId,
                 canBuild = builds,
                 actions = allActions,
+                queued = queued,
             )
         }
         return out
@@ -155,8 +160,14 @@ internal object FactoryBridge {
         return result.accepted
     }
 
-    /** 触发工厂 ACTION 节中的某个行动（集体执行）。 */
-    fun runAction(api: Api, teamId: Int, factoryIds: List<Long>, actionId: String): Int {
+    /** 触发工厂 ACTION 节中的某个行动；生产线用 queued=true 进入工厂队列。 */
+    fun runAction(
+        api: Api,
+        teamId: Int,
+        factoryIds: List<Long>,
+        actionId: String,
+        queued: Boolean = false,
+    ): Int {
         var ok = 0
         for (id in factoryIds) {
             val result = api.commands.submit(
@@ -165,6 +176,7 @@ internal object FactoryBridge {
                     unitIds = listOf(UnitInstanceId(id)),
                     type = UnitCommandType.CUSTOM_ACTION,
                     actionId = actionId,
+                    queued = queued,
                 )
             )
             if (result.accepted) ok++

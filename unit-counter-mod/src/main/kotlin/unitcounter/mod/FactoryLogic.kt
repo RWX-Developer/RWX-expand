@@ -21,6 +21,8 @@ internal data class FactoryInfo(
     val teamId: Int,
     val canBuild: List<BuildOption>,
     val actions: List<FactoryAction> = emptyList(),
+    /** 当前工厂队列长度（含正在生产的一项）；>0 时不再补新队列。 */
+    val queued: Int = 0,
 )
 
 /** 一条生产线：目标单位 + 工厂 + 每座工厂要执行的行动。 */
