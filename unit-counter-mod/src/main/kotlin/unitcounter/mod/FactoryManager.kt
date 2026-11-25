@@ -30,9 +30,16 @@ internal class FactoryManager {
         pending.add(action)
     }
 
-    /** 菜单打开时隐藏 HUD 并停止计数。 */
+    /** 菜单打开时隐藏 HUD 并停止计数，但保留玩家配置的生产线。 */
     fun setHidden() {
         snapshot.set(snapshot.get().copy(hidden = true))
+    }
+
+    /** 离开对局时清空旧局工厂/生产线/待处理意图，避免主菜单或新局残留。 */
+    fun reset() {
+        linesRef.set(emptyList())
+        pending.clear()
+        snapshot.set(FactoryUiState(hidden = true))
     }
 
     fun addLine(targets: Set<String>, factoryIds: Set<Long>, auto: Boolean) {

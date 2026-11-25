@@ -59,3 +59,12 @@
 #   M unit-counter-mod/.../FactoryWindow.kt   手动选厂与生产线 +/- 只显示能生产目标单位的工厂
 # 验证：:unit-counter-mod:build 成功；FactoryLogicTest 7 例 + UnitCountsTest 4 例全绿。
 # jar：unit-counter-mod-1.1.4.jar 已重新部署到 D:/Game/RWX-整合包/mods/units/（旧 jar 已备份）。
+
+# ===== 2026-11-25 HUD 状态残留与拖动修复 =====
+#   M unit-counter-mod/.../UnitCounterMod.kt  调度任务区分「不在对局/局内菜单」；HUD 自行按
+#                                             isInGameOrLobby + isMenuOpen 判定可见性；两个 HUD 均可拖动
+#   M unit-counter-mod/.../FactoryManager.kt  新增 reset()：离开对局清空旧工厂/生产线/待处理意图
+#   M unit-counter-mod/.../FactoryWindow.kt   生产 HUD 主菜单主动 reset、局内菜单仅隐藏；HUD 可拖动；加入刷新时钟
+# 修复：主菜单不会继续显示上一局工厂；进入新局时重新扫描当前工厂；HUD 可用鼠标拖动位置。
+# 验证：:unit-counter-mod:build 成功；7+4 测试全绿。
+# jar：unit-counter-mod-1.1.4.jar 已重新部署，旧包备份为 .bak-20261125-170355。

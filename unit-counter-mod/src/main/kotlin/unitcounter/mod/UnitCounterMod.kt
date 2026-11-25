@@ -1,21 +1,27 @@
 package unitcounter.mod
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.roundToInt
 import com.corrodinggames.rts.game.PlayerTeam
 import com.corrodinggames.rts.gameFramework.GameEngine
 import io.github.rwx.mod.JvmMod
@@ -26,6 +32,23 @@ import io.github.rwx.mod.api.ScheduledTask
 import io.github.rwx.mod.api.UnitQuery
 import kotlinx.coroutines.delay
 import java.util.concurrent.atomic.AtomicReference
+
+/** JVM mod 的调度任务只在对局逻辑里运行；主菜单必须靠 HUD 自己判定，避免残留上一局快照。 */
+internal fun isGameplayHudVisible(): Boolean {
+    val engine = GameEngine.getInstance() ?: return false
+    return engine.isInGameOrLobby() && !engine.isMenuOpen
+}
+
+internal fun Modifier.hudDraggable(offset: MutableState<IntOffset>): Modifier = this
+    .offset { IntOffset(offset.value.x, offset.value.y) }
+    .pointerInput(Unit) {
+        detectDragGestures { _, dragAmount ->
+            offset.value = IntOffset(
+                offset.value.x + dragAmount.x.roundToInt(),
+                offset.value.y + dragAmount.y.roundToInt(),
+            )
+        }
+    }
 
 /**
  * 游戏内敌我单位计数 HUD。
@@ -47,7 +70,14 @@ class UnitCounterMod : JvmMod() {
         val api = this.api
         sampler = api.game.repeat(5, ModTask { context ->
             val engine = GameEngine.getInstance()
-            if (engine == null || engine.isMenuOpen) {
+            if (engine == null || !engine.isInGameOrLobby()) {
+                // 主菜单/加载页不会跑调度任务，一旦回到这类状态就清掉旧局数据。
+                snapshot.set(UnitBreakdown(hidden = true))
+                factoryManager.reset()
+                return@ModTask
+            }
+            if (engine.isMenuOpen) {
+                // 局内菜单只隐藏，不清空玩家已经配置的生产线。
                 snapshot.set(UnitBreakdown(hidden = true))
                 factoryManager.setHidden()
                 return@ModTask
@@ -86,24 +116,30 @@ class UnitCounterMod : JvmMod() {
     @Composable
     private fun rememberSnapshot(ref: AtomicReference<UnitBreakdown>): State<UnitBreakdown> {
         val state = remember { mutableStateOf(ref.get()) }
+        // 主菜单里调度任务不跑，需要一个独立的时钟强制重算可见性。
+        val refresh = remember { mutableStateOf(0L) }
         LaunchedEffect(Unit) {
             while (true) {
                 state.value = ref.get()
+                refresh.value++
                 delay(100)
             }
         }
+        refresh.value
         return state
     }
 
     @Composable
     private fun UnitCounterCard(state: State<UnitBreakdown>) {
         val counts = state.value
-        if (counts.hidden) return
+        val dragOffset = remember { mutableStateOf(IntOffset.Zero) }
+        if (counts.hidden || !isGameplayHudVisible()) return
         Column(
             modifier = Modifier
                 .padding(12.dp)
                 .background(Color(0x99000000))
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .hudDraggable(dragOffset),
         ) {
             BasicText(
                 text = "我方 ${counts.friendlyUnits}    敌军 ${counts.enemyUnits}",

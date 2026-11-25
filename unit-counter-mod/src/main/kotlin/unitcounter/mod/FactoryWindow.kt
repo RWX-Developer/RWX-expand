@@ -28,8 +28,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.corrodinggames.rts.gameFramework.GameEngine
 import io.github.rwx.mod.api.Api
 import kotlinx.coroutines.delay
 
@@ -49,14 +51,30 @@ private val TEXT_DIM = Color(0xFF9FB3C8)
 @Composable
 internal fun FactoryHud(api: Api, manager: FactoryManager) {
     val state = remember { mutableStateOf(manager.snapshot.get()) }
+    val dragOffset = remember { mutableStateOf(IntOffset.Zero) }
+    val refresh = remember { mutableStateOf(0L) }
     LaunchedEffect(Unit) {
+        var outsideGameHandled = false
         while (true) {
+            val engine = GameEngine.getInstance()
+            if (engine == null || !engine.isInGameOrLobby()) {
+                // 主菜单/加载页不跑调度任务，必须在这里主动清掉旧局工厂。
+                if (!outsideGameHandled) {
+                    manager.reset()
+                    outsideGameHandled = true
+                }
+            } else {
+                outsideGameHandled = false
+                if (engine.isMenuOpen) manager.setHidden()
+            }
             state.value = manager.snapshot.get()
+            refresh.value++
             delay(150)
         }
     }
+    refresh.value
     val view = state.value
-    if (view.hidden) return
+    if (view.hidden || !isGameplayHudVisible()) return
 
     var expanded by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf(false) }
@@ -68,7 +86,8 @@ internal fun FactoryHud(api: Api, manager: FactoryManager) {
         Column(
             modifier = Modifier
                 .padding(start = 12.dp, bottom = 12.dp)
-                .widthIn(max = 430.dp),
+                .widthIn(max = 430.dp)
+                .hudDraggable(dragOffset),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             if (!expanded) {
