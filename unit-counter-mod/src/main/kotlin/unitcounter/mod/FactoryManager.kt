@@ -55,10 +55,8 @@ internal class FactoryManager {
         actionsByFactory: Map<Long, Set<String>> = emptyMap(),
     ) {
         val id = nextLineId.getAndIncrement()
-        val line = normalizeLine(
-            ProductionLine(id, targets, factoryIds, !auto, actionsByFactory),
-            snapshot.get().factories,
-        )
+        // 创建时保留用户选中的目标，不用可能过期的工厂快照裁剪；下个 tick 再正常收敛。
+        val line = ProductionLine(id, targets, factoryIds, !auto, actionsByFactory)
         linesRef.updateAndGet { it + line }
         if (line.enabled) enqueueLineActions(id, actionsByFactory)
     }
@@ -268,6 +266,8 @@ internal class FactoryManager {
 
     /** 目标单位、工厂、行动三者互相收敛：任何一项失效都同步清掉相关分配。 */
     private fun normalizeLine(line: ProductionLine, factories: List<FactoryInfo>): ProductionLine {
+        // 扫描尚未就绪/当前没有工厂时不能把目标清空，否则会出现“刚建好就没有目标”。
+        if (factories.isEmpty()) return line
         val targets = line.targetUnitTypeIds intersect availableTargetIds(factories)
         val eligible = eligibleFactoryIds(factories, targets)
         val factoriesForLine = if (line.manualFactorySelection) line.factoryIds intersect eligible else emptySet()

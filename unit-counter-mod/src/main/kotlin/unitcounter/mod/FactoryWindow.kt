@@ -147,9 +147,11 @@ internal fun FactoryHud(api: Api, manager: FactoryManager) {
                                 selectedUnits = if (id in selectedUnits) selectedUnits - id else selectedUnits + id
                             },
                             onSubmit = {
+                                // 必须在清空选择前捕获值：submit 的 lambda 要到下一 tick 才执行。
+                                val targetsToCreate = selectedUnits
                                 manager.submit {
                                     // 新线默认自动分配工厂；工厂/行动在生产线卡片里继续配置。
-                                    manager.addLine(selectedUnits, emptySet(), auto = true)
+                                    manager.addLine(targetsToCreate, emptySet(), auto = true)
                                 }
                                 selectedUnits = emptySet()
                                 editing = false
@@ -346,8 +348,9 @@ private fun LineCard(
     } else {
         eligibleFactories
     }
+    // 目标 ID 已保存但工厂快照暂时取不到显示名时回退显示 ID，避免误报“未设目标”。
     val targetNames = line.targetUnitTypeIds
-        .mapNotNull { id -> allBuilds.firstOrNull { it.unitTypeId == id }?.displayName }
+        .map { id -> allBuilds.firstOrNull { it.unitTypeId == id }?.displayName ?: id }
         .joinToString(" / ")
         .ifBlank { "未设目标" }
     val actionCount = line.actionsByFactory.values.sumOf { it.size }

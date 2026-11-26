@@ -110,3 +110,13 @@
 # 修复：不再每 tick 给工厂堆大量单位队列；生产完成后才补下一项，避免瞬间清空资金。
 # 验证：:unit-counter-mod:build 成功；7+4 测试全绿。
 # jar：unit-counter-mod-1.1.4.jar 已重新部署，旧包备份为 .bak-20261125-180411。
+
+# ===== 2026-11-27 修复“选目标单位后新建生产线显示无目标” =====
+#   M unit-counter-mod/.../FactoryWindow.kt   onSubmit 先捕获 selectedUnits 再入 pending 队列，
+#                                             避免 lambda 延迟执行时读到已清空的集合；
+#                                             摘要目标名找不到时回退显示 ID，不再误报“未设目标”
+#   M unit-counter-mod/.../FactoryManager.kt   addLine 创建时用传入目标，不用可能过期的工厂快照裁剪；
+#                                             normalizeLine 在工厂列表为空时保留目标不清空
+# 根因：submit 的 lambda 下一 tick 才执行，读到已清空的 selectedUnits → 生产线拿到空目标。
+# 验证：:unit-counter-mod:build 成功；7+4 测试全绿。
+# jar：unit-counter-mod-1.1.4.jar 已重新部署，旧包备份为 .bak-20261127-000116。
