@@ -435,12 +435,21 @@ private fun LineCard(
             }
             val addableUnits = allBuilds.filterNot { it.unitTypeId in line.targetUnitTypeIds }
             if (addableUnits.isNotEmpty()) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("添加", color = TEXT_DIM, fontSize = 10.sp)
-                    addableUnits.forEach { option ->
-                        IconButton(onClick = { onUnitAdjust(option.unitTypeId, true) }) {
-                            ModIcons.Plus(ACCENT)
-                        }
+                Text("添加", color = TEXT_DIM, fontSize = 10.sp)
+                addableUnits.forEach { option ->
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(5.dp))
+                            .background(Color(0x22FFFFFF))
+                            .clickable { onUnitAdjust(option.unitTypeId, true) }
+                            .padding(horizontal = 6.dp, vertical = 3.dp)
+                            .fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        ModIcons.Unit(ModIcons.colorFor(option.unitTypeId), 9.dp)
+                        Text(" ${option.displayName}", color = TEXT, fontSize = 10.sp, maxLines = 1)
+                        Box(Modifier.weight(1f))
+                        ModIcons.Plus(ACCENT, 12.dp)
                     }
                 }
             }
@@ -461,12 +470,21 @@ private fun LineCard(
                 }
                 val addableFactories = eligibleFactories.filterNot { it.instanceId in line.factoryIds }
                 if (addableFactories.isNotEmpty()) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("添加", color = TEXT_DIM, fontSize = 10.sp)
-                        addableFactories.forEach { factory ->
-                            IconButton(onClick = { onFactoryAdjust(factory.instanceId, true) }) {
-                                ModIcons.Plus(ACCENT)
-                            }
+                    Text("添加", color = TEXT_DIM, fontSize = 10.sp)
+                    addableFactories.forEach { factory ->
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(5.dp))
+                                .background(Color(0x22FFFFFF))
+                                .clickable { onFactoryAdjust(factory.instanceId, true) }
+                                .padding(horizontal = 6.dp, vertical = 3.dp)
+                                .fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            ModIcons.Factory(OK, 12.dp)
+                            Text(" ${factory.label}", color = TEXT, fontSize = 10.sp, maxLines = 1)
+                            Box(Modifier.weight(1f))
+                            ModIcons.Plus(ACCENT, 12.dp)
                         }
                     }
                 }
