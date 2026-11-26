@@ -12,6 +12,8 @@ internal data class BuildOption(
 internal data class FactoryAction(
     val actionId: String,
     val displayName: String,
+    /** 该行动是否带 produceUnits 逻辑（会生产单位）。 */
+    val producesUnits: Boolean = false,
 )
 
 /** 玩家拥有的一座工厂。 */

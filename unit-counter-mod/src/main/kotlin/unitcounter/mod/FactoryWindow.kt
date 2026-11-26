@@ -496,15 +496,19 @@ private fun LineCard(
                 )
             }
 
+            // 纯生产 action 由“目标单位”承载，不在行动区重复；带 produceUnits 的保留在行动区并标注。
+            val hiddenActionIds = { factory: FactoryInfo ->
+                factory.canBuild.mapTo(mutableSetOf()) { it.actionId } - factory.actions.filter { it.producesUnits }.mapTo(mutableSetOf()) { it.actionId }
+            }
             val factoriesWithActions = assignedFactories.filter { factory ->
-                val buildActionIds = factory.canBuild.mapTo(mutableSetOf()) { it.actionId }
-                factory.actions.any { it.actionId !in buildActionIds }
+                val hidden = hiddenActionIds(factory)
+                factory.actions.any { it.actionId !in hidden }
             }
             if (factoriesWithActions.isNotEmpty()) {
                 SectionTitle("行动", WARN)
                 factoriesWithActions.forEach { factory ->
-                    val buildActionIds = factory.canBuild.mapTo(mutableSetOf()) { it.actionId }
-                    val actions = factory.actions.filterNot { it.actionId in buildActionIds }
+                    val hidden = hiddenActionIds(factory)
+                    val actions = factory.actions.filterNot { it.actionId in hidden }
                     Text(" ${factory.label}", color = TEXT_DIM, fontSize = 10.sp)
                     actions.forEach { action ->
                         val selected = action.actionId in line.actionsByFactory[factory.instanceId].orEmpty()
@@ -525,6 +529,17 @@ private fun LineCard(
                                     .background(if (selected) WARN else Color(0x44FFFFFF)),
                             )
                             Text(" ${action.displayName}", color = TEXT, fontSize = 10.sp)
+                            if (action.producesUnits) {
+                                Box(
+                                    Modifier
+                                        .padding(start = 5.dp)
+                                        .clip(RoundedCornerShape(3.dp))
+                                        .background(Color(0x33FFD54F))
+                                        .padding(horizontal = 4.dp, vertical = 1.dp),
+                                ) {
+                                    Text("生产", color = OK, fontSize = 9.sp)
+                                }
+                            }
                             Box(Modifier.weight(1f))
                             if (selected) {
                                 IconButton(onClick = { onActionRun(factory.instanceId, action.actionId) }) {

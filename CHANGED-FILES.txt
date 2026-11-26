@@ -126,3 +126,16 @@
 #                                             改为纵向可点击行：色块/工厂图标 + 名称 + 加号，整行可点。
 # 验证：:unit-counter-mod:build 成功；7+4 测试全绿。
 # jar：unit-counter-mod-1.1.4.jar 已重新部署，旧包备份为 .bak-20261127-065422。
+
+# ===== 2026-11-27 行动显示标准增加 produceUnits =====
+#   M unit-counter-mod/.../FactoryLogic.kt   FactoryAction 新增 producesUnits 布尔字段
+#   M unit-counter-mod/.../FactoryBridge.kt  新增 producedUnitTypes 反射读取：
+#         CustomAction.actionDef.logicActions -> SpawnUnitAction.produceUnits -> UnitSpawner.spawnQueue
+#         -> SpawnConfig.unitType -> UnitTypeReference.c()（字段已用 javap 对齐实际 uber jar）
+#      produceUnits 行动整体作为一个 BuildOption（合成 typeId=produce:<actionId>，显示名用行动名），
+#      不拆成单个单位——INI 里是一次产一组（如 步兵排=独眼巨人*10+反坦独眼巨人*5）。
+#      造价由引擎 canAfford 兜底（本地门控对合成 ID 放行）。
+#   M unit-counter-mod/.../FactoryWindow.kt  行动区对带 produceUnits 的行动显示“生产”标记；
+#      该类行动同时保留在行动区（不再被 buildActionIds 过滤掉），也出现在“目标单位”列表。
+# 验证：:unit-counter-mod:build 成功；7+4 测试全绿；GUI 启动无反射异常。
+# jar：unit-counter-mod-1.1.4.jar 已重新部署，旧包备份为 .bak-20261127-070713。

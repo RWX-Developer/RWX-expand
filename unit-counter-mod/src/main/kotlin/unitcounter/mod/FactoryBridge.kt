@@ -3,7 +3,11 @@ package unitcounter.mod
 import com.corrodinggames.rts.game.PlayerTeam
 import com.corrodinggames.rts.game.units.BaseUnit
 import com.corrodinggames.rts.game.units.OrderableUnit
+import com.corrodinggames.rts.game.units.UnitType
 import com.corrodinggames.rts.game.units.custom.CustomUnitConfig
+import com.corrodinggames.rts.game.units.custom.UnitSpawner
+import com.corrodinggames.rts.game.units.custom.logic.CustomAction
+import com.corrodinggames.rts.game.units.custom.logic.actions.SpawnUnitAction
 import com.corrodinggames.rts.game.units.buildings.FactoryQueueInterface
 import com.corrodinggames.rts.game.units.custom.condition.StoredResourceEntry
 import com.corrodinggames.rts.game.units.custom.condition.resources.Resource
@@ -19,6 +23,43 @@ import java.util.Locale
  */
 internal object FactoryBridge {
     fun myTeamId(api: Api): Int? = api.game.localTeam()?.teamId
+
+    /**
+     * 读取一个运行时行动里 produceUnits 逻辑产出的所有单位类型。
+     * CustomAction.actionDef.logicActions 里是 SpawnUnitAction，其 produceUnits 是 UnitSpawner；
+     * UnitSpawner.spawnQueue / SpawnConfig.unitType 是包私有字段，用反射读取。
+     * 非 CustomAction 或字段结构变化时返回空集合（只影响“生产标注/单位识别”，不影响启动）。
+     */
+    private fun producedUnitTypes(action: Any?): List<UnitType> {
+        val custom = action as? CustomAction ?: return emptyList()
+        val def = custom.actionDef ?: return emptyList()
+        val logicActions = def.logicActions ?: return emptyList()
+        val out = linkedMapOf<String, UnitType>()
+        try {
+            val logicArray = logicActions.a() ?: return emptyList()
+            for (raw in logicArray) {
+                val spawn = raw as? SpawnUnitAction ?: continue
+                val spawner = spawn.produceUnits ?: continue
+                val queueField = UnitSpawner::class.java.getDeclaredField("spawnQueue")
+                queueField.isAccessible = true
+                val queue = queueField.get(spawner) as? com.corrodinggames.rts.gameFramework.utility.FastArrayList<*>
+                    ?: continue
+                val configArray = queue.a() ?: continue
+                for (cfgRaw in configArray) {
+                    cfgRaw ?: continue
+                    val refField = cfgRaw.javaClass.getDeclaredField("unitType")
+                    refField.isAccessible = true
+                    val ref = refField.get(cfgRaw) ?: continue
+                    val unitType = ref.javaClass.getMethod("c").invoke(ref) as? UnitType ?: continue
+                    val key = unitType.v() ?: unitType.getUnitTypeDescriptionShort()
+                    out.putIfAbsent(key, unitType)
+                }
+            }
+        } catch (_: Throwable) {
+            // 引擎混淆字段名是对齐源码的；万一版本不符就跳过，不让整个扫描崩掉。
+        }
+        return out.values.toList()
+    }
 
     /** 扫描本队所有工厂，读取每座工厂在 ACTION 节中声明的可建造单位。 */
     fun scanMyFactories(api: Api, teamId: Int): List<FactoryInfo> {
@@ -43,17 +84,31 @@ internal object FactoryBridge {
                 val name = runCatching { action.getDisplayName() }.getOrNull()
                     ?.takeIf { it.isNotBlank() }
                     ?: actionId
-                // 收集全部可用 ACTION 节行动（生产/升级/自定义），供集体执行。
-                allActions += FactoryAction(actionId, name)
+                // produceUnits：从 CustomAction.actionDef.logicActions 里解析出的产出单位。
+                val produced = producedUnitTypes(action)
+                // 收集全部可用 ACTION 节行动（生产/升级/自定义），供集体执行；带生产逻辑的做标注。
+                allActions += FactoryAction(actionId, name, produced.isNotEmpty())
 
-                val unitType = action.attachedUnitType ?: action.getUnitType() ?: continue
-                if (unitType.isBuildingUnit()) continue
-                val typeId = unitType.v() ?: continue
-                // 单位显示名取 displayText（getUnitName），不是内部注册名。
-                val unitName = CustomUnitConfig.c(unitType)?.getUnitName()
-                    ?.takeIf { it.isNotBlank() }
-                    ?: name
-                builds += BuildOption(actionId, typeId, unitName, action.getQueueSize())
+                // 常规生产：attachedUnitType / getUnitType（QueueUnitAction 造兵）。
+                val unitType = action.attachedUnitType ?: action.getUnitType()
+                if (unitType != null && !unitType.isBuildingUnit()) {
+                    val typeId = unitType.v()
+                    if (typeId != null) {
+                        // 单位显示名取 displayText（getUnitName），不是内部注册名。
+                        val unitName = CustomUnitConfig.c(unitType)?.getUnitName()
+                            ?.takeIf { it.isNotBlank() }
+                            ?: name
+                        builds += BuildOption(actionId, typeId, unitName, action.getQueueSize())
+                    }
+                }
+                // produceUnits 是一个"成组生产"行动（一次产出多个单位），整体作为一个可生产项：
+                // 显示名用行动名（如“步兵排”），代表单位取第一个产出单位用于造价近似门控，
+                // 入队仍用该 actionId，由引擎执行整组生产。不能拆成单个单位分别排队。
+                if (produced.isNotEmpty() && builds.none { it.actionId == actionId }) {
+                    // 合成 typeId 避免与真实单位同名；造价由引擎 canAfford 兜底，这里只做标识。
+                    val typeId = "produce:$actionId"
+                    builds += BuildOption(actionId, typeId, name, action.getQueueSize().coerceAtLeast(1))
+                }
             }
             // 没有生产单位但有其他行动的工厂也纳入（可集体执行行动）。
             if (builds.isEmpty() && allActions.isEmpty()) continue
