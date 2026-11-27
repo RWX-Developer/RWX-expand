@@ -312,3 +312,20 @@
 #     新增 /unit-counter-mod/，模组源码与构建产物不再进版本库。
 #   D unit-counter-mod/**（git rm --cached，只取消跟踪，本地源码完整保留）
 # 验证：:unit-counter-mod:build 成功（1m28s），本地模组仍可编译测试。
+
+# ===== 2026-11-28 同步 1.2.1 源码包到 integration-0.1 =====
+# 用户上传 D:/文/RWX-source-1.2.1.tar.gz（SOURCE-INFO 标注 v1.1.4 浅克隆 + perf patch），
+# 要求把包内源码上传。逐文件比对（忽略行尾符）后，包是较新源码：当前分支缺 3 个源文件与 9 处更新。
+# 新增：
+#   core/.../custom/logicBooleans/RwxBoolProgram.java（布尔表达式缓存/统计）
+#   core/.../io/github/rwx/pathing/RwxRouteTuning.java（路线巡检/自动重算/终点迁移）
+#   core/.../io/github/rwx/probe/RwxFlags.java（rwx-flags.txt 开关读取）
+# 更新（9 处，均为 perf 相关）：
+#   .gitignore 补 local.properties/mods//build-logs/（模组忽略规则保留，不回退）
+#   android/proguard-rules.pro、BatchRenderer.java（RWX_BATCH_QUADS 默认 512）
+#   LayerBufferManager.java（RWX_MAP_CELL_PX）、OrderableUnit.java（路线巡检状态）
+#   CustomUnitConfigParser.java（并行解析）、LogicBooleanLoader.java（布尔缓存）
+#   Command.java（建造/修理指令不进走廊）、RwxPerf.java（迟到 flags 判定）
+# 未纳入：editor/web/node_modules（3001 个第三方文件，仅本地依赖，未解压同步）。
+# 验证：:core:compileJava + :desktop:compileKotlin 成功（5m47s）；
+#       :desktop:packageUberJarForCurrentOS + :bench-mod:build 成功（2m30s）。

@@ -98,7 +98,7 @@ public class Command {
     private static int RWX_RP_FAIL_R0;      // 退回原始判定仍失败
     private static final int[] RWX_RP_TYPE = new int[UnitCommandType.values().length];
     private static final String[] RWX_RP_GATE_NAME = {
-        "budget", "cmdType", "noLead", "airNone", "mapN", "snapEnd", "startFits", "route", "gate8", "other"
+        "budget", "cmdType", "noLead", "airNone", "mapN", "snapEnd", "startFits", "route", "buildSkip", "other"
     };
     // RWX：体积膨胀缓存 —— 某格能否放下一艘半径 r 的船（周围一圈都得是通航格）
     private float rwxCorridorLen;
@@ -1350,6 +1350,15 @@ public class Command {
         if (unitCommandType == UnitCommandType.guard || unitCommandType == UnitCommandType.guardAt
                 || unitCommandType == UnitCommandType.setPassiveTarget) {
             { RWX_RP_GATE[1]++; RWX_RP_TYPE[unitCommandType.ordinal()]++; return false; }
+        }
+        // RWX：建造/修理类指令不进走廊。
+        // 走廊拐点是以「指令副本 + 阵型/拐点坐标」的形式追加到单位队列里的，对建造指令
+        // 等于把同一个建造目标在拐点位置又排了一份 —— 手机端实测会「莫名多盖出一栋建筑」。
+        // 建造只需要寻路，不需要拐点，直接关掉（RWX_BUILD_CORRIDOR=1 可恢复旧行为做 A/B）。
+        if ((unitCommandType == UnitCommandType.build || unitCommandType == UnitCommandType.repair
+                || unitCommandType == UnitCommandType.reclaim)
+                && io.github.rwx.probe.RwxFlags.isOn("RWX_BUILD_CORRIDOR") == false) {
+            { RWX_RP_GATE[8]++; RWX_RP_TYPE[unitCommandType.ordinal()]++; return false; }
         }
         OrderableUnit rwxLead = null;
         for (OrderableUnit orderableUnit : this.selectedUnits) {

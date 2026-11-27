@@ -44,3 +44,8 @@ tools/pathlab/out/
 
 ### 本地私有模块：不随仓库分发 ###
 /unit-counter-mod/
+
+# 本地环境与产物
+local.properties
+mods/
+build-logs/

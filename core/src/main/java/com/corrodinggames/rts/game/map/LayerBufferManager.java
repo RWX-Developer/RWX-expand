@@ -611,6 +611,16 @@ public final class LayerBufferManager {
                 this.cellBufferPixelSize = (iMax / (this.gridCellsPerAxis - 2)) + 7 + 4;
                 this.cellBufferPixelSize = ((int) ((this.cellBufferPixelSize * (1.0f / 20)) + 0.5f)) * 20;
             }
+            // RWX：地图块（layer buffer cell）尺寸可调。滚动镜头时，每进入一列新格子就要
+            // 把该格的地形重新光栅化一遍，格子越大 → 每步重画的格子越少但单格越贵；
+            // 格子越小 → 单格便宜但每步要重画更多格。手机上一般往大调更划算。
+            int rwxCellPx = io.github.rwx.probe.RwxFlags.getInt("RWX_MAP_CELL_PX", 0, 128, 2048);
+            if (rwxCellPx > 0) {
+                this.cellBufferPixelSize = rwxCellPx;
+                this.gridCellsPerAxis = (iMax / rwxCellPx) + 2;
+                GameEngine.log("map", "RWX_MAP_CELL_PX override -> cellPx=" + rwxCellPx
+                        + " cells=" + this.gridCellsPerAxis + "x" + this.gridCellsPerAxis);
+            }
             if (this.cellBufferPixelSize * this.gridCellsPerAxis < iMax + this.cellBufferPixelSize + 1) {
                 GameEngine.logColored("layerBufferSize is too small");
                 GameEngine.logColored("layerBufferCount:" + this.gridCellsPerAxis);

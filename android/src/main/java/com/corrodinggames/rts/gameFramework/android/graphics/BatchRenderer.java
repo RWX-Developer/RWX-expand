@@ -19,7 +19,9 @@ public final class BatchRenderer {
     float p = 1.0f;
     float q = 1.0f;
     float r = 1.0f;
-    int d = 80;
+    // RWX：一批能攒多少个四边形。原来是 80，贴图连续时不到一屏就提交一次；
+    // 手机端 draw call 更贵，默认放大到 512，可用 RWX_BATCH_QUADS 调（16..2048）。
+    int d = io.github.rwx.probe.RwxFlags.getInt("RWX_BATCH_QUADS", 512, 16, 2048);
     int e = 0;
     float[] b = new float[(this.d * 4) * 8];
 

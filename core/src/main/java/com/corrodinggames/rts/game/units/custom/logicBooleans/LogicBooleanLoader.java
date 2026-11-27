@@ -44,7 +44,114 @@ public class LogicBooleanLoader {
         LogicBoolean parseNextElementInChain(String str, CustomUnitConfig customUnitConfig, String str2, boolean z, String str3, String str4, LogicBoolean logicBoolean);
     }
 
+    // ------------------------------------------------------------------
+    // RWX：布尔表达式解析的统计与可选缓存
+    //
+    // 铁锈的 ini 里，core/贴图/攻击/移动基本都是标量，而「行动 / 隐藏行动 / 炮塔」
+    // 三节塞的是成百上千条布尔表达式（(a) and (b) or not(c) 这种递归结构）。
+    // 这些字符串在几千个单位里高度重复，每解析一次几十微秒，冷启动因此被拖到 5 秒以上。
+    // 这里做两件事：
+    //   1) 统计：调用次数 / 命中次数 / 累计耗时，收尾时打一行，先看清占比；
+    //   2) 缓存（默认关，RWX_BOOL_CACHE=1 开）：按「单位配置 + 是否要求布尔子节点 + 表达式」
+    //      复用已解析好的表达式树。树本身只读，读值时才注入单位上下文。
+    // ------------------------------------------------------------------
+    public static long RWX_BOOL_NANOS;
+    public static int RWX_BOOL_CALLS;
+    public static int RWX_BOOL_HITS;
+    private static final boolean RWX_BOOL_CACHE = io.github.rwx.probe.RwxFlags.isOn("RWX_BOOL_CACHE");
+    private static final java.util.WeakHashMap<CustomUnitConfig, java.util.HashMap<String, LogicBoolean>> RWX_BOOL_MAP
+            = new java.util.WeakHashMap<CustomUnitConfig, java.util.HashMap<String, LogicBoolean>>();
+    private static final int RWX_BOOL_MAX_ENTRIES = 40000;
+    private static int rwxBoolEntries;
+
+    public static String rwxBoolStatsLine() {
+        int hitRate = RWX_BOOL_CALLS == 0 ? 0 : (int) (RWX_BOOL_HITS * 100L / RWX_BOOL_CALLS);
+        return "RWX_BOOL_PARSE calls=" + RWX_BOOL_CALLS
+                + " hits=" + RWX_BOOL_HITS + " (" + hitRate + "%)"
+                + " cacheEntries=" + rwxBoolEntries
+                + " cache=" + RWX_BOOL_CACHE
+                + " vm=" + RWX_BOOL_VM + "(" + RWX_BOOL_VM_PROGRAMS + " programs/" + RWX_BOOL_VM_LEAVES + " leaves)"
+                + " total=" + (RWX_BOOL_NANOS / 1000000L) + "ms";
+    }
+
     public static LogicBoolean parseBooleanBlock(CustomUnitConfig customUnitConfig, String str, boolean z) {
+        long rwxT0 = System.nanoTime();
+        try {
+            if (RWX_BOOL_CACHE && customUnitConfig != null && str != null && rwxBoolEntries < RWX_BOOL_MAX_ENTRIES) {
+                String rwxKey = rwxNormalizeKey(str, z);
+                java.util.HashMap<String, LogicBoolean> rwxMap = RWX_BOOL_MAP.get(customUnitConfig);
+                if (rwxMap != null) {
+                    LogicBoolean rwxCached = rwxMap.get(rwxKey);
+                    if (rwxCached != null) {
+                        RWX_BOOL_HITS++;
+                        return rwxCached;
+                    }
+                }
+                LogicBoolean rwxResult = rwxFinish(customUnitConfig, str, z);
+                if (rwxResult != null) {
+                    if (rwxMap == null) {
+                        rwxMap = new java.util.HashMap<String, LogicBoolean>();
+                        RWX_BOOL_MAP.put(customUnitConfig, rwxMap);
+                    }
+                    rwxMap.put(rwxKey, rwxResult);
+                    rwxBoolEntries++;
+                }
+                return rwxResult;
+            }
+            return rwxFinish(customUnitConfig, str, z);
+        } finally {
+            RWX_BOOL_CALLS++;
+            RWX_BOOL_NANOS += System.nanoTime() - rwxT0;
+        }
+    }
+
+    private static final boolean RWX_BOOL_VM = io.github.rwx.probe.RwxFlags.isOn("RWX_BOOL_VM");
+    public static int RWX_BOOL_VM_PROGRAMS;
+    public static int RWX_BOOL_VM_LEAVES;
+
+    // 归一化缓存键：去掉首尾空白、把连续空白压成一个空格。写法不同但语义相同的表达式也能命中。
+    private static String rwxNormalizeKey(String str, boolean z) {
+        StringBuilder sb = new StringBuilder(str.length() + 1);
+        if (!z) {
+            sb.append('!');
+        }
+        boolean lastSpace = true;
+        for (int i = 0; i < str.length(); i++) {
+            char ch = str.charAt(i);
+            if (ch == ' ' || ch == '\t') {
+                if (!lastSpace) {
+                    sb.append(' ');
+                    lastSpace = true;
+                }
+            } else {
+                sb.append(ch);
+                lastSpace = false;
+            }
+        }
+        int end = sb.length();
+        if (end > 0 && sb.charAt(end - 1) == ' ') {
+            sb.setLength(end - 1);
+        }
+        return sb.toString();
+    }
+
+    private static LogicBoolean rwxFinish(CustomUnitConfig customUnitConfig, String str, boolean z) {
+        LogicBoolean rwxParsed = parseBooleanBlockUncached(customUnitConfig, str, z);
+        if (rwxParsed == null) {
+            return null;
+        }
+        if (RWX_BOOL_VM) {
+            LogicBoolean rwxProgram = RwxBoolProgram.compile(rwxParsed);
+            if (rwxProgram != null && rwxProgram instanceof RwxBoolProgram && rwxProgram != rwxParsed) {
+                RWX_BOOL_VM_PROGRAMS++;
+                RWX_BOOL_VM_LEAVES += ((RwxBoolProgram) rwxProgram).rwxLeafCount();
+                return rwxProgram;
+            }
+        }
+        return rwxParsed;
+    }
+
+    private static LogicBoolean parseBooleanBlockUncached(CustomUnitConfig customUnitConfig, String str, boolean z) {
         String str2;
         int iB;
         ArrayList<String> arrayListA;

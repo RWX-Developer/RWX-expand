@@ -90,9 +90,30 @@ public class CustomUnitConfigParser {
     public static FastArrayList tempUnitList = new FastArrayList();
 
     // ==== RWX: 并行加载单位配置 ====
-    // 实测：本 MOD 下并行反而更慢（29.8s vs 串行 22.6s），瓶颈是 GL 侧贴图/队伍色生成，
-    // 而 GL 必须串行回主线程，所以默认关闭。想试验加 -Drwx.parallelUnitParse=true。
-    private static final boolean PARALLEL_UNIT_ENABLED = Boolean.getBoolean("rwx.parallelUnitParse");
+    // 真机日志（1.1.x）显示：CustomUnits 5895ms 里 unitParse 5220ms、贴图只有 968ms，
+    // 也就是解析是纯 CPU 大头，贴图占比不到两成 —— 并行解析的收益成立，默认开启。
+    // 贴图 / 音效仍然只能回主线程做（Slick 的 Image 构造当场绑 GL），走 glWork 队列，
+    // 主线程在等待 latch 期间代跑这些任务，所以并行不会把 GL 撕开。
+    // 关闭方式：flags 文件写 RWX_PARALLEL_UNIT=0；系统属性 -Drwx.parallelUnitParse=false 也可强制关。
+    private static boolean PARALLEL_UNIT_ENABLED = rwxComputeParallelUnit();
+
+    private static boolean rwxComputeParallelUnit() {
+        if ("false".equalsIgnoreCase(System.getProperty("rwx.parallelUnitParse"))) {
+            return false;
+        }
+        return io.github.rwx.probe.RwxFlags.isOnDefault("RWX_PARALLEL_UNIT", true);
+    }
+
+    // 静态字段在类加载时就定型，那时容器（Koin）还没起来、读不到 flags 文件。
+    // 所以进加载流程时再重判一次，手机上的 RWX_PARALLEL_UNIT=0 才能真正生效。
+    public static void rwxRefreshParallelUnit() {
+        boolean before = PARALLEL_UNIT_ENABLED;
+        PARALLEL_UNIT_ENABLED = rwxComputeParallelUnit();
+        GameEngine.log("RWX_UNIT_PARALLEL: enabled=" + PARALLEL_UNIT_ENABLED
+                + " (beforeRefresh=" + before + ") threads=" + PARALLEL_UNIT_THREADS
+                + " cores=" + Runtime.getRuntime().availableProcessors()
+                + " flagsFrom=" + io.github.rwx.probe.RwxFlags.loadedFrom());
+    }
     private static final int PARALLEL_UNIT_MIN_FILES = 8;
     private static final int PARALLEL_UNIT_THREADS = Math.max(1, Math.min(8, Runtime.getRuntime().availableProcessors() - 1));
     private static final java.util.concurrent.ExecutorService PARALLEL_UNIT_POOL = java.util.concurrent.Executors.newFixedThreadPool(PARALLEL_UNIT_THREADS, new java.util.concurrent.ThreadFactory() {
@@ -134,6 +155,9 @@ public class CustomUnitConfigParser {
             return;
         }
         if (size < PARALLEL_UNIT_MIN_FILES || PARALLEL_UNIT_THREADS <= 1) {
+            GameEngine.log("RWX_UNIT_PARALLEL: serial fallback, files=" + size
+                    + " minFiles=" + PARALLEL_UNIT_MIN_FILES + " threads=" + PARALLEL_UNIT_THREADS
+                    + " enabled=" + PARALLEL_UNIT_ENABLED);
             for (int i = 0; i < size; i++) {
                 PendingUnitFile pendingUnitFile = pendingUnitFiles.get(i);
                 long jA = PerformanceProfiler.a();
@@ -144,6 +168,8 @@ public class CustomUnitConfigParser {
             return;
         }
         final int count = size;
+        GameEngine.log("RWX_UNIT_PARALLEL: running " + count + " files on " + PARALLEL_UNIT_THREADS
+                + " threads (glQueue=" + (glOwnerThread != null) + ")");
         final ArrayList<CustomUnitConfig>[] results = new ArrayList[count];
         final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(count);
         long jA = PerformanceProfiler.a();
@@ -182,6 +208,9 @@ public class CustomUnitConfigParser {
         while ((glRunnable = glWork.poll()) != null) {
             glRunnable.run();
         }
+        // 排空结束就交还“GL 主线程”标记：之后若有后台线程取贴图，走直通路径，
+        // 不会往没人排空的队列里塞任务把自己等死。
+        glOwnerThread = null;
         synchronized (CustomUnitConfig.allConfigs) {
             for (int i = 0; i < count; i++) {
                 ArrayList<CustomUnitConfig> arrayList = results[i];
@@ -1039,6 +1068,7 @@ public class CustomUnitConfigParser {
     /* JADX WARN: Type inference failed for: r12v6 */
     /* JADX INFO: renamed from: h */
     public static void loadAllCustomUnitsAndMods() {
+        rwxRefreshParallelUnit();
         final GameEngine instance = GameEngine.getInstance();
         final ArrayList<ModInfo> loadAllMods = instance.modManager.loadAllMods();
         CustomUnitConfigParser.imageCacheHitCount = 0;
@@ -1135,6 +1165,7 @@ public class CustomUnitConfigParser {
         }
         logAndResetTimingStats();
         enableAllCustomUnits(true);
+        GameEngine.log(com.corrodinggames.rts.game.units.custom.logicBooleans.LogicBooleanLoader.rwxBoolStatsLine());
         GameEngine.log("Done loading custom units. image cacheHits:" + CustomUnitConfigParser.imageCacheHitCount + " image cacheMisses:" + CustomUnitConfigParser.imageCacheMissCount + " (in: " + PerformanceProfiler.a(a) + "ms)");
         GameEngine.log("========= Mods data loaded ===========");
         GameEngine.log("Number of mods:" + loadAllMods.size());
@@ -3300,7 +3331,11 @@ public class CustomUnitConfigParser {
             }
         });
         try {
-            done.await();
+            // 带超时：万一主线程没在排空 glWork（例如加载结束后后台线程又来取贴图），
+            // 宁可超时返空，也不要把线程永久挂死。
+            if (!done.await(10L, java.util.concurrent.TimeUnit.SECONDS)) {
+                GameEngine.log("RWX_UNIT_PARALLEL: glWork wait timeout, texture/sound skipped");
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
@@ -3357,7 +3392,11 @@ public class CustomUnitConfigParser {
             }
         });
         try {
-            done.await();
+            // 带超时：万一主线程没在排空 glWork（例如加载结束后后台线程又来取贴图），
+            // 宁可超时返空，也不要把线程永久挂死。
+            if (!done.await(10L, java.util.concurrent.TimeUnit.SECONDS)) {
+                GameEngine.log("RWX_UNIT_PARALLEL: glWork wait timeout, texture/sound skipped");
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
@@ -3520,7 +3559,11 @@ public class CustomUnitConfigParser {
             }
         });
         try {
-            done.await();
+            // 带超时：万一主线程没在排空 glWork（例如加载结束后后台线程又来取贴图），
+            // 宁可超时返空，也不要把线程永久挂死。
+            if (!done.await(10L, java.util.concurrent.TimeUnit.SECONDS)) {
+                GameEngine.log("RWX_UNIT_PARALLEL: glWork wait timeout, texture/sound skipped");
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }

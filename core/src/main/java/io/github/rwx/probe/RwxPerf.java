@@ -109,7 +109,10 @@ public final class RwxPerf {
 // 遍历 + synchronized 文件 flush。实测（bench 4000 单位 A/B）平均帧时看不出
 // 差别（16.3 vs 18.6ms，两局不同世界、噪声内），但这是白送的成本，且尖峰
 // 写盘落在最不该写盘的帧上。现在与环境变量约定一致：默认关。
-private static final boolean ON = "1".equals(trimmedEnv("RWX_PROF"));
+private static boolean ON = "1".equals(trimmedEnv("RWX_PROF")) || RwxFlags.isOn("RWX_PROF");
+// 安卓：环境变量设不了，只能靠 rwx-flags.txt。而本类可能在容器（Koin）就绪前就被加载，
+// 那时读不到存储根 → ON 被定死为 false。所以允许在头几帧重新判定一次，并打一行自证日志。
+private static boolean onResolved;
 
     // 逻辑线程
     private static final long[] acc = new long[SECTIONS];
@@ -358,7 +361,26 @@ private static final boolean ON = "1".equals(trimmedEnv("RWX_PROF"));
     public static String uMode = "A_base";
     public static int renderObjects;
 
+    /** 迟到的开关判定：容器起来后再读一次 flags 文件，并把结论打一行日志自证。 */
+    private static void refreshOn() {
+        if (onResolved) {
+            return;
+        }
+        String flagPath = RwxFlags.loadedFrom();
+        if (RwxFlags.isOn("RWX_PROF") && !ON) {
+            ON = true;
+            GameEngine.log("RWX_FLAGS: profiling ON from " + flagPath);
+        }
+        if (flagPath != null) {
+            onResolved = true;
+            if (!ON) {
+                GameEngine.log("RWX_FLAGS: read " + flagPath + " but RWX_PROF is not 1 (profiling stays off)");
+            }
+        }
+    }
+
     public static long beginRender() {
+        refreshOn();
         if (!ON) {
             return 0L;
         }

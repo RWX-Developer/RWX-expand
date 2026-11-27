@@ -61,3 +61,8 @@
 -dontwarn org.apache.log4j.**
 -dontwarn org.apache.logging.log4j.**
 -dontwarn reactor.blockhound.integration.BlockHoundIntegration
+
+# JVM-only GC diagnostics (java.lang.management / MXBeans) are absent on Android.
+# RwxPerf.gcInfo() guards these calls with catch (Throwable), so a missing class
+# at runtime degrades to an empty string instead of crashing.
+-dontwarn java.lang.management.**

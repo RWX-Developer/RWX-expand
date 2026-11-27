@@ -18,6 +18,7 @@ import com.corrodinggames.rts.game.units.custom.hooks.AttachmentSlotDefinition;
 import com.corrodinggames.rts.game.units.custom.price.UnitPrice;
 import com.corrodinggames.rts.game.units.g.AirUnitEffectManager;
 import com.corrodinggames.rts.game.units.spatial.UnitSpatialCallback;
+import io.github.rwx.pathing.RwxRouteTuning;
 import com.corrodinggames.rts.gameFramework.*;
 import com.corrodinggames.rts.gameFramework.audio.SoundEngine;
 import com.corrodinggames.rts.gameFramework.effects.*;
@@ -270,6 +271,24 @@ public abstract class OrderableUnit extends UnitBase {
     // RWX：目标不可达的指令：先画 1 秒紫线，然后自动撤销该指令。
     private UnitCommand rwxUnreachableOrder;
     private int rwxUnreachableOrderExpireMs;
+
+    // RWX：路线巡检（定时检查 + 自动重算 + 终点迁移）的状态。
+    // 详见 io.github.rwx.pathing.RwxRouteTuning 的开关说明。
+    private static final java.util.concurrent.atomic.AtomicInteger RWX_ROUTE_LOG_COUNT =
+            new java.util.concurrent.atomic.AtomicInteger();
+    private int rwxRouteNextCheckTick;
+    private int rwxRouteLastRepathTick = Integer.MIN_VALUE / 2;
+    private UnitCommand rwxRouteWatchOrder;
+    private int rwxRouteRepathCount;
+    private int rwxRouteRepathTotal;
+    private int rwxRouteMigrateTry;
+    private short rwxMigrateBaseTX = -1;
+    private short rwxMigrateBaseTY = -1;
+    private float rwxMigrateToX;
+    private float rwxMigrateToY;
+    private float rwxRouteLastX;
+    private float rwxRouteLastY;
+    private int rwxRouteStallCount;
     static FastArrayList aV;
     public static final PositionData aW;
 
@@ -2803,9 +2822,12 @@ public abstract class OrderableUnit extends UnitBase {
     private void updateMovementStateFromCommand(GameEngine gameEngine, float f, UnitCommand unitCommand, UnitStateTracker unitStateTracker) {
         UnitCommand currentWaypoint;
         boolean zI = I();
+        // RWX：先把「站不住的终点」迁到最近可站格，再消费求解结果，最后做定时路线巡检。
+        rwxMigrateBlockedEndpoint(gameEngine);
         if (this.aU != null) {
             applyPendingPathResult(gameEngine);
         }
+        rwxRouteWatch(gameEngine);
         if (this.transportedBy != null && (this.transportedBy.isDead || !this.transportedBy.isAlive())) {
             setTransportParent((OrderableUnit) null);
         }
@@ -4283,6 +4305,10 @@ public abstract class OrderableUnit extends UnitBase {
                 // 只认「本次请求对应的队首指令」，防止旧请求的结果误伤刚下达的新指令。
                 boolean rwxUnreachableForCurrentOrder = this.aU.endUnreachable && this.rwxPathRequestOrder == getCurrentWaypoint();
                 this.rwxPathRequestOrder = null;
+                if (rwxUnreachableForCurrentOrder && rwxTryWiderEndpointMigration(gameEngine)) {
+                    // RWX：目标不可达但还有更宽的迁移余地 → 改投迁移终点，旧结果作废。
+                    return;
+                }
                 if (rwxUnreachableForCurrentOrder) {
                     rwxFlagUnreachableOrder(gameEngine);
                 }
@@ -4335,6 +4361,267 @@ public abstract class OrderableUnit extends UnitBase {
                 this.totalPathPositions = this.activePathCount;
             }
         }
+    }
+
+    // ------------------------------------------------------------------
+    // RWX：路线巡检（定时检查 / 自动重算 / 终点迁移）
+    // ------------------------------------------------------------------
+
+    private void rwxRouteLog(String message) {
+        int limit = RwxRouteTuning.LOG_LIMIT;
+        if (limit <= 0) {
+            return;
+        }
+        if (RWX_ROUTE_LOG_COUNT.get() >= limit) {
+            return;
+        }
+        RWX_ROUTE_LOG_COUNT.incrementAndGet();
+        io.github.rwx.probe.RwxPerf.out(message);
+    }
+
+    /** 只有「走到某点」这类指令才做终点迁移与路线巡检，攻击/建造等指令有自己的收尾逻辑。 */
+    private static boolean rwxIsMoveLikeCommand(UnitCommandType type) {
+        return type == UnitCommandType.move || type == UnitCommandType.attackMove || type == UnitCommandType.patrol;
+    }
+
+    /**
+     * 允许「终点迁移」的指令类型。
+     *
+     * <p>攻击指令也在这里：近战/贴脸攻击时目标往往站在建筑堆的缝里，目标格本身站不住，
+     * 求解器直接判终点不可达 → 画紫线撤销指令，表现就是「点了攻击没反应」。
+     * 把终点迁到目标附近最近的可站格，单位就会自己走到射程内开火。
+     */
+    private static boolean rwxCanMigrateEndpoint(UnitCommandType type) {
+        if (rwxIsMoveLikeCommand(type)) {
+            return true;
+        }
+        return RwxRouteTuning.MIGRATE_ATTACK && type == UnitCommandType.attack;
+    }
+
+    /** 这个格子对于本单位是不是「走不进去」。 */
+    private boolean rwxTileBlocked(PathEngine pathEngine, int tileX, int tileY) {
+        if (tileX < 0 || tileY < 0 || tileX >= pathEngine.widthTiles || tileY >= pathEngine.heightTiles) {
+            return true;
+        }
+        UnitMovementType type = getMovementType();
+        return pathEngine.isTileBlockedForMovement(type, tileX, tileY)
+                && !pathEngine.b(type, tileX, tileY);
+    }
+
+    /** 从 (cx,cy) 向外按环搜索最近的可站格，找不到返回 null。 */
+    private int[] rwxFindWalkableNear(PathEngine pathEngine, int cx, int cy, int maxRadius) {
+        for (int r = 1; r <= maxRadius; r++) {
+            for (int dy = -r; dy <= r; dy++) {
+                for (int dx = -r; dx <= r; dx++) {
+                    if (Math.max(Math.abs(dx), Math.abs(dy)) != r) {
+                        continue;
+                    }
+                    int x = cx + dx;
+                    int y = cy + dy;
+                    if (!rwxTileBlocked(pathEngine, x, y)) {
+                        return new int[]{x, y};
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    private int rwxMigrateRadius() {
+        return Math.min(RwxRouteTuning.MIGRATE_MAX_RADIUS, 4 + this.rwxRouteMigrateTry * 8);
+    }
+
+    /**
+     * 终点格站不住（建了建筑 / 变成水 / 被地形封死）时，把本帧的目标改到最近可站格。
+     * 结果按「原始终点格」缓存，避免每帧重算；同一条指令的目标恢复可行时自动清缓存。
+     */
+    private void rwxMigrateBlockedEndpoint(GameEngine gameEngine) {
+        if (!RwxRouteTuning.MIGRATE_ENDPOINT || !this.isPathingActive || isAirborne()) {
+            return;
+        }
+        UnitCommand waypoint = getCurrentWaypoint();
+        if (waypoint == null || !rwxCanMigrateEndpoint(waypoint.commandType)) {
+            return;
+        }
+        PathEngine pathEngine = gameEngine.pathfindingEngine;
+        TileMap tileMap = gameEngine.tileMap;
+
+        tileMap.setCursorTileIndexFromWorldPoint(this.pathTargetX, this.pathTargetY);
+        int targetTileX = tileMap.cursorTileX;
+        int targetTileY = tileMap.cursorTileY;
+
+        if (!rwxTileBlocked(pathEngine, targetTileX, targetTileY)) {
+            this.rwxMigrateBaseTX = -1;
+            this.rwxMigrateBaseTY = -1;
+            this.rwxRouteMigrateTry = 0;
+            return;
+        }
+        if (targetTileX == this.rwxMigrateBaseTX && targetTileY == this.rwxMigrateBaseTY) {
+            this.pathTargetX = this.rwxMigrateToX;
+            this.pathTargetY = this.rwxMigrateToY;
+            return;
+        }
+
+        int[] alt = rwxFindWalkableNear(pathEngine, targetTileX, targetTileY, rwxMigrateRadius());
+        if (alt == null) {
+            return;
+        }
+        // 攻击指令额外约束：迁过去必须还在射程内，否则不如老老实实报不可达。
+        if (waypoint.commandType == UnitCommandType.attack && waypoint.targetUnit != null) {
+            tileMap.setCursorTileIndexFromTileIndex(alt[0], alt[1]);
+            float spotX = tileMap.cursorTileX + tileMap.halfTileWorldSizeX;
+            float spotY = tileMap.cursorTileY + tileMap.halfTileWorldSizeY;
+            float range = getEngagementRange(waypoint.targetUnit) + 120.0f;
+            if (Utility.distanceSq(spotX, spotY, waypoint.targetUnit.posX, waypoint.targetUnit.posY) > range * range) {
+                return;
+            }
+        }
+        tileMap.setCursorTileIndexFromTileIndex(alt[0], alt[1]);
+        this.rwxMigrateBaseTX = (short) targetTileX;
+        this.rwxMigrateBaseTY = (short) targetTileY;
+        this.rwxMigrateToX = tileMap.cursorTileX + tileMap.halfTileWorldSizeX;
+        this.rwxMigrateToY = tileMap.cursorTileY + tileMap.halfTileWorldSizeY;
+        this.pathTargetX = this.rwxMigrateToX;
+        this.pathTargetY = this.rwxMigrateToY;
+        this.pathTargetRadius = 0;
+        this.rwxRouteMigrateTry = 0;
+        rwxRouteLog("RWX_ROUTE_MIGRATE from=" + targetTileX + "," + targetTileY
+                + " to=" + alt[0] + "," + alt[1] + " tick=" + gameEngine.currentTick);
+    }
+
+    /**
+     * 求解器报「终点不可达」时的补救：如果终点是迁移过的，就放宽半径再迁一次。
+     * 返回 true 表示已经重新发起求解，调用方不要画紫线也不要撤销指令。
+     */
+    private boolean rwxTryWiderEndpointMigration(GameEngine gameEngine) {
+        if (!RwxRouteTuning.MIGRATE_ENDPOINT || this.rwxMigrateBaseTX < 0) {
+            return false;
+        }
+        if (this.rwxRouteMigrateTry >= RwxRouteTuning.MIGRATE_TRIES) {
+            return false;
+        }
+        this.rwxRouteMigrateTry++;
+        PathEngine pathEngine = gameEngine.pathfindingEngine;
+        TileMap tileMap = gameEngine.tileMap;
+        int[] alt = rwxFindWalkableNear(pathEngine, this.rwxMigrateBaseTX, this.rwxMigrateBaseTY, rwxMigrateRadius());
+        if (alt == null) {
+            return false;
+        }
+        tileMap.setCursorTileIndexFromTileIndex(alt[0], alt[1]);
+        this.rwxMigrateToX = tileMap.cursorTileX + tileMap.halfTileWorldSizeX;
+        this.rwxMigrateToY = tileMap.cursorTileY + tileMap.halfTileWorldSizeY;
+        this.pathTargetX = this.rwxMigrateToX;
+        this.pathTargetY = this.rwxMigrateToY;
+        this.pathTargetRadius = 0;
+        this.repathCooldown = 0.0f;
+        this.isPathIncomplete = false;
+        rwxRouteLog("RWX_ROUTE_MIGRATE_WIDE try=" + this.rwxRouteMigrateTry
+                + " to=" + alt[0] + "," + alt[1] + " tick=" + gameEngine.currentTick);
+        requestPathToTarget(this.pathTargetX, this.pathTargetY, 0,
+                this.isTransportAttached && this.formationSlotIndex > 1, this.isLowPriority);
+        return true;
+    }
+
+    /**
+     * 每 CHECK_TICKS 个 tick 巡检一次当前路线：
+     * 前方航点被新建筑堵住 / 路线已被消耗完却没到 / 位置长时间不动 → 自动重算。
+     * 只处理 move / attackMove / patrol，且只处理地面和水面单位。
+     */
+    private void rwxRouteWatch(GameEngine gameEngine) {
+        int every = RwxRouteTuning.CHECK_TICKS;
+        if (every <= 0 || this.aU != null || !this.isPathingActive || isAirborne()) {
+            return;
+        }
+        UnitCommand waypoint = getCurrentWaypoint();
+        if (waypoint == null) {
+            return;
+        }
+        UnitCommandType type = waypoint.commandType;
+        if (!rwxIsMoveLikeCommand(type)) {
+            return;
+        }
+
+        int now = gameEngine.currentTick;
+        if (this.rwxRouteNextCheckTick == 0) {
+            this.rwxRouteNextCheckTick = now + (int) (Math.abs(this.objectId) % every);
+        }
+        if (now < this.rwxRouteNextCheckTick) {
+            return;
+        }
+        this.rwxRouteNextCheckTick = now + every;
+
+        if (this.rwxRouteWatchOrder != waypoint) {
+            this.rwxRouteWatchOrder = waypoint;
+            this.rwxRouteRepathCount = 0;
+            this.rwxRouteStallCount = 0;
+            this.rwxRouteLastX = this.posX;
+            this.rwxRouteLastY = this.posY;
+        }
+        if (this.rwxRouteRepathCount >= RwxRouteTuning.REPATH_MAX_PER_ORDER) {
+            return;
+        }
+        if (now - this.rwxRouteLastRepathTick < RwxRouteTuning.REPATH_COOLDOWN_TICKS) {
+            return;
+        }
+
+        PathEngine pathEngine = gameEngine.pathfindingEngine;
+        TileMap tileMap = gameEngine.tileMap;
+
+        // 1) 前方航点被堵：只查接下来几个点，代价可控
+        int blockedAt = 0;
+        if (this.pathPositionProvider == null && RwxRouteTuning.PROBE_WAYPOINTS > 0) {
+            int probeLimit = Math.min(RwxRouteTuning.PROBE_WAYPOINTS, this.activePathCount - 1);
+            for (int i = 1; i <= probeLimit; i++) {
+                PositionData point = this.pathPositions[i];
+                if (point == null) {
+                    continue;
+                }
+                tileMap.setCursorTileIndexFromWorldPoint(point.posX, point.posY);
+                if (rwxTileBlocked(pathEngine, tileMap.cursorTileX, tileMap.cursorTileY)) {
+                    blockedAt = i;
+                    break;
+                }
+            }
+        }
+
+        float distanceToTargetSq = Utility.distanceSq(this.posX, this.posY, this.pathTargetX, this.pathTargetY);
+        boolean exhausted = this.activePathCount <= 1 && distanceToTargetSq > 900.0f;
+
+        // 2) 停滞：连续几个巡检窗口位置几乎没变，但离终点还很远
+        float movedSq = Utility.distanceSq(this.posX, this.posY, this.rwxRouteLastX, this.rwxRouteLastY);
+        this.rwxRouteLastX = this.posX;
+        this.rwxRouteLastY = this.posY;
+        // 阈值按速度缩放：慢单位在一个巡检窗口里本来就走不远，不能算停滞。
+        float expectedSq = getMoveSpeed() * every * 0.25f;
+        if (expectedSq < 2.0f) {
+            expectedSq = 2.0f;
+        }
+        if (movedSq < expectedSq * expectedSq && distanceToTargetSq > 3600.0f) {
+            this.rwxRouteStallCount++;
+        } else {
+            this.rwxRouteStallCount = 0;
+        }
+        boolean stalled = this.rwxRouteStallCount >= 3;
+        if (blockedAt == 0 && !exhausted && !stalled) {
+            return;
+        }
+        rwxRouteRepath(gameEngine, blockedAt > 0 ? ("blocked@" + blockedAt) : (exhausted ? "exhausted" : "stalled"));
+    }
+
+    /** 按当前目标（可能是迁移后的）重新请求一条路径。 */
+    private void rwxRouteRepath(GameEngine gameEngine, String reason) {
+        this.rwxRouteLastRepathTick = gameEngine.currentTick;
+        this.rwxRouteRepathCount++;
+        this.rwxRouteRepathTotal++;
+        this.rwxRouteStallCount = 0;
+        this.repathCooldown = 0.0f;
+        this.isPathIncomplete = false;
+        rwxRouteLog("RWX_ROUTE_REPATH reason=" + reason
+                + " target=" + (int) this.pathTargetX + "," + (int) this.pathTargetY
+                + " count=" + this.rwxRouteRepathCount
+                + " tick=" + gameEngine.currentTick);
+        requestPathToTarget(this.pathTargetX, this.pathTargetY, this.pathTargetRadius,
+                this.isTransportAttached && this.formationSlotIndex > 1, this.isLowPriority);
     }
 
     // RWX：目标不可达 → 记录该指令，渲染层据此画 1 秒紫线。
