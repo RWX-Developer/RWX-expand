@@ -178,7 +178,7 @@ internal fun FactoryHud(api: Api, manager: FactoryManager) {
                                 manager.submit { manager.adjustLineAction(line.id, factoryId, actionId, add) }
                             },
                             onActionRun = { factoryId, actionId ->
-                                manager.submit { manager.runFactoryAction(api, factoryId, actionId) }
+                                manager.submit { manager.runFactoryAction(factoryId, actionId) }
                             },
                         )
                     }

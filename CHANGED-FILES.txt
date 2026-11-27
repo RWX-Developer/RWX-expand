@@ -283,3 +283,22 @@
 #     总测试 16+3+4=23 全绿。
 # 验证：:unit-counter-mod:build 成功（复核 2m35s）；GUI 启动 32s 到主菜单、无异常。
 # jar：unit-counter-mod-1.1.4.jar 178,161B md5=2126c43d…（旧包备份 .bak-20261127-143407）。
+
+# ===== 2026-11-27 全局单次提交：修复一次补 30 个行动 =====
+# 用户反馈：之前要求“生产行动一个一个点”，但一条线挂了 30 座工厂后，tick 仍同时给每座工厂
+# 各补一项，等于一次点 30 个；手动连点立即执行也绕过节流。
+# 根因：原节流是“每座工厂每 tick 最多一项”，不是“全局每 tick 最多一项”；
+# runCollectiveAction/runFactoryAction 还直接调 FactoryBridge.runAction 批量/即时提交。
+#   M unit-counter-mod/.../FactoryLogic.kt
+#     新增 rotateForFairness：候选按游标轮转，避免固定优先第一条线/第一座工厂。
+#   M unit-counter-mod/.../FactoryManager.kt
+#     行动队列统一为 PendingActionRun（含 queued 标志与集体/立即哨兵 lineId）；
+#     tick 全局每轮最多提交一项：行动队列优先，成功排入行动就跳过本轮生产；
+#     生产候选先全量收集再轮转，只 enqueue 第一个；集体行动、手动立即执行都进同一队列依次放行；
+#     reset 清 productionCursor。
+#   M unit-counter-mod/.../FactoryWindow.kt
+#     手动立即执行按钮改走 manager.runFactoryAction(factoryId, actionId)（不再直接提交）。
+#   M unit-counter-mod/.../FactoryLogicTest.kt
+#     新增 2 项：轮转边界、连点 30 次只入队不批量提交；总测试 18+3+4=25 全绿。
+# 验证：:unit-counter-mod:build 成功（1m38s）；GUI 启动 15s 到主菜单、无异常。
+# jar：unit-counter-mod-1.1.4.jar 181,437B md5=4f495792…（旧包备份 .bak-20261127-154226）。

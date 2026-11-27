@@ -4,6 +4,19 @@ import io.github.rwx.mod.api.Api
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
+/** 集体行动没有所属生产线，用这个哨兵 id 进入行动队列，同样受全局单次节流约束。 */
+private const val COLLECTIVE_ACTION_LINE_ID = -1
+/** 玩家点单个“立即执行”按钮的行动：不进工厂队列，但仍受全局单次节流约束。 */
+private const val IMMEDIATE_ACTION_LINE_ID = -2
+
+/** 待执行行动；queued=false 表示玩家手动立即执行，true 表示排进工厂队列。 */
+private data class PendingActionRun(
+    val lineId: Int,
+    val factoryId: Long,
+    val actionId: String,
+    val queued: Boolean = true,
+)
+
 /** 生产管理器的只读快照，供 HUD 与窗口组合层展示。 */
 internal data class FactoryUiState(
     val teamId: Int? = null,
@@ -25,6 +38,9 @@ internal class FactoryManager {
     /** 只读当前生产线配置，供 UI 与回归测试观察；写入仍只发生在仿真线程。 */
     internal fun currentLines(): List<ProductionLine> = linesRef.get()
 
+    /** 当前排队等待执行的行动数，供回归测试确认“连点”没有绕过单次节流。 */
+    internal fun pendingActionCount(): Int = pendingActionRuns.size
+
     /** 已被其他生产线占用的工厂：自动分配/补厂必须避开这些工厂。 */
     private fun occupiedFactoryIdsExcluding(lineId: Int? = null): Set<Long> =
         linesRef.get().asSequence()
@@ -32,13 +48,15 @@ internal class FactoryManager {
             .flatMapTo(LinkedHashSet()) { it.factoryIds.asSequence() }
 
     private val nextLineId = AtomicInteger(1)
+    /** 全局每次只补一项时的轮转游标，避免总会优先处理第一条线/第一座工厂。 */
+    private val productionCursor = AtomicInteger(0)
     /** 每条线/每座工厂的目标单位轮转游标，避免多目标时只生产第一个。 */
     private val unitCursors = mutableMapOf<String, Int>()
 
     /** UI 线程提交的意图，仿真线程 tick 时消费。 */
     private val pending = java.util.concurrent.ConcurrentLinkedQueue<() -> Unit>()
-    /** 生产线里配置的行动只在线启动/行动新增时执行一次，避免每 tick 刷屏。 */
-    private val pendingActionRuns = java.util.concurrent.ConcurrentLinkedQueue<Triple<Int, Long, String>>()
+    /** 所有行动（自动/集体/手动立即）都进这一个队列，由 tick 一次只取一项执行。 */
+    private val pendingActionRuns = java.util.concurrent.ConcurrentLinkedQueue<PendingActionRun>()
 
     fun submit(action: () -> Unit) {
         pending.add(action)
@@ -56,6 +74,7 @@ internal class FactoryManager {
         pendingActionRuns.clear()
         unitCursors.clear()
         nextLineId.set(1)
+        productionCursor.set(0)
         snapshot.set(FactoryUiState(hidden = true))
     }
 
@@ -196,9 +215,10 @@ internal class FactoryManager {
         if (add) enqueueLineActions(id, mapOf(factoryId to setOf(actionId)))
     }
 
-    fun runFactoryAction(api: Api, factoryId: Long, actionId: String) {
-        val teamId = snapshot.get().teamId ?: return
-        FactoryBridge.runAction(api, teamId, listOf(factoryId), actionId)
+    fun runFactoryAction(factoryId: Long, actionId: String) {
+        if (snapshot.get().teamId == null) return
+        // 即使玩家连点多个立即执行，也排队后每 tick 只放行一个。
+        pendingActionRuns.add(PendingActionRun(IMMEDIATE_ACTION_LINE_ID, factoryId, actionId, queued = false))
     }
 
     fun clearLines() {
@@ -225,45 +245,55 @@ internal class FactoryManager {
         }
         if (lines != linesRef.get()) linesRef.set(lines)
 
-        // 队列未清空时绝不补单：每座工厂最多同时拥有一项生产/行动。
+        // 队列未清空时绝不补单；并且全局每个 tick 最多提交一项（生产或行动二选一）。
         val busyFactories = factories
             .filter { it.queued > 0 }
             .mapTo(mutableSetOf()) { it.instanceId }
-        busyFactories += drainPendingActionRuns(api, teamId, factories, lines)
+        // 行动队列优先；只要本 tick 成功排入一个行动，就跳过本 tick 的全部生产补单。
+        val acted = drainPendingActionRuns(api, teamId, factories, lines)
+        busyFactories += acted
 
         var queued = 0
         var skipped = 0
-        for (line in lines) {
-            if (!line.enabled) continue
-            val assignments = assignFactories(
-                factories = factories,
-                targetUnitTypeIds = line.targetUnitTypeIds,
-                selectedFactoryIds = line.factoryIds,
-            )
-            if (assignments.isEmpty()) {
-                skipped += line.targetUnitTypeIds.size
-                continue
-            }
-            val costs = line.targetUnitTypeIds.associateWith(FactoryBridge::readCost)
-            val affordable = affordableUnits(assignments, costs, pool)
-            if (affordable.isEmpty()) {
-                skipped += assignments.values.sumOf { it.size }
-                continue
-            }
-            for ((factoryId, typeIds) in affordable) {
-                if (factoryId in busyFactories || typeIds.isEmpty()) {
-                    skipped += typeIds.size
+        if (acted.isEmpty()) {
+            // 先收集全部可补单的 (线, 工厂, 目标)，再按游标轮转，只取第一个提交。
+            // 这样 30 座工厂也只会一项一项补，且不会永远先喂第一条线。
+            val candidates = mutableListOf<Triple<Int, Long, List<String>>>()
+            for (line in lines) {
+                if (!line.enabled) continue
+                val assignments = assignFactories(
+                    factories = factories,
+                    targetUnitTypeIds = line.targetUnitTypeIds,
+                    selectedFactoryIds = line.factoryIds,
+                )
+                if (assignments.isEmpty()) {
+                    skipped += line.targetUnitTypeIds.size
                     continue
                 }
+                val costs = line.targetUnitTypeIds.associateWith(FactoryBridge::readCost)
+                val affordable = affordableUnits(assignments, costs, pool)
+                if (affordable.isEmpty()) {
+                    skipped += assignments.values.sumOf { it.size }
+                    continue
+                }
+                affordable.forEach { (factoryId, typeIds) ->
+                    if (factoryId in busyFactories || typeIds.isEmpty()) {
+                        skipped += typeIds.size
+                        return@forEach
+                    }
+                    candidates += Triple(line.id, factoryId, typeIds)
+                }
+            }
+            val rotated = rotateForFairness(candidates, productionCursor.getAndIncrement())
+            for ((lineId, factoryId, typeIds) in rotated) {
                 val factory = factories.first { it.instanceId == factoryId }
-                val typeId = nextUnitType(line.id, factoryId, typeIds)
+                val typeId = nextUnitType(lineId, factoryId, typeIds)
                 val option = factory.canBuild.first { it.unitTypeId == typeId }
                 if (FactoryBridge.enqueue(api, teamId, factory, option)) {
                     queued++
-                    busyFactories += factoryId
-                } else {
-                    skipped++
+                    break
                 }
+                skipped++
             }
         }
 
@@ -286,7 +316,8 @@ internal class FactoryManager {
                 assignFactories(factories, line.targetUnitTypeIds, line.factoryIds).keys.toList()
             }.distinct()
         }
-        if (ids.isNotEmpty()) FactoryBridge.runAction(api, teamId, ids, actionId)
+        // 集体行动也进同一个行动队列，由 tick 一次只取一项执行，不再一次性提交给全部工厂。
+        ids.forEach { pendingActionRuns.add(PendingActionRun(COLLECTIVE_ACTION_LINE_ID, it, actionId)) }
     }
 
     private fun availableTargetIds(factories: List<FactoryInfo>): Set<String> = factories
@@ -335,7 +366,7 @@ internal class FactoryManager {
 
     private fun enqueueLineActions(lineId: Int, actionsByFactory: Map<Long, Set<String>>) {
         actionsByFactory.forEach { (factoryId, actionIds) ->
-            actionIds.forEach { actionId -> pendingActionRuns.add(Triple(lineId, factoryId, actionId)) }
+            actionIds.forEach { actionId -> pendingActionRuns.add(PendingActionRun(lineId, factoryId, actionId)) }
         }
     }
 
@@ -346,23 +377,35 @@ internal class FactoryManager {
         lines: List<ProductionLine>,
     ): MutableSet<Long> {
         val acted = mutableSetOf<Long>()
-        val deferred = mutableListOf<Triple<Int, Long, String>>()
+        val deferred = mutableListOf<PendingActionRun>()
         while (true) {
-            val (lineId, factoryId, actionId) = pendingActionRuns.poll() ?: break
-            val line = lines.firstOrNull { it.id == lineId } ?: continue
-            if (!line.enabled) continue
-            // 行动只能由该线明确指定的工厂执行：自动补厂模式下同样只允许当前那座。
-            if (factoryId !in line.factoryIds) continue
-            if (factoryId !in eligibleFactoryIds(factories, line.targetUnitTypeIds)) continue
+            val item = pendingActionRuns.poll() ?: break
+            val (lineId, factoryId, actionId, queued) = item
+            // 全局硬上限：本 tick 已经成功提交一个行动，其余全部留到下个 tick。
+            if (acted.isNotEmpty()) {
+                deferred += item
+                continue
+            }
             val factory = factories.firstOrNull { it.instanceId == factoryId } ?: continue
-            if (factory.queued > 0 || factoryId in acted) {
-                // 工厂正在生产、或本 tick 已排入一个行动：不插队，下个 tick 再尝试。
-                // queued 是扫描快照，tick 内不会更新，必须用 acted 集合挡住同 tick 连排。
-                deferred += Triple(lineId, factoryId, actionId)
+            // 手动立即执行不进工厂队列，因此不受 queued 快照限制；其余两类排队行动仍不插队。
+            if (queued && factory.queued > 0) {
+                deferred += item
                 continue
             }
             if (factory.actions.none { it.actionId == actionId }) continue
-            if (FactoryBridge.runAction(api, teamId, listOf(factoryId), actionId, queued = true) > 0) {
+
+            when (lineId) {
+                IMMEDIATE_ACTION_LINE_ID -> Unit
+                COLLECTIVE_ACTION_LINE_ID -> Unit
+                else -> {
+                    val line = lines.firstOrNull { it.id == lineId } ?: continue
+                    if (!line.enabled) continue
+                    // 行动只能由该线明确指定的工厂执行：自动补厂模式下同样只允许当前那座。
+                    if (factoryId !in line.factoryIds) continue
+                    if (factoryId !in eligibleFactoryIds(factories, line.targetUnitTypeIds)) continue
+                }
+            }
+            if (FactoryBridge.runAction(api, teamId, listOf(factoryId), actionId, queued = queued) > 0) {
                 acted += factoryId
             }
         }

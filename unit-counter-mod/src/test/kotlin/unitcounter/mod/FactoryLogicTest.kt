@@ -170,4 +170,20 @@ class FactoryLogicTest {
             eligibleSelectedFactoryIds(factories, setOf(1L, 2L, 3L, 99L), setOf("tank")),
         )
     }
+
+    @Test
+    fun `fair rotation wraps cursor and handles empty list`() {
+        val items = listOf("a", "b", "c")
+        assertEquals(listOf("b", "c", "a"), rotateForFairness(items, 1))
+        assertEquals(listOf("a", "b", "c"), rotateForFairness(items, -3))
+        assertTrue(rotateForFairness(emptyList<String>(), 5).isEmpty())
+    }
+
+    @Test
+    fun `rapid manual action clicks queue up instead of submitting together`() {
+        val manager = FactoryManager()
+        manager.snapshot.set(FactoryUiState(teamId = 0))
+        repeat(30) { manager.runFactoryAction(1L, "act") }
+        assertEquals(30, manager.pendingActionCount())
+    }
 }

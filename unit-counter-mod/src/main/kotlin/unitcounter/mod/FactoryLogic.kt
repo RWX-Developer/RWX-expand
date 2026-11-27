@@ -64,6 +64,17 @@ internal data class ResourcePool(
     }
 }
 
+/**
+ * 按游标把候选列表旋转一圈：全局一次只补一项时，用它让各条线/各座工厂轮流拿到名额，
+ * 避免列表前面那条线永远优先、后面的线饿死。负数游标也按正数取模处理。
+ */
+internal fun <T> rotateForFairness(items: List<T>, cursor: Int): List<T> {
+    if (items.isEmpty()) return items
+    val size = items.size
+    val start = ((cursor % size) + size) % size
+    return items.drop(start) + items.take(start)
+}
+
 /** 工厂是否能生产目标单位中的至少一种；这是手动选厂的硬门槛。 */
 internal fun factoryCanBuildTarget(
     factory: FactoryInfo,
