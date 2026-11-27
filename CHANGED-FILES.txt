@@ -180,3 +180,16 @@
 #      初始 sessionMark tick=Long.MAX_VALUE，保证首次进局走一次干净 reset + 首帧采样。
 # 验证：:unit-counter-mod:build 成功；7+4 测试全绿；GUI 启动无异常、mod 正常注册。
 # jar：unit-counter-mod-1.1.4.jar 已重新部署，旧包备份为 .bak-20261127-103153。
+
+# ===== 2026-11-27 修复 HUD 被拖出屏幕后“按钮消失” =====
+# 用户截图：计数板被拖到画面中间偏上，生产按钮完全不见——根因是拖拽无边界。
+#   M unit-counter-mod/.../UnitCounterMod.kt
+#      hudDraggable 改为 @Composable，读 LocalWindowInfo.current.containerSize，
+#      拖动时用 PointerInputScope.size（组件尺寸）经 clampHudOffset 钳制，
+#      保证组件至少 HUD_KEEP_VISIBLE_PX(48) 留在窗口内。
+#      新增 HudAnchor(TOP_LEFT / BOTTOM_LEFT) 区分左上（计数板）与左下（生产按钮）锚点，
+#      两者 x/y 允许偏移区间不同（flip 处理贴边组件）。
+#   M unit-counter-mod/.../FactoryWindow.kt  生产 HUD 传 HudAnchor.BOTTOM_LEFT。
+# 注：已拖出屏幕的旧偏移存在 remember 里，重新加载新 jar 后 remember 重置为 0，按钮回到默认位置。
+# 验证：:unit-counter-mod:build 成功；7+4 测试全绿；GUI 启动无异常、mod 正常注册。
+# jar：unit-counter-mod-1.1.4.jar 已重新部署，旧包备份为 .bak-20261127-104600。

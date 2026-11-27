@@ -16,6 +16,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
@@ -43,16 +44,56 @@ internal fun isGameplayHudVisible(): Boolean {
     return engine.isInGameOrLobby() && !engine.isMenuOpen
 }
 
-internal fun Modifier.hudDraggable(offset: MutableState<IntOffset>): Modifier = this
-    .offset { IntOffset(offset.value.x, offset.value.y) }
-    .pointerInput(Unit) {
-        detectDragGestures { _, dragAmount ->
-            offset.value = IntOffset(
-                offset.value.x + dragAmount.x.roundToInt(),
-                offset.value.y + dragAmount.y.roundToInt(),
-            )
+/** HUD 至少保留在屏幕内的像素数，避免被拖出可视范围后找不回来。 */
+private const val HUD_KEEP_VISIBLE_PX = 48
+
+/**
+ * 可拖拽 HUD：偏移被钳制在窗口范围内，保证组件至少 [HUD_KEEP_VISIBLE_PX] 留在屏幕里。
+ * 旧的纯累加实现能把按钮拖出屏幕（偏移一直保留），表现为“按钮离奇消失”。
+ *
+ * [anchor] 表示组件在窗口中的基准锚点，用于计算允许的偏移上下界。
+ */
+@Composable
+internal fun Modifier.hudDraggable(
+    offset: MutableState<IntOffset>,
+    anchor: HudAnchor,
+): Modifier {
+    val windowSize = LocalWindowInfo.current.containerSize
+    return this
+        .offset { IntOffset(offset.value.x, offset.value.y) }
+        .pointerInput(anchor, windowSize) {
+            // PointerInputScope.size 就是组件自身尺寸（px）。
+            val w = size.width
+            val h = size.height
+            detectDragGestures { _, dragAmount ->
+                val nextX = offset.value.x + dragAmount.x.roundToInt()
+                val nextY = offset.value.y + dragAmount.y.roundToInt()
+                offset.value = IntOffset(
+                    clampHudOffset(nextX, w, windowSize.width, anchor.horizontalFlip),
+                    clampHudOffset(nextY, h, windowSize.height, anchor.verticalFlip),
+                )
+            }
         }
-    }
+}
+
+/** 把单轴偏移钳制到「组件仍至少露出 [HUD_KEEP_VISIBLE_PX」的范围内。 */
+private fun clampHudOffset(next: Int, compSize: Int, windowSize: Int, flip: Boolean): Int {
+    if (compSize <= 0 || windowSize <= 0) return next
+    // 组件可移动区间：左/上边界从 -(comp-KEEP) 到 window-KEEP（flip 指组件贴在末端，如右下）。
+    val min = if (flip) -(windowSize - HUD_KEEP_VISIBLE_PX) else -(compSize - HUD_KEEP_VISIBLE_PX)
+    val max = if (flip) compSize - HUD_KEEP_VISIBLE_PX else windowSize - HUD_KEEP_VISIBLE_PX
+    return next.coerceIn(min, max)
+}
+
+internal enum class HudAnchor(
+    val horizontalFlip: Boolean,
+    val verticalFlip: Boolean,
+) {
+    /** 左上角锚点（计数板）：可向右/下移动更多。 */
+    TOP_LEFT(horizontalFlip = false, verticalFlip = false),
+    /** 左下角锚点（生产按钮）：可向右移动更多、向上移动更多。 */
+    BOTTOM_LEFT(horizontalFlip = false, verticalFlip = true),
+}
 
 /**
  * 游戏内敌我单位计数 HUD。
@@ -191,7 +232,7 @@ class UnitCounterMod : JvmMod() {
                 .padding(12.dp)
                 .background(Color(0x99000000))
                 .padding(horizontal = 12.dp, vertical = 8.dp)
-                .hudDraggable(dragOffset),
+                .hudDraggable(dragOffset, HudAnchor.TOP_LEFT),
         ) {
             BasicText(
                 text = "我方 ${counts.friendlyUnits}    敌军 ${counts.enemyUnits}",
