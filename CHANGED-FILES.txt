@@ -139,3 +139,16 @@
 #      该类行动同时保留在行动区（不再被 buildActionIds 过滤掉），也出现在“目标单位”列表。
 # 验证：:unit-counter-mod:build 成功；7+4 测试全绿；GUI 启动无反射异常。
 # jar：unit-counter-mod-1.1.4.jar 已重新部署，旧包备份为 .bak-20261127-070713。
+
+# ===== 2026-11-27 资源转换行动 / 行动按完成补单 / 建筑排除 =====
+#   M unit-counter-mod/.../FactoryLogic.kt   FactoryAction 新增 conversion 字段（资源转换描述）
+#   M unit-counter-mod/.../FactoryBridge.kt  新增 conversionText：读 CustomAction.actionDef.price + addResources
+#         （及 addResourcesScaledByAIHandicaps），花费/增加都有量则判为转换行动，生成“花费 → 获得”描述；
+#      建筑建造整体排除：getActionType()==placeBuilding 或 getUnitType()/attachedUnitType 是建筑 → continue，
+#        既不进目标单位（canBuild）也不进生产线行动（allActions）
+#   M unit-counter-mod/.../FactoryManager.kt  drainPendingActionRuns 加 acted 集合判断：
+#        同一 tick 内一座工厂排入一个行动后即标记 busy，后续行动延后下 tick（queued 是快照 tick 内不更新，
+#        原逻辑会同 tick 连排多个）——行动现在和生产一样一次一项。
+#   M unit-counter-mod/.../FactoryWindow.kt  行动行改为 Column：名称 + 生产/转换标记 + 转换明细小字。
+# 验证：:unit-counter-mod:build 成功；7+4 测试全绿；GUI 启动无反射异常。
+# jar：unit-counter-mod-1.1.4.jar 已重新部署，旧包备份为 .bak-20261127-080953。

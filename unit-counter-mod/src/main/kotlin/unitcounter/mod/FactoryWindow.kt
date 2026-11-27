@@ -528,19 +528,41 @@ private fun LineCard(
                                     .clip(CircleShape)
                                     .background(if (selected) WARN else Color(0x44FFFFFF)),
                             )
-                            Text(" ${action.displayName}", color = TEXT, fontSize = 10.sp)
-                            if (action.producesUnits) {
-                                Box(
-                                    Modifier
-                                        .padding(start = 5.dp)
-                                        .clip(RoundedCornerShape(3.dp))
-                                        .background(Color(0x33FFD54F))
-                                        .padding(horizontal = 4.dp, vertical = 1.dp),
-                                ) {
-                                    Text("生产", color = OK, fontSize = 9.sp)
+                            Column(Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(action.displayName, color = TEXT, fontSize = 10.sp)
+                                    if (action.producesUnits) {
+                                        Box(
+                                            Modifier
+                                                .padding(start = 5.dp)
+                                                .clip(RoundedCornerShape(3.dp))
+                                                .background(Color(0x33FFD54F))
+                                                .padding(horizontal = 4.dp, vertical = 1.dp),
+                                        ) {
+                                            Text("生产", color = OK, fontSize = 9.sp)
+                                        }
+                                    }
+                                    if (action.conversion != null) {
+                                        Box(
+                                            Modifier
+                                                .padding(start = 5.dp)
+                                                .clip(RoundedCornerShape(3.dp))
+                                                .background(Color(0x3369F0AE))
+                                                .padding(horizontal = 4.dp, vertical = 1.dp),
+                                        ) {
+                                            Text("转换", color = ACCENT, fontSize = 9.sp)
+                                        }
+                                    }
+                                }
+                                if (action.conversion != null) {
+                                    Text(
+                                        action.conversion,
+                                        color = ACCENT,
+                                        fontSize = 9.sp,
+                                        maxLines = 1,
+                                    )
                                 }
                             }
-                            Box(Modifier.weight(1f))
                             if (selected) {
                                 IconButton(onClick = { onActionRun(factory.instanceId, action.actionId) }) {
                                     ModIcons.Play(OK, 10.dp)

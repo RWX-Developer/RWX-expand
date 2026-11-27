@@ -14,6 +14,8 @@ internal data class FactoryAction(
     val displayName: String,
     /** 该行动是否带 produceUnits 逻辑（会生产单位）。 */
     val producesUnits: Boolean = false,
+    /** 资源转换行动：花费 certain 资源换另一些资源。显示用，如 "100 铁 -> 50 钢"。 */
+    val conversion: String? = null,
 )
 
 /** 玩家拥有的一座工厂。 */

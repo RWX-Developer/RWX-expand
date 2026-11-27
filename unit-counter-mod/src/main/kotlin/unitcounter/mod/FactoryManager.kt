@@ -303,8 +303,9 @@ internal class FactoryManager {
             if (line.manualFactorySelection && factoryId !in line.factoryIds) continue
             if (factoryId !in eligibleFactoryIds(factories, line.targetUnitTypeIds)) continue
             val factory = factories.firstOrNull { it.instanceId == factoryId } ?: continue
-            if (factory.queued > 0) {
-                // 工厂正在生产时不插队，下个 tick 再尝试。
+            if (factory.queued > 0 || factoryId in acted) {
+                // 工厂正在生产、或本 tick 已排入一个行动：不插队，下个 tick 再尝试。
+                // queued 是扫描快照，tick 内不会更新，必须用 acted 集合挡住同 tick 连排。
                 deferred += Triple(lineId, factoryId, actionId)
                 continue
             }

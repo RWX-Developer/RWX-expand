@@ -4,6 +4,7 @@ import com.corrodinggames.rts.game.PlayerTeam
 import com.corrodinggames.rts.game.units.BaseUnit
 import com.corrodinggames.rts.game.units.OrderableUnit
 import com.corrodinggames.rts.game.units.UnitType
+import com.corrodinggames.rts.game.units.actions.ActionType
 import com.corrodinggames.rts.game.units.custom.CustomUnitConfig
 import com.corrodinggames.rts.game.units.custom.UnitSpawner
 import com.corrodinggames.rts.game.units.custom.logic.CustomAction
@@ -23,6 +24,36 @@ import java.util.Locale
  */
 internal object FactoryBridge {
     fun myTeamId(api: Api): Int? = api.game.localTeam()?.teamId
+
+    /**
+     * 资源转换行动：price（花费）+ addResources（增加）都有实际资源量。
+     * 返回可读描述“花费 X → 获得 Y”，非转换行动返回 null。
+     */
+    private fun conversionText(action: Any?): String? {
+        val custom = action as? CustomAction ?: return null
+        val def = custom.actionDef ?: return null
+        val spend = linkedMapOf<String, Double>()
+        val gain = linkedMapOf<String, Double>()
+        val price = def.price
+        if (price != null) {
+            if (price.a() > 0) spend["$"] = price.a().toDouble()
+            readResourceAmounts(price.k?.b).forEach { (res, amt) ->
+                if (amt > 0) spend[res.displayName()] = (spend[res.displayName()] ?: 0.0) + amt
+            }
+        }
+        val add = def.addResources ?: def.addResourcesScaledByAIHandicaps
+        if (add != null) {
+            if (add.a() > 0) gain["$"] = add.a().toDouble()
+            readResourceAmounts(add.k?.b).forEach { (res, amt) ->
+                if (amt > 0) gain[res.displayName()] = (gain[res.displayName()] ?: 0.0) + amt
+            }
+        }
+        if (spend.isEmpty() || gain.isEmpty()) return null
+        fun fmt(map: Map<String, Double>) = map.entries.joinToString("+") { (k, v) ->
+            if (v % 1.0 == 0.0) "${v.toLong()} $k" else "%.1f %s".format(v, k)
+        }
+        return "${fmt(spend)} → ${fmt(gain)}"
+    }
 
     /**
      * 读取一个运行时行动里 produceUnits 逻辑产出的所有单位类型。
@@ -81,17 +112,23 @@ internal object FactoryBridge {
                 if (action.isNotAvailable(orderable) || !action.b(orderable)) continue
                 val actionId = action.getActionIdString()
                 if (actionId.isNullOrBlank() || actionId == "<null index>") continue
+                // 建筑建造不属于生产线：placeBuilding 行动、或目标是建筑单位的行动整体排除。
+                val buildUnitType = action.attachedUnitType ?: action.getUnitType()
+                if (runCatching { action.getActionType() }.getOrNull() == ActionType.placeBuilding) continue
+                if (buildUnitType != null && buildUnitType.isBuildingUnit()) continue
                 val name = runCatching { action.getDisplayName() }.getOrNull()
                     ?.takeIf { it.isNotBlank() }
                     ?: actionId
                 // produceUnits：从 CustomAction.actionDef.logicActions 里解析出的产出单位。
                 val produced = producedUnitTypes(action)
-                // 收集全部可用 ACTION 节行动（生产/升级/自定义），供集体执行；带生产逻辑的做标注。
-                allActions += FactoryAction(actionId, name, produced.isNotEmpty())
+                // 资源转换行动：price + addResources 都有实际量。
+                val conversion = conversionText(action)
+                // 收集全部可用 ACTION 节行动（生产/升级/自定义），供集体执行；带生产/转换逻辑的做标注。
+                allActions += FactoryAction(actionId, name, produced.isNotEmpty(), conversion)
 
-                // 常规生产：attachedUnitType / getUnitType（QueueUnitAction 造兵）。
-                val unitType = action.attachedUnitType ?: action.getUnitType()
-                if (unitType != null && !unitType.isBuildingUnit()) {
+                // 常规生产：attachedUnitType / getUnitType（QueueUnitAction 造兵）。建筑已在上面排除。
+                val unitType = buildUnitType
+                if (unitType != null) {
                     val typeId = unitType.v()
                     if (typeId != null) {
                         // 单位显示名取 displayText（getUnitName），不是内部注册名。
