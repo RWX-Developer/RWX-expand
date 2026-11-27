@@ -84,12 +84,25 @@ internal fun selectInitialFactoryIds(
     factories: List<FactoryInfo>,
     targetUnitTypeIds: Set<String>,
     preferredFactoryIds: Set<Long> = emptySet(),
+    excludedFactoryIds: Set<Long> = emptySet(),
 ): Set<Long> {
     if (targetUnitTypeIds.isEmpty()) return emptySet()
+    // 已被其他生产线占用的工厂不再自动分配；没有可用工厂时返回空集，等下一座新工厂出现再补。
     val eligible = eligibleFactories(factories, targetUnitTypeIds)
+        .filterNot { it.instanceId in excludedFactoryIds }
     val picked = eligible.firstOrNull { it.instanceId in preferredFactoryIds } ?: eligible.firstOrNull()
     return setOfNotNull(picked?.instanceId)
 }
+
+/** 从玩家游戏内选中的实例 id 中筛出本方工厂里确实能生产目标单位的部分。 */
+internal fun eligibleSelectedFactoryIds(
+    factories: List<FactoryInfo>,
+    selectedFactoryIds: Set<Long>,
+    targetUnitTypeIds: Set<String>,
+): Set<Long> = factories
+    .asSequence()
+    .filter { it.instanceId in selectedFactoryIds && factoryCanBuildTarget(it, targetUnitTypeIds) }
+    .mapTo(LinkedHashSet()) { it.instanceId }
 
 /**
  * 按生产线已选工厂生成分配：只使用玩家/自动补厂明确指定的工厂，且每座都要再次确认

@@ -3,10 +3,11 @@ package unitcounter.mod
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -130,10 +131,14 @@ internal fun FactoryHud(api: Api, manager: FactoryManager) {
                         ) { editing = !editing }
                     }
 
+                    // 已被其他生产线占用的工厂不参与新线初始分配，避免一条工厂被两条线抢。
+                    val occupiedFactoryIds = view.lines.flatMapTo(LinkedHashSet()) { it.factoryIds }
+
                     if (editing) {
                         LineEditor(
                             view = view,
                             selectedUnits = selectedUnits,
+                            occupiedFactoryIds = occupiedFactoryIds,
                             onUnitToggle = { id ->
                                 selectedUnits = if (id in selectedUnits) selectedUnits - id else selectedUnits + id
                             },
@@ -141,7 +146,7 @@ internal fun FactoryHud(api: Api, manager: FactoryManager) {
                                 // 必须在清空选择前捕获值：submit 的 lambda 要到下一 tick 才执行。
                                 val targetsToCreate = selectedUnits
                                 val initialFactory = eligibleFactories(view.factories, targetsToCreate)
-                                    .firstOrNull()?.instanceId
+                                    .firstOrNull { it.instanceId !in occupiedFactoryIds }?.instanceId
                                 manager.submit {
                                     // 新线默认手动选厂，并预置恰好一座能生产目标的工厂；后续在卡片里增减。
                                     manager.addLine(targetsToCreate, setOfNotNull(initialFactory), auto = false)
@@ -165,6 +170,9 @@ internal fun FactoryHud(api: Api, manager: FactoryManager) {
                             },
                             onFactoryAdjust = { id, add ->
                                 manager.submit { manager.adjustLineFactories(line.id, id, add) }
+                            },
+                            onAddSelectedFactories = {
+                                manager.submit { manager.addSelectedFactories(api, line.id) }
                             },
                             onActionAdjust = { factoryId, actionId, add ->
                                 manager.submit { manager.adjustLineAction(line.id, factoryId, actionId, add) }
@@ -190,6 +198,7 @@ private fun StatusLamp(view: FactoryUiState) {
     Box(Modifier.size(10.dp).clip(CircleShape).background(color))
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ResourceBar(view: FactoryUiState) {
     Column(
@@ -205,14 +214,13 @@ private fun ResourceBar(view: FactoryUiState) {
             StatusLamp(view)
             Text(" 资源", color = TEXT_DIM, fontSize = 10.sp, fontWeight = FontWeight.Bold)
             Box(Modifier.weight(1f))
-            Text(view.status, color = TEXT_DIM, fontSize = 10.sp, maxLines = 1)
+            Text(view.status, color = TEXT_DIM, fontSize = 10.sp)
         }
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
+        // 资源种类多时换行，不再横向挤出面板；过长资源名由 chip 自身软换行。
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             ResourceChip(
                 label = view.pool.creditsLabel,
@@ -274,6 +282,7 @@ private fun formatAmount(value: Double): String {
 private fun LineEditor(
     view: FactoryUiState,
     selectedUnits: Set<String>,
+    occupiedFactoryIds: Set<Long>,
     onUnitToggle: (String) -> Unit,
     onSubmit: () -> Unit,
 ) {
@@ -297,16 +306,23 @@ private fun LineEditor(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 ModIcons.Unit(ModIcons.colorFor(option.unitTypeId), 12.dp)
-                Text(" ${option.displayName}", color = TEXT, fontSize = 12.sp)
+                Text(
+                    " ${option.displayName}",
+                    color = TEXT,
+                    fontSize = 12.sp,
+                    modifier = Modifier.weight(1f),
+                    softWrap = true,
+                )
             }
         }
 
-        val initialFactory = eligibleFactories(view.factories, selectedUnits).firstOrNull()
+        val initialFactory = eligibleFactories(view.factories, selectedUnits)
+            .firstOrNull { it.instanceId !in occupiedFactoryIds }
         Text(
             if (selectedUnits.isEmpty()) {
                 "选择目标单位后创建生产线"
             } else {
-                "已选 ${selectedUnits.size} 种目标单位 · 初始工厂：${initialFactory?.label ?: "暂无"}"
+                "已选 ${selectedUnits.size} 种目标单位 · 初始工厂：${initialFactory?.label ?: "等待新工厂"}"
             },
             color = TEXT_DIM,
             fontSize = 11.sp,
@@ -321,6 +337,7 @@ private fun LineEditor(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun LineCard(
     line: ProductionLine,
@@ -330,6 +347,7 @@ private fun LineCard(
     onModeChange: (Boolean) -> Unit,
     onUnitAdjust: (String, Boolean) -> Unit,
     onFactoryAdjust: (Long, Boolean) -> Unit,
+    onAddSelectedFactories: () -> Unit,
     onActionAdjust: (Long, String, Boolean) -> Unit,
     onActionRun: (Long, String) -> Unit,
 ) {
@@ -384,10 +402,15 @@ private fun LineCard(
             IconButton(onClick = onRemove) { ModIcons.Close(DANGER) }
         }
 
-        // 摘要行：目标产品 / 工厂数 / 行动数。
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(targetNames, color = TEXT, fontSize = 11.sp, maxLines = 1)
-            Box(Modifier.weight(1f))
+        // 摘要行：目标产品可能很长，允许换行；计数贴右侧，不再把名称截断成一行。
+        Row(verticalAlignment = Alignment.Top) {
+            Text(
+                targetNames,
+                color = TEXT,
+                fontSize = 11.sp,
+                modifier = Modifier.weight(1f, fill = false),
+                softWrap = true,
+            )
             Text("工厂 ${assignedFactories.size}", color = TEXT_DIM, fontSize = 10.sp)
             if (queuedCount > 0) {
                 Text(" · 队列 $queuedCount", color = OK, fontSize = 10.sp)
@@ -415,11 +438,16 @@ private fun LineCard(
 
         if (expanded) {
             SectionTitle("目标单位")
-            Row {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
                 line.targetUnitTypeIds.forEach { id ->
                     val name = allBuilds.firstOrNull { it.unitTypeId == id }?.displayName ?: id
-                    Chip(name, ModIcons.colorFor(id))
-                    IconButton(onClick = { onUnitAdjust(id, false) }) { ModIcons.Minus(DANGER) }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Chip(name, ModIcons.colorFor(id))
+                        IconButton(onClick = { onUnitAdjust(id, false) }) { ModIcons.Minus(DANGER) }
+                    }
                 }
             }
             val addableUnits = allBuilds.filterNot { it.unitTypeId in line.targetUnitTypeIds }
@@ -436,8 +464,13 @@ private fun LineCard(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         ModIcons.Unit(ModIcons.colorFor(option.unitTypeId), 9.dp)
-                        Text(" ${option.displayName}", color = TEXT, fontSize = 10.sp, maxLines = 1)
-                        Box(Modifier.weight(1f))
+                        Text(
+                            " ${option.displayName}",
+                            color = TEXT,
+                            fontSize = 10.sp,
+                            modifier = Modifier.weight(1f),
+                            softWrap = true,
+                        )
                         ModIcons.Plus(ACCENT, 12.dp)
                     }
                 }
@@ -465,14 +498,35 @@ private fun LineCard(
                 color = TEXT_DIM,
                 fontSize = 10.sp,
             )
-            Row {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
                 assignedFactories.forEach { factory ->
-                    Chip(factory.label, OK)
-                    IconButton(onClick = { onFactoryAdjust(factory.instanceId, false) }) {
-                        ModIcons.Minus(DANGER)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Chip(factory.label, OK)
+                        IconButton(onClick = { onFactoryAdjust(factory.instanceId, false) }) {
+                            ModIcons.Minus(DANGER)
+                        }
                     }
                 }
             }
+            if (assignedFactories.isEmpty()) {
+                Text(
+                    if (line.manualFactorySelection) {
+                        "尚未指定工厂；可从下方列表或游戏内选中添加"
+                    } else {
+                        "暂无可用工厂；下一座新建的可用工厂会自动补上"
+                    },
+                    color = WARN,
+                    fontSize = 10.sp,
+                )
+            }
+            WideButton(
+                label = "加入游戏内选中的工厂",
+                color = ACCENT,
+                onClick = onAddSelectedFactories,
+            )
             if (line.manualFactorySelection) {
                 val addableFactories = eligibleFactoryList.filterNot { it.instanceId in line.factoryIds }
                 if (addableFactories.isNotEmpty()) {
@@ -488,8 +542,13 @@ private fun LineCard(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             ModIcons.Factory(OK, 12.dp)
-                            Text(" ${factory.label}", color = TEXT, fontSize = 10.sp, maxLines = 1)
-                            Box(Modifier.weight(1f))
+                            Text(
+                                " ${factory.label}",
+                                color = TEXT,
+                                fontSize = 10.sp,
+                                modifier = Modifier.weight(1f),
+                                softWrap = true,
+                            )
                             ModIcons.Plus(ACCENT, 12.dp)
                         }
                     }
@@ -561,7 +620,7 @@ private fun LineCard(
                                         action.conversion,
                                         color = ACCENT,
                                         fontSize = 9.sp,
-                                        maxLines = 1,
+                                        softWrap = true,
                                     )
                                 }
                             }
@@ -587,13 +646,14 @@ private fun SectionTitle(label: String, color: Color = TEXT_DIM) {
 private fun Chip(label: String, color: Color) {
     Row(
         modifier = Modifier
+            .widthIn(max = 360.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(color.copy(alpha = 0.22f))
             .padding(horizontal = 6.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         ModIcons.Unit(color, 9.dp)
-        Text(" $label", color = TEXT, fontSize = 11.sp)
+        Text(" $label", color = TEXT, fontSize = 11.sp, modifier = Modifier.weight(1f), softWrap = true)
     }
 }
 

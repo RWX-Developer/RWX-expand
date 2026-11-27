@@ -263,3 +263,23 @@
 #     总测试 12+3+4=19 全绿。
 # 验证：:unit-counter-mod:build 成功（1m41s）；GUI 启动 16s 到主菜单、无异常、mod 正常注册。
 # jar：unit-counter-mod-1.1.4.jar 172,550B md5=323f60f4…（旧包备份 .bak-20261127-134031）。
+
+# ===== 2026-11-27 跨线工厂去重 + 新厂补位 + 游戏内选中工厂入线 + HUD 换行 =====
+# 用户反馈：其他生产线上的工厂不能被自动分配；没有工厂时等下一座新建工厂；
+#   允许把游戏内当前选中的工厂加入生产线（需同种/能生产目标）；HUD 长资源名/单位名要换行防崩。
+#   M unit-counter-mod/.../FactoryLogic.kt
+#     selectInitialFactoryIds 加 excludedFactoryIds：自动分配/初始分配跳过其他线已占用工厂；
+#     没有可用工厂返回空集，留待后续扫描到新工厂再补。新增 eligibleSelectedFactoryIds。
+#   M unit-counter-mod/.../FactoryBridge.kt
+#     新增 selectedFactoryIds(api)：经 api.ui.selectedUnits() 读取当前选中单位，只留 isFactory 实例。
+#   M unit-counter-mod/.../FactoryManager.kt
+#     addLine/setLineAuto/adjustLineUnits/tick 的 normalizeLine 都传 occupied 集合；
+#     新增 addSelectedFactories(api,id)：选中 id 经能力门槛过滤后才加入，并切回手动模式。
+#   M unit-counter-mod/.../FactoryWindow.kt
+#     新增“加入游戏内选中的工厂”按钮；资源条与目标/工厂 chip 改 FlowRow 自动换行；
+#     长单位名、工厂名、转换说明去掉 maxLines=1，改 softWrap/weight。
+#   M unit-counter-mod/.../FactoryLogicTest.kt
+#     新增 4 项：跨线跳过、新线不抢厂、空线等新厂、选中工厂能力过滤；
+#     总测试 16+3+4=23 全绿。
+# 验证：:unit-counter-mod:build 成功（复核 2m35s）；GUI 启动 32s 到主菜单、无异常。
+# jar：unit-counter-mod-1.1.4.jar 178,161B md5=2126c43d…（旧包备份 .bak-20261127-143407）。

@@ -163,6 +163,18 @@ internal object FactoryBridge {
         return out
     }
 
+    /**
+     * 读取玩家当前在游戏内选中的工厂实例 id。
+     * 必须在仿真线程调用：选择集合由 gameLoop 的输入路径维护，和 ModTask 同线程。
+     * 只按引擎的 isFactory 标记粗筛，能否生产目标单位由 FactoryManager 再逐座核对。
+     */
+    fun selectedFactoryIds(api: Api): Set<Long> = runCatching {
+        api.ui.selectedUnits()
+            .asSequence()
+            .filter { it.isFactory && !it.destroyed }
+            .mapTo(LinkedHashSet<Long>()) { it.ref.instanceId.value }
+    }.getOrDefault(emptySet())
+
     /** 只读玩家所属队伍自己的资源：credits + 自定义资源，键统一用显示名。 */
     fun readPool(teamId: Int): ResourcePool {
         val team = PlayerTeam.k(teamId) ?: return ResourcePool()

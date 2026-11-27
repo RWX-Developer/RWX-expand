@@ -24,6 +24,13 @@ internal class FactoryManager {
 
     /** 只读当前生产线配置，供 UI 与回归测试观察；写入仍只发生在仿真线程。 */
     internal fun currentLines(): List<ProductionLine> = linesRef.get()
+
+    /** 已被其他生产线占用的工厂：自动分配/补厂必须避开这些工厂。 */
+    private fun occupiedFactoryIdsExcluding(lineId: Int? = null): Set<Long> =
+        linesRef.get().asSequence()
+            .filter { it.id != lineId }
+            .flatMapTo(LinkedHashSet()) { it.factoryIds.asSequence() }
+
     private val nextLineId = AtomicInteger(1)
     /** 每条线/每座工厂的目标单位轮转游标，避免多目标时只生产第一个。 */
     private val unitCursors = mutableMapOf<String, Int>()
@@ -62,10 +69,11 @@ internal class FactoryManager {
         // 创建时保留用户选中的目标，不用可能过期的工厂快照裁剪；下个 tick 再正常收敛。
         // 工厂只允许一座：优先用调用方指定的那座，否则从快照里挑第一座能生产目标的工厂。
         val factories = snapshot.get().factories
+        val occupied = occupiedFactoryIdsExcluding()
         val initialFactories = if (factories.isEmpty()) {
             factoryIds.take(1).toSet()
         } else {
-            selectInitialFactoryIds(factories, targets, factoryIds)
+            selectInitialFactoryIds(factories, targets, factoryIds, occupied)
         }
         val initialActions = actionsByFactory.filterKeys { it in initialFactories }
         val line = ProductionLine(id, targets, initialFactories, !auto, initialActions)
@@ -85,10 +93,11 @@ internal class FactoryManager {
      */
     fun setLineAuto(id: Int, auto: Boolean) {
         val factories = snapshot.get().factories
+        val occupied = occupiedFactoryIdsExcluding(id)
         linesRef.updateAndGet { lines ->
             lines.map { line ->
                 if (line.id != id) return@map line
-                normalizeLine(line.copy(manualFactorySelection = !auto), factories)
+                normalizeLine(line.copy(manualFactorySelection = !auto), factories, occupied)
             }
         }
     }
@@ -111,16 +120,18 @@ internal class FactoryManager {
 
     /** 给已有生产线增减目标单位；移除单位时同步剔除不再能生产的工厂与行动。 */
     fun adjustLineUnits(id: Int, unitTypeId: String, add: Boolean) {
+        val factories = snapshot.get().factories
+        val occupied = occupiedFactoryIdsExcluding(id)
         linesRef.updateAndGet { lines ->
             lines.map { line ->
                 if (line.id != id) return@map line
-                val available = availableTargetIds(snapshot.get().factories)
+                val available = availableTargetIds(factories)
                 val targets = when {
                     add && unitTypeId in available -> line.targetUnitTypeIds + unitTypeId
                     !add -> line.targetUnitTypeIds - unitTypeId
                     else -> line.targetUnitTypeIds
                 }
-                normalizeLine(line.copy(targetUnitTypeIds = targets), snapshot.get().factories)
+                normalizeLine(line.copy(targetUnitTypeIds = targets), factories, occupied)
             }
         }
     }
@@ -141,6 +152,25 @@ internal class FactoryManager {
                     add -> line.factoryIds
                     else -> line.factoryIds - factoryId
                 }
+                normalizeLine(line.copy(factoryIds = next, manualFactorySelection = true), factories)
+            }
+        }
+    }
+
+    /**
+     * 把玩家当前在游戏内选中的工厂加入生产线。只会加入我方扫描到、且能生产该线目标单位的工厂；
+     * 不合格的选中项直接忽略，不改动生产线。
+     */
+    fun addSelectedFactories(api: Api, id: Int) {
+        val factories = snapshot.get().factories
+        val selectedIds = FactoryBridge.selectedFactoryIds(api)
+        if (selectedIds.isEmpty()) return
+        linesRef.updateAndGet { lines ->
+            lines.map { line ->
+                if (line.id != id) return@map line
+                val addable = eligibleSelectedFactoryIds(factories, selectedIds, line.targetUnitTypeIds)
+                if (addable.isEmpty()) return@map line
+                val next = line.factoryIds + addable
                 normalizeLine(line.copy(factoryIds = next, manualFactorySelection = true), factories)
             }
         }
@@ -187,7 +217,12 @@ internal class FactoryManager {
         val pool = FactoryBridge.readPool(teamId)
 
         // 目标单位、工厂、行动都按当前局内可生产能力收敛，避免 UI 展示旧局/不可用项。
-        val lines = linesRef.get().map { normalizeLine(it, factories) }
+        // 每条线自动补厂时都要避开其他线已占用的工厂；没有可用工厂就保持空，等下一座新工厂。
+        val priorLines = linesRef.get()
+        val lines = priorLines.map { line ->
+            val occupied = occupiedFactoryIdsExcluding(line.id)
+            normalizeLine(line, factories, occupied)
+        }
         if (lines != linesRef.get()) linesRef.set(lines)
 
         // 队列未清空时绝不补单：每座工厂最多同时拥有一项生产/行动。
@@ -272,7 +307,11 @@ internal class FactoryManager {
         .mapTo(LinkedHashSet()) { it.instanceId }
 
     /** 目标单位、工厂、行动三者互相收敛：任何一项失效都同步清掉相关分配。 */
-    private fun normalizeLine(line: ProductionLine, factories: List<FactoryInfo>): ProductionLine {
+    private fun normalizeLine(
+        line: ProductionLine,
+        factories: List<FactoryInfo>,
+        occupiedFactoryIds: Set<Long> = emptySet(),
+    ): ProductionLine {
         // 扫描尚未就绪/当前没有工厂时不能把目标清空，否则会出现“刚建好就没有目标”。
         if (factories.isEmpty()) return line
         val targets = line.targetUnitTypeIds intersect availableTargetIds(factories)
@@ -281,7 +320,7 @@ internal class FactoryManager {
         val factoriesForLine = if (line.manualFactorySelection) {
             line.factoryIds intersect eligible
         } else {
-            selectInitialFactoryIds(factories, targets, line.factoryIds)
+            selectInitialFactoryIds(factories, targets, line.factoryIds, occupiedFactoryIds)
         }
         val actionsForLine = when {
             line.manualFactorySelection -> line.actionsByFactory.filterKeys { it in factoriesForLine }

@@ -121,4 +121,53 @@ class FactoryLogicTest {
         manager.adjustLineFactories(lineId, 1L, add = false)
         assertEquals(setOf(3L), manager.currentLines().single().factoryIds)
     }
+
+    @Test
+    fun `auto selection skips factories already used by other lines`() {
+        val factories = listOf(factory(1, "tank"), factory(2, "tank"), factory(3, "plane"))
+        assertEquals(
+            setOf(2L),
+            selectInitialFactoryIds(factories, setOf("tank"), excludedFactoryIds = setOf(1L)),
+        )
+        assertTrue(
+            selectInitialFactoryIds(factories, setOf("tank"), excludedFactoryIds = setOf(1L, 2L)).isEmpty(),
+        )
+    }
+
+    @Test
+    fun `new lines never take a factory already assigned to another line`() {
+        val manager = FactoryManager()
+        manager.snapshot.set(
+            FactoryUiState(factories = listOf(factory(1, "tank"), factory(2, "tank"))),
+        )
+        manager.addLine(setOf("tank"), emptySet(), auto = false)
+        manager.addLine(setOf("tank"), emptySet(), auto = false)
+        val lines = manager.currentLines()
+        assertEquals(setOf(1L), lines[0].factoryIds)
+        assertEquals(setOf(2L), lines[1].factoryIds)
+    }
+
+    @Test
+    fun `line with no free factory waits for a newly built one`() {
+        val manager = FactoryManager()
+        manager.snapshot.set(FactoryUiState(factories = listOf(factory(1, "tank"))))
+        manager.addLine(setOf("tank"), emptySet(), auto = false)
+        manager.addLine(setOf("tank"), emptySet(), auto = false)
+        assertTrue(manager.currentLines()[1].factoryIds.isEmpty())
+
+        manager.snapshot.set(
+            FactoryUiState(factories = listOf(factory(1, "tank"), factory(2, "tank"))),
+        )
+        manager.addLine(setOf("tank"), emptySet(), auto = false)
+        assertEquals(setOf(2L), manager.currentLines()[2].factoryIds)
+    }
+
+    @Test
+    fun `selected factory filter keeps only eligible factories`() {
+        val factories = listOf(factory(1, "tank"), factory(2, "plane"), factory(3, "tank"))
+        assertEquals(
+            setOf(1L, 3L),
+            eligibleSelectedFactoryIds(factories, setOf(1L, 2L, 3L, 99L), setOf("tank")),
+        )
+    }
 }
