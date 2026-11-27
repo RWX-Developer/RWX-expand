@@ -11,31 +11,51 @@ class FactoryLogicTest {
     )
 
     @Test
-    fun `auto assignment keeps only factories that can build targets`() {
+    fun `assignment keeps only selected factories that can build targets`() {
         val factories = listOf(factory(1, "tank", "apc"), factory(2, "plane"), factory(3, "apc"))
-        val assigned = assignFactories(factories, setOf("tank", "apc"), emptySet(), auto = true)
+        val assigned = assignFactories(factories, setOf("tank", "apc"), setOf(1L, 2L, 3L))
         assertEquals(setOf(1L, 3L), assigned.keys)
         assertEquals(listOf("tank", "apc"), assigned[1L]!!.map { it.unitTypeId })
         assertEquals(listOf("apc"), assigned[3L]!!.map { it.unitTypeId })
     }
 
     @Test
-    fun `manual selection excludes factories outside selection`() {
+    fun `assignment never expands to unselected factories`() {
         val factories = listOf(factory(1, "tank"), factory(2, "tank"))
-        val assigned = assignFactories(factories, setOf("tank"), setOf(2L), auto = false)
+        val assigned = assignFactories(factories, setOf("tank"), setOf(2L))
         assertEquals(setOf(2L), assigned.keys)
     }
 
     @Test
-    fun `manual selection still drops factories that cannot build targets`() {
+    fun `assignment still drops selected factories that cannot build targets`() {
         val factories = listOf(factory(1, "tank"), factory(2, "plane"))
-        val assigned = assignFactories(factories, setOf("tank"), setOf(1L, 2L), auto = false)
+        val assigned = assignFactories(factories, setOf("tank"), setOf(1L, 2L))
         assertEquals(setOf(1L), assigned.keys)
     }
 
     @Test
     fun `no targets yields no assignments`() {
-        assertTrue(assignFactories(listOf(factory(1, "tank")), emptySet(), emptySet(), true).isEmpty())
+        assertTrue(assignFactories(listOf(factory(1, "tank")), emptySet(), emptySet()).isEmpty())
+    }
+
+    @Test
+    fun `initial factory is exactly one eligible factory`() {
+        val factories = listOf(factory(1, "plane"), factory(2, "tank"), factory(3, "tank"))
+        assertEquals(setOf(2L), selectInitialFactoryIds(factories, setOf("tank")))
+        assertTrue(selectInitialFactoryIds(factories, emptySet()).isEmpty())
+    }
+
+    @Test
+    fun `initial factory prefers an eligible selection and ignores ineligible one`() {
+        val factories = listOf(factory(1, "plane"), factory(2, "tank"), factory(3, "tank"))
+        assertEquals(setOf(3L), selectInitialFactoryIds(factories, setOf("tank"), setOf(3L)))
+        assertEquals(setOf(2L), selectInitialFactoryIds(factories, setOf("tank"), setOf(1L)))
+    }
+
+    @Test
+    fun `factory capability gate rejects wrong target`() {
+        assertTrue(factoryCanBuildTarget(factory(1, "tank", "apc"), setOf("apc")))
+        assertTrue(!factoryCanBuildTarget(factory(1, "plane"), setOf("tank")))
     }
 
     @Test
@@ -64,5 +84,41 @@ class FactoryLogicTest {
         val assignments = mapOf(1L to listOf(option("tank")))
         val costs = mapOf("tank" to ResourceCost(100.0))
         assertTrue(affordableUnits(assignments, costs, ResourcePool(99.0)).isEmpty())
+    }
+
+    @Test
+    fun `new line starts with exactly one factory`() {
+        val manager = FactoryManager()
+        manager.snapshot.set(
+            FactoryUiState(factories = listOf(factory(1, "tank"), factory(2, "tank"))),
+        )
+        manager.addLine(setOf("tank"), emptySet(), auto = false)
+        assertEquals(setOf(1L), manager.currentLines().single().factoryIds)
+        assertTrue(manager.currentLines().single().manualFactorySelection)
+    }
+
+    @Test
+    fun `manually adding factory requires target capability`() {
+        val manager = FactoryManager()
+        manager.snapshot.set(
+            FactoryUiState(
+                factories = listOf(
+                    factory(1, "tank"),
+                    factory(2, "plane"),
+                    factory(3, "tank"),
+                ),
+            ),
+        )
+        manager.addLine(setOf("tank"), setOf(1L), auto = false)
+        val lineId = manager.currentLines().single().id
+
+        manager.adjustLineFactories(lineId, 2L, add = true)
+        assertEquals(setOf(1L), manager.currentLines().single().factoryIds)
+
+        manager.adjustLineFactories(lineId, 3L, add = true)
+        assertEquals(setOf(1L, 3L), manager.currentLines().single().factoryIds)
+
+        manager.adjustLineFactories(lineId, 1L, add = false)
+        assertEquals(setOf(3L), manager.currentLines().single().factoryIds)
     }
 }

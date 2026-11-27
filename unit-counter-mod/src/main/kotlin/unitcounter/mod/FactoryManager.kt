@@ -21,6 +21,9 @@ internal data class FactoryUiState(
 internal class FactoryManager {
     val snapshot = AtomicReference(FactoryUiState())
     private val linesRef = AtomicReference<List<ProductionLine>>(emptyList())
+
+    /** 只读当前生产线配置，供 UI 与回归测试观察；写入仍只发生在仿真线程。 */
+    internal fun currentLines(): List<ProductionLine> = linesRef.get()
     private val nextLineId = AtomicInteger(1)
     /** 每条线/每座工厂的目标单位轮转游标，避免多目标时只生产第一个。 */
     private val unitCursors = mutableMapOf<String, Int>()
@@ -57,9 +60,17 @@ internal class FactoryManager {
     ) {
         val id = nextLineId.getAndIncrement()
         // 创建时保留用户选中的目标，不用可能过期的工厂快照裁剪；下个 tick 再正常收敛。
-        val line = ProductionLine(id, targets, factoryIds, !auto, actionsByFactory)
+        // 工厂只允许一座：优先用调用方指定的那座，否则从快照里挑第一座能生产目标的工厂。
+        val factories = snapshot.get().factories
+        val initialFactories = if (factories.isEmpty()) {
+            factoryIds.take(1).toSet()
+        } else {
+            selectInitialFactoryIds(factories, targets, factoryIds)
+        }
+        val initialActions = actionsByFactory.filterKeys { it in initialFactories }
+        val line = ProductionLine(id, targets, initialFactories, !auto, initialActions)
         linesRef.updateAndGet { it + line }
-        if (line.enabled) enqueueLineActions(id, actionsByFactory)
+        if (line.enabled) enqueueLineActions(id, initialActions)
     }
 
     fun removeLine(id: Int) {
@@ -67,21 +78,17 @@ internal class FactoryManager {
         linesRef.updateAndGet { lines -> lines.filterNot { it.id == id } }
     }
 
-    /** 切换自动/手动工厂分配；转手动时以当前所有可生产工厂作为初始选择。 */
+    /**
+     * 切换“自动补厂 / 手动选厂”。
+     * 自动补厂仍只保留一座工厂：原工厂失效时才补另一座可生产的工厂；
+     * 手动模式不做任何自动扩张，完全尊重玩家当前的选择。
+     */
     fun setLineAuto(id: Int, auto: Boolean) {
         val factories = snapshot.get().factories
         linesRef.updateAndGet { lines ->
             lines.map { line ->
                 if (line.id != id) return@map line
-                if (auto) {
-                    normalizeLine(line.copy(manualFactorySelection = false, factoryIds = emptySet()), factories)
-                } else {
-                    val eligible = eligibleFactoryIds(factories, line.targetUnitTypeIds)
-                    normalizeLine(
-                        line.copy(manualFactorySelection = true, factoryIds = eligible),
-                        factories,
-                    )
-                }
+                normalizeLine(line.copy(manualFactorySelection = !auto), factories)
             }
         }
     }
@@ -118,18 +125,23 @@ internal class FactoryManager {
         }
     }
 
-    /** 给已有生产线增减工厂；只能加入确实能生产该线目标单位的工厂。 */
+    /**
+     * 给已有生产线增减工厂。新增时会再次核对工厂能否生产该线目标单位，不满足则直接忽略；
+     * 一旦玩家手动增减，就切回手动模式，避免自动补厂把选择改掉。
+     */
     fun adjustLineFactories(id: Int, factoryId: Long, add: Boolean) {
+        val factories = snapshot.get().factories
         linesRef.updateAndGet { lines ->
             lines.map { line ->
                 if (line.id != id) return@map line
-                val eligible = eligibleFactoryIds(snapshot.get().factories, line.targetUnitTypeIds)
+                val factory = factories.firstOrNull { it.instanceId == factoryId }
+                val eligible = factory != null && factoryCanBuildTarget(factory, line.targetUnitTypeIds)
                 val next = when {
-                    add && factoryId in eligible -> line.factoryIds + factoryId
+                    add && eligible -> line.factoryIds + factoryId
                     add -> line.factoryIds
                     else -> line.factoryIds - factoryId
                 }
-                normalizeLine(line.copy(factoryIds = next, manualFactorySelection = true), snapshot.get().factories)
+                normalizeLine(line.copy(factoryIds = next, manualFactorySelection = true), factories)
             }
         }
     }
@@ -142,6 +154,7 @@ internal class FactoryManager {
         linesRef.updateAndGet { lines ->
             lines.map { line ->
                 if (line.id != id) return@map line
+                if (factoryId !in line.factoryIds) return@map line
                 if (factoryId !in eligibleFactoryIds(factories, line.targetUnitTypeIds)) return@map line
                 val current = line.actionsByFactory[factoryId].orEmpty()
                 val nextActions = if (add) current + actionId else current - actionId
@@ -191,7 +204,6 @@ internal class FactoryManager {
                 factories = factories,
                 targetUnitTypeIds = line.targetUnitTypeIds,
                 selectedFactoryIds = line.factoryIds,
-                auto = !line.manualFactorySelection,
             )
             if (assignments.isEmpty()) {
                 skipped += line.targetUnitTypeIds.size
@@ -236,12 +248,7 @@ internal class FactoryManager {
         } else {
             lines.flatMap { line ->
                 val factories = snapshot.get().factories
-                assignFactories(
-                    factories,
-                    line.targetUnitTypeIds,
-                    line.factoryIds,
-                    auto = !line.manualFactorySelection,
-                ).keys.toList()
+                assignFactories(factories, line.targetUnitTypeIds, line.factoryIds).keys.toList()
             }.distinct()
         }
         if (ids.isNotEmpty()) FactoryBridge.runAction(api, teamId, ids, actionId)
@@ -261,8 +268,7 @@ internal class FactoryManager {
     private fun eligibleFactoryIds(
         factories: List<FactoryInfo>,
         targetUnitTypeIds: Set<String>,
-    ): Set<Long> = factories
-        .filter { factory -> factory.canBuild.any { it.unitTypeId in targetUnitTypeIds } }
+    ): Set<Long> = eligibleFactories(factories, targetUnitTypeIds)
         .mapTo(LinkedHashSet()) { it.instanceId }
 
     /** 目标单位、工厂、行动三者互相收敛：任何一项失效都同步清掉相关分配。 */
@@ -271,7 +277,12 @@ internal class FactoryManager {
         if (factories.isEmpty()) return line
         val targets = line.targetUnitTypeIds intersect availableTargetIds(factories)
         val eligible = eligibleFactoryIds(factories, targets)
-        val factoriesForLine = if (line.manualFactorySelection) line.factoryIds intersect eligible else emptySet()
+        // 自动补厂只维持一座；手动模式保留玩家选择（可以为空，也可以多座）。
+        val factoriesForLine = if (line.manualFactorySelection) {
+            line.factoryIds intersect eligible
+        } else {
+            selectInitialFactoryIds(factories, targets, line.factoryIds)
+        }
         val actionsForLine = when {
             line.manualFactorySelection -> line.actionsByFactory.filterKeys { it in factoriesForLine }
             else -> line.actionsByFactory.filterKeys { it in eligible }
@@ -301,7 +312,8 @@ internal class FactoryManager {
             val (lineId, factoryId, actionId) = pendingActionRuns.poll() ?: break
             val line = lines.firstOrNull { it.id == lineId } ?: continue
             if (!line.enabled) continue
-            if (line.manualFactorySelection && factoryId !in line.factoryIds) continue
+            // 行动只能由该线明确指定的工厂执行：自动补厂模式下同样只允许当前那座。
+            if (factoryId !in line.factoryIds) continue
             if (factoryId !in eligibleFactoryIds(factories, line.targetUnitTypeIds)) continue
             val factory = factories.firstOrNull { it.instanceId == factoryId } ?: continue
             if (factory.queued > 0 || factoryId in acted) {

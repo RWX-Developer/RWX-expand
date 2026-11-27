@@ -244,3 +244,22 @@
 # 部署：RWX-windows-x64-1.1.4.jar 113,713,486B md5=8f842eca…（旧包 113,711,772B 备份 logs-archive/）；
 #   unit-counter-mod-1.1.4.jar 171,459B md5=45800293…（旧包备份 .bak-20261127-130127）。
 # 未做：未实机连开两局复验（冒烟只到主菜单）；若仍白屏请附最新 logs/rwx.log。
+
+# ===== 2026-11-27 生产线工厂分配重做（单厂起步 + 手动增减 + 能力门槛） =====
+# 用户反馈：自动覆盖所有工厂太僵化；一条线最初只能一座工厂，新增工厂必须能生产该线目标单位。
+#   M unit-counter-mod/.../FactoryLogic.kt
+#     新增 factoryCanBuildTarget / eligibleFactories / selectInitialFactoryIds；
+#     assignFactories 去掉 auto 参数，只用已选工厂且逐座复核能力，绝不再扩张到全部工厂。
+#   M unit-counter-mod/.../FactoryManager.kt
+#     addLine 只取一座初始工厂（优先调用方指定，否则第一座可用）；默认手动选厂。
+#     setLineAuto 改为“自动补厂（仅 1 座）”：工厂失效才补另一座；手动模式不自动扩张。
+#     adjustLineFactories 新增时先过能力门槛，不满足直接忽略；手动增减自动切回手动模式。
+#     adjustLineAction / drainPendingActionRuns 要求工厂必须在 line.factoryIds 内。
+#   M unit-counter-mod/.../FactoryWindow.kt
+#     创建线时预览并预置一座可用工厂；详情里显示当前工厂与减号、手动添加列表（仅能力合格工厂），
+#     自动模式文案改为“自动补厂（仅 1 座）”，不再显示“自动覆盖 N 座”。
+#   M unit-counter-mod/.../FactoryLogicTest.kt
+#     新增 5 项：已选工厂分配、不扩张、能力门槛、初始单厂、手动加入能力校验；
+#     总测试 12+3+4=19 全绿。
+# 验证：:unit-counter-mod:build 成功（1m41s）；GUI 启动 16s 到主菜单、无异常、mod 正常注册。
+# jar：unit-counter-mod-1.1.4.jar 172,550B md5=323f60f4…（旧包备份 .bak-20261127-134031）。

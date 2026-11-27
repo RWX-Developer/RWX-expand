@@ -29,7 +29,10 @@ internal data class FactoryInfo(
     val queued: Int = 0,
 )
 
-/** 一条生产线：目标单位 + 工厂 + 每座工厂要执行的行动。 */
+/**
+ * 一条生产线：目标单位 + 工厂 + 每座工厂要执行的行动。
+ * factoryIds 是明确指定的工厂；manualFactorySelection=false 时只维持一座、失效自动补一座。
+ */
 internal data class ProductionLine(
     val id: Int,
     val targetUnitTypeIds: Set<String>,
@@ -61,20 +64,46 @@ internal data class ResourcePool(
     }
 }
 
+/** 工厂是否能生产目标单位中的至少一种；这是手动选厂的硬门槛。 */
+internal fun factoryCanBuildTarget(
+    factory: FactoryInfo,
+    targetUnitTypeIds: Set<String>,
+): Boolean = factory.canBuild.any { it.unitTypeId in targetUnitTypeIds }
+
+/** 能生产该线目标单位的工厂列表，保持扫描顺序。 */
+internal fun eligibleFactories(
+    factories: List<FactoryInfo>,
+    targetUnitTypeIds: Set<String>,
+): List<FactoryInfo> = factories.filter { factoryCanBuildTarget(it, targetUnitTypeIds) }
+
 /**
- * 按目标单位筛选工厂：能生产其中至少一种单位的工厂才保留。
- * 返回的工厂只含它真正能生产的那部分目标单位。
+ * 新建/自动补厂时只选一座工厂：优先沿用已选且仍可生产的工厂，否则取第一座可用工厂。
+ * 绝不再“自动覆盖全部工厂”——那会让玩家失去对生产节奏和经济的控制。
+ */
+internal fun selectInitialFactoryIds(
+    factories: List<FactoryInfo>,
+    targetUnitTypeIds: Set<String>,
+    preferredFactoryIds: Set<Long> = emptySet(),
+): Set<Long> {
+    if (targetUnitTypeIds.isEmpty()) return emptySet()
+    val eligible = eligibleFactories(factories, targetUnitTypeIds)
+    val picked = eligible.firstOrNull { it.instanceId in preferredFactoryIds } ?: eligible.firstOrNull()
+    return setOfNotNull(picked?.instanceId)
+}
+
+/**
+ * 按生产线已选工厂生成分配：只使用玩家/自动补厂明确指定的工厂，且每座都要再次确认
+ * 确实能生产目标单位，防止目标变更、工厂改动后留下无效分配。
  */
 internal fun assignFactories(
     factories: List<FactoryInfo>,
     targetUnitTypeIds: Set<String>,
     selectedFactoryIds: Set<Long>,
-    auto: Boolean,
 ): Map<Long, List<BuildOption>> {
     if (targetUnitTypeIds.isEmpty()) return emptyMap()
-    val candidates = if (auto) factories else factories.filter { it.instanceId in selectedFactoryIds }
     val result = linkedMapOf<Long, List<BuildOption>>()
-    for (factory in candidates) {
+    for (factory in eligibleFactories(factories, targetUnitTypeIds)) {
+        if (factory.instanceId !in selectedFactoryIds) continue
         val usable = factory.canBuild.filter { it.unitTypeId in targetUnitTypeIds }
         if (usable.isNotEmpty()) result[factory.instanceId] = usable
     }

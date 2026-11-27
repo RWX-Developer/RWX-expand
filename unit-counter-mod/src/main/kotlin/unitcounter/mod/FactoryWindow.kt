@@ -140,9 +140,11 @@ internal fun FactoryHud(api: Api, manager: FactoryManager) {
                             onSubmit = {
                                 // 必须在清空选择前捕获值：submit 的 lambda 要到下一 tick 才执行。
                                 val targetsToCreate = selectedUnits
+                                val initialFactory = eligibleFactories(view.factories, targetsToCreate)
+                                    .firstOrNull()?.instanceId
                                 manager.submit {
-                                    // 新线默认自动分配工厂；工厂/行动在生产线卡片里继续配置。
-                                    manager.addLine(targetsToCreate, emptySet(), auto = true)
+                                    // 新线默认手动选厂，并预置恰好一座能生产目标的工厂；后续在卡片里增减。
+                                    manager.addLine(targetsToCreate, setOfNotNull(initialFactory), auto = false)
                                 }
                                 selectedUnits = emptySet()
                                 editing = false
@@ -299,11 +301,12 @@ private fun LineEditor(
             }
         }
 
+        val initialFactory = eligibleFactories(view.factories, selectedUnits).firstOrNull()
         Text(
             if (selectedUnits.isEmpty()) {
                 "选择目标单位后创建生产线"
             } else {
-                "已选 ${selectedUnits.size} 种目标单位"
+                "已选 ${selectedUnits.size} 种目标单位 · 初始工厂：${initialFactory?.label ?: "暂无"}"
             },
             color = TEXT_DIM,
             fontSize = 11.sp,
@@ -331,14 +334,9 @@ private fun LineCard(
     onActionRun: (Long, String) -> Unit,
 ) {
     val allBuilds = view.factories.flatMap { it.canBuild }.distinctBy { it.unitTypeId }
-    val eligibleFactories = view.factories.filter { factory ->
-        factory.canBuild.any { it.unitTypeId in line.targetUnitTypeIds }
-    }
-    val assignedFactories = if (line.manualFactorySelection) {
-        eligibleFactories.filter { it.instanceId in line.factoryIds }
-    } else {
-        eligibleFactories
-    }
+    val eligibleFactoryList = eligibleFactories(view.factories, line.targetUnitTypeIds)
+    // 不再自动覆盖所有可生产工厂：一条线只使用明确指定的工厂（自动补厂模式下也只有一座）。
+    val assignedFactories = eligibleFactoryList.filter { it.instanceId in line.factoryIds }
     // 目标 ID 已保存但工厂快照暂时取不到显示名时回退显示 ID，避免误报“未设目标”。
     val targetNames = line.targetUnitTypeIds
         .map { id -> allBuilds.firstOrNull { it.unitTypeId == id }?.displayName ?: id }
@@ -409,7 +407,7 @@ private fun LineCard(
             Text(if (expanded) "收起详情" else "展开详情", color = ACCENT, fontSize = 10.sp)
             Box(Modifier.weight(1f))
             Text(
-                if (line.manualFactorySelection) "手动分配" else "自动分配",
+                if (line.manualFactorySelection) "手动选厂" else "自动补厂",
                 color = TEXT_DIM,
                 fontSize = 10.sp,
             )
@@ -448,20 +446,37 @@ private fun LineCard(
             SectionTitle("工厂")
             MiniToggle(
                 checked = !line.manualFactorySelection,
-                label = "自动分配工厂",
+                label = "自动补厂（仅 1 座）",
                 onToggle = { onModeChange(!line.manualFactorySelection) },
             )
-            if (line.manualFactorySelection) {
-                Row {
-                    line.factoryIds.forEach { id ->
-                        val name = view.factories.firstOrNull { it.instanceId == id }?.label ?: "#$id"
-                        Chip(name, OK)
-                        IconButton(onClick = { onFactoryAdjust(id, false) }) { ModIcons.Minus(DANGER) }
+            if (!line.manualFactorySelection) {
+                Text(
+                    "只保留 1 座可用工厂；失效时自动改用另一座。关闭后可手动增减。",
+                    color = TEXT_DIM,
+                    fontSize = 10.sp,
+                )
+            }
+            Text(
+                if (line.manualFactorySelection) {
+                    "手动选择（${assignedFactories.size} 座）"
+                } else {
+                    "当前工厂（${assignedFactories.size} 座）"
+                },
+                color = TEXT_DIM,
+                fontSize = 10.sp,
+            )
+            Row {
+                assignedFactories.forEach { factory ->
+                    Chip(factory.label, OK)
+                    IconButton(onClick = { onFactoryAdjust(factory.instanceId, false) }) {
+                        ModIcons.Minus(DANGER)
                     }
                 }
-                val addableFactories = eligibleFactories.filterNot { it.instanceId in line.factoryIds }
+            }
+            if (line.manualFactorySelection) {
+                val addableFactories = eligibleFactoryList.filterNot { it.instanceId in line.factoryIds }
                 if (addableFactories.isNotEmpty()) {
-                    Text("添加", color = TEXT_DIM, fontSize = 10.sp)
+                    Text("添加（仅限能生产当前目标单位的工厂）", color = TEXT_DIM, fontSize = 10.sp)
                     addableFactories.forEach { factory ->
                         Row(
                             modifier = Modifier
@@ -478,13 +493,9 @@ private fun LineCard(
                             ModIcons.Plus(ACCENT, 12.dp)
                         }
                     }
+                } else if (eligibleFactoryList.isEmpty()) {
+                    Text("当前没有能生产该目标的工厂", color = WARN, fontSize = 10.sp)
                 }
-            } else {
-                Text(
-                    "自动覆盖 ${eligibleFactories.size} 座可生产工厂",
-                    color = TEXT_DIM,
-                    fontSize = 10.sp,
-                )
             }
 
             // 纯生产 action 由“目标单位”承载，不在行动区重复；带 produceUnits 的保留在行动区并标注。
