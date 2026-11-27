@@ -193,3 +193,16 @@
 # 注：已拖出屏幕的旧偏移存在 remember 里，重新加载新 jar 后 remember 重置为 0，按钮回到默认位置。
 # 验证：:unit-counter-mod:build 成功；7+4 测试全绿；GUI 启动无异常、mod 正常注册。
 # jar：unit-counter-mod-1.1.4.jar 已重新部署，旧包备份为 .bak-20261127-104600。
+
+# ===== 2026-11-27 拖拽钳制修正（HUD 从上方消失） =====
+# 上一版钳制未生效：LocalWindowInfo.containerSize 疑为 0 导致跳过；且只在拖动回调钳制、渲染用原始偏移。
+#   M unit-counter-mod/.../UnitCounterMod.kt
+#      hudDraggable 加两道保险：拖动回调钳制 offset + 渲染 .offset{} 也钳制（用 onSizeChanged 记录的组件尺寸）。
+#      effectiveWindow：containerSize<=0 时用组件尺寸推导保守窗口，钳制始终生效。
+#      clampAxis 重写：pos=base+next 钳制到 [visible-comp, win-visible]，
+#      visible=min(KEEP, comp, win)——修正“组件比 KEEP 小(收起态按钮 44px<48px)时数学上无法满足”的 bug。
+#      HudAnchor 改用 baseAtEndX/baseAtEndY 表达初始贴边；HUD_KEEP_VISIBLE_PX/clampAxis 改 internal 供测试。
+#   A unit-counter-mod/.../HudDragTest.kt  3 项测试：左上/左下锚点 -5000..5000 任意偏移都保证重叠>=min(KEEP,comp)，
+#      含极端 Int.MIN/MAX 与组件大于窗口——正是“从上方消失”场景的回归测试。
+# 验证：:unit-counter-mod:build 成功；7+3+4=14 测试全绿；GUI 启动无异常、mod 正常注册。
+# jar：unit-counter-mod-1.1.4.jar 已重新部署，旧包备份为 .bak-20261127-111820。
