@@ -221,3 +221,26 @@
 #   M unit-counter-mod/.../HudDragTest.kt 改用 clampPosition，3 项测试。
 # 验证：:unit-counter-mod:build 成功；7+3+4=14 测试全绿；GUI 启动无异常、mod 正常注册、无重组循环。
 # jar：unit-counter-mod-1.1.4.jar 已重新部署，旧包备份为 .bak-20261127-113906。
+
+# ===== 2026-11-27 修复“再次开新局整屏变白”（引擎竞态 + mod 空指针） =====
+# 用户反馈：带模组再次开新局，游戏画面变白。日志 rwx.log 12:44:53 给出精确异常：
+#   RuntimeException "game frame:31817 is greater then nest step:0"
+#   NetworkEngine.a():1855 → GameLogic.runGameLoopFrame():1311 → SlickGame.render():411
+# 根因：SlickGameSession.prepareForNewSession() 是空实现，上一局的 currentTick=31817 与
+#   hasLoadedLevel=true 留在引擎里；新局 configureLocalBattleRoom 先 resetNetworkGameState()
+#   把 nextBlockingFrame 清 0，渲染线程同一帧继续 gameLoop，两个计数不一致直接抛异常、
+#   容器停止 → 白屏/卡加载。mod 不在异常栈里；另有一条旧日志显示 isInGameOrLobby() 在
+#   replayEngine 尚未构造时 NPE，虽已被 runCatching 兜住，仍应防御。
+#   M desktop/.../SlickGameSession.kt
+#      prepareForNewSession() 不再空实现：先经 runEngineCommand 在渲染线程断开旧网络、
+#      currentTick/gameTimeMillis 归零、nextBlockingFrame=0、hasLoadedLevel/isGameStarted=false、
+#      isStopped/isPaused=true；再 super.discardRunningGame() 只复位会话状态，
+#      不走本类 discardRunningGame()（它会停掉常驻渲染器）。
+#   M unit-counter-mod/.../UnitCounterMod.kt
+#      isGameplayHudVisible / refreshSession / samplingTask 统一检查 engine.replayEngine != null，
+#      并对 isInGameOrLobby() 加 runCatching，避免切局瞬间 NPE。
+# 验证：scripts/build.sh 全量构建成功（2m24s）；模组 7+3+4=14 测试全绿；
+#   GUI 启动 34s 到主菜单（13:02:10 menu1.tmx ready），本轮无异常、mod 正常注册。
+# 部署：RWX-windows-x64-1.1.4.jar 113,713,486B md5=8f842eca…（旧包 113,711,772B 备份 logs-archive/）；
+#   unit-counter-mod-1.1.4.jar 171,459B md5=45800293…（旧包备份 .bak-20261127-130127）。
+# 未做：未实机连开两局复验（冒烟只到主菜单）；若仍白屏请附最新 logs/rwx.log。

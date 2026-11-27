@@ -43,7 +43,10 @@ private const val SMALL_TICK = 60L
 /** JVM mod 的调度任务只在对局逻辑里运行；主菜单必须靠 HUD 自己判定，避免残留上一局快照。 */
 internal fun isGameplayHudVisible(): Boolean {
     val engine = GameEngine.getInstance() ?: return false
-    return engine.isInGameOrLobby() && !engine.isMenuOpen
+    // GameEngine.isInGameOrLobby() 会直接解引用 replayEngine；引擎刚启动/切局时它可能尚未构造，
+    // 后台线程或 Compose 重组撞上这一瞬间会 NPE（旧日志里就有这条栈）。
+    if (engine.replayEngine == null) return false
+    return runCatching { engine.isInGameOrLobby() && !engine.isMenuOpen }.getOrDefault(false)
 }
 
 /** HUD 至少保留在屏幕内的像素数，避免被拖出可视范围后找不回来。 */
@@ -124,7 +127,7 @@ class UnitCounterMod : JvmMod() {
 
     private val samplingTask = ModTask { context ->
         val engine = GameEngine.getInstance()
-        if (engine == null || !engine.isInGameOrLobby()) {
+        if (engine == null || engine.replayEngine == null || !engine.isInGameOrLobby()) {
             // 主菜单/加载页不会跑调度任务，一旦回到这类状态就清掉旧局数据。
             snapshot.set(UnitBreakdown(hidden = true))
             factoryManager.reset()
@@ -181,9 +184,10 @@ class UnitCounterMod : JvmMod() {
      */
     internal fun refreshSession() {
         synchronized(sessionLock) {
-            val engine = GameEngine.getInstance()
-            val tick = engine?.currentTick?.toLong() ?: 0L
-            val active = engine != null && engine.isInGameOrLobby()
+            val engine = GameEngine.getInstance() ?: return
+            if (engine.replayEngine == null) return
+            val tick = engine.currentTick.toLong()
+            val active = runCatching { engine.isInGameOrLobby() }.getOrDefault(false)
             val prev = sessionMark.get()
             // 新局只认 currentTick 明确回退：引擎切局时会把 currentTick 重置为 0。
             // 不能把 isInGameOrLobby() 的 false→true 边沿当新局——该状态在对局中可能瞬时抖动，

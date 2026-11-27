@@ -384,7 +384,35 @@ class SlickGameSession(
         )
     }
 
-    override fun prepareForNewSession() = Unit
+    /**
+     * Slick 渲染线程常驻，不能像其他后端那样直接停掉渲染器；但上一局的世界状态必须在
+     * 新房间配置把 nextBlockingFrame 清 0 之前归零。否则同一帧的 gameLoop 会看到
+     * currentTick=上一局的大数、nextBlockingFrame=0，抛 "game frame > next step"，
+     * 渲染线程随之中止，玩家看到的就是整屏白/卡在加载页。
+     *
+     * 这里只把引擎状态重置交给渲染线程执行，保留渲染器本身。
+     */
+    override fun prepareForNewSession() {
+        if (activeGame() == null) {
+            super.prepareForNewSession()
+            return
+        }
+        runEngineCommand("prepare slick new session") { engine ->
+            runCatching { engine.networkEngine?.disconnectNetworking("new session") }
+            engine.hasLoadedLevel = false
+            engine.isMenuBackgroundMap = false
+            engine.isGameStarted = false
+            engine.isStopped = true
+            engine.isPaused = true
+            engine.currentTick = 0
+            engine.gameTimeMillis = 0
+            engine.networkEngine?.nextBlockingFrame = 0
+            engine.networkEngine?.frameUpdateBlocked = false
+            null
+        }
+        // 只做会话级状态复位；不能走本类的 discardRunningGame()（它会连渲染器一起停掉）。
+        super.discardRunningGame()
+    }
 
     override fun discardRunningGame() {
         super.discardRunningGame()
