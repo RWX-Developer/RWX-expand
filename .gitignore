@@ -41,3 +41,6 @@ bin/
 *.keystore
 *.p12
 tools/pathlab/out/
+
+### 本地私有模块：不随仓库分发 ###
+/unit-counter-mod/

@@ -302,3 +302,13 @@
 #     新增 2 项：轮转边界、连点 30 次只入队不批量提交；总测试 18+3+4=25 全绿。
 # 验证：:unit-counter-mod:build 成功（1m38s）；GUI 启动 15s 到主菜单、无异常。
 # jar：unit-counter-mod-1.1.4.jar 181,437B md5=4f495792…（旧包备份 .bak-20261127-154226）。
+
+# ===== 2026-11-27 模组源码从仓库摘除（引擎源码保留） =====
+# 用户要求：源码上传到 RWX-expand 的 integration-0.1 分支，模组不上传。
+#   M settings.gradle.kts
+#     include(":unit-counter-mod") 改为“目录存在才 include”，别人克隆后不会因缺模块构建失败；
+#     本地目录仍在，模组照常构建。
+#   M .gitignore
+#     新增 /unit-counter-mod/，模组源码与构建产物不再进版本库。
+#   D unit-counter-mod/**（git rm --cached，只取消跟踪，本地源码完整保留）
+# 验证：:unit-counter-mod:build 成功（1m28s），本地模组仍可编译测试。

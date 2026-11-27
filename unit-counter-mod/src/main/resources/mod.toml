@@ -1,7 +1,0 @@
-id = "unitcounter:hud"
-name = "单位计数 HUD"
-author = "dsh"
-version = "0.1"
-description = "游戏内显示我方/敌军单位与建筑数量"
-entrypoint = "unitcounter.mod.UnitCounterMod"
-minGameVersion = "1.0.4"
