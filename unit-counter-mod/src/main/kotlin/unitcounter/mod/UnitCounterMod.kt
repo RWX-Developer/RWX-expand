@@ -34,6 +34,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicReference
 
+/** 新局判定阈值：切局时 currentTick 重置为 0，只有在个小 tick 内的回退才视为真开局。 */
+private const val SMALL_TICK = 60L
+
 /** JVM mod 的调度任务只在对局逻辑里运行；主菜单必须靠 HUD 自己判定，避免残留上一局快照。 */
 internal fun isGameplayHudVisible(): Boolean {
     val engine = GameEngine.getInstance() ?: return false
@@ -69,7 +72,8 @@ class UnitCounterMod : JvmMod() {
 
     /** HUD 实时时钟用：currentTick 在新局归零，据此识别对局边沿。 */
     private data class SessionMark(val active: Boolean, val tick: Long)
-    private val sessionMark = AtomicReference(SessionMark(false, -1L))
+    // 初始 tick 设为最大：首次进入对局时 tick=0 < MAX，会走一次干净的 reset + 首帧采样。
+    private val sessionMark = AtomicReference(SessionMark(false, Long.MAX_VALUE))
     private val sessionLock = Any()
 
     private val samplingTask = ModTask { context ->
@@ -135,23 +139,18 @@ class UnitCounterMod : JvmMod() {
             val tick = engine?.currentTick?.toLong() ?: 0L
             val active = engine != null && engine.isInGameOrLobby()
             val prev = sessionMark.get()
-            // tick 归零 = 新局；从非对局进入对局也算新局。
-            val newMatch = active && (!prev.active || tick < prev.tick)
-            val leftGame = !active && prev.active
-            if (newMatch || leftGame) {
+            // 新局只认 currentTick 明确回退：引擎切局时会把 currentTick 重置为 0。
+            // 不能把 isInGameOrLobby() 的 false→true 边沿当新局——该状态在对局中可能瞬时抖动，
+            // 一旦误判就会 reset 清空玩家已配置的生产线并把 HUD 置隐藏（表现为按钮打着打着消失）。
+            val newMatch = active && tick < prev.tick && tick < SMALL_TICK
+            if (newMatch) {
                 snapshot.set(UnitBreakdown(hidden = true))
                 factoryManager.reset()
-                if (newMatch) {
-                    // 旧排期停在上局的大 tick，必须取消并从新局当前 tick 重新排期。
-                    // 额外 schedule(1) 让战斗第一个 tick 就采样显示，常规采样维持 5 tick。
-                    sampler?.cancel()
-                    api.game.schedule(1, samplingTask)
-                    sampler = api.game.repeat(5, samplingTask)
-                }
-            }
-            if (active && engine != null && engine.isMenuOpen) {
-                snapshot.set(snapshot.get().copy(hidden = true))
-                factoryManager.setHidden()
+                // 旧排期停在上局的大 tick，必须取消并从新局当前 tick 重新排期。
+                // 额外 schedule(1) 让战斗第一个 tick 就采样显示，常规采样维持 5 tick。
+                sampler?.cancel()
+                api.game.schedule(1, samplingTask)
+                sampler = api.game.repeat(5, samplingTask)
             }
             sessionMark.set(SessionMark(active, tick))
         }
@@ -185,7 +184,8 @@ class UnitCounterMod : JvmMod() {
     private fun UnitCounterCard(state: State<UnitBreakdown>) {
         val counts = state.value
         val dragOffset = remember { mutableStateOf(IntOffset.Zero) }
-        if (counts.hidden || !isGameplayHudVisible()) return
+        // 同生产 HUD：显示只看引擎实时状态，不看异步隐藏标志（避免误置后卡住消失）。
+        if (!isGameplayHudVisible()) return
         Column(
             modifier = Modifier
                 .padding(12.dp)

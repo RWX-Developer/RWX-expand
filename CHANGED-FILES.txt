@@ -167,3 +167,16 @@
 #   M unit-counter-mod/.../FactoryWindow.kt   FactoryHud 的 LaunchedEffect 只做 UI 刷新，去掉内部 reset 逻辑。
 # 验证：:unit-counter-mod:build 成功；7+4 测试全绿；GUI 启动无异常、mod 正常注册。
 # jar：unit-counter-mod-1.1.4.jar 已重新部署，旧包备份为 .bak-20261127-102203。
+
+# ===== 2026-11-27 修复“打着打着生产按钮消失” =====
+# 根因：① HUD 显示条件 view.hidden || !isGameplayHudVisible()，hidden 是后台异步写入的，
+#      一旦被误置 true 又没及时恢复，按钮就卡住消失；
+#      ② 上一版 newMatch 把 isInGameOrLobby() 的 false→true 边沿当新局，该状态对局中会瞬时抖动，
+#      误判就 reset 清空生产线并置隐藏。
+#   M unit-counter-mod/.../FactoryWindow.kt  生产 HUD 显示只看 isGameplayHudVisible()（已实时覆盖菜单/主菜单）。
+#   M unit-counter-mod/.../UnitCounterMod.kt  单位计数 HUD 同样去掉 hidden 依赖；
+#      新增 SMALL_TICK=60，newMatch 收紧为 active && tick<prev.tick && tick<SMALL_TICK（只认真切局 tick 归零）；
+#      去掉 leftGame 边沿的 reset（回主菜单不显示即可，抖动时清空会误伤）；
+#      初始 sessionMark tick=Long.MAX_VALUE，保证首次进局走一次干净 reset + 首帧采样。
+# 验证：:unit-counter-mod:build 成功；7+4 测试全绿；GUI 启动无异常、mod 正常注册。
+# jar：unit-counter-mod-1.1.4.jar 已重新部署，旧包备份为 .bak-20261127-103153。

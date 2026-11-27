@@ -66,7 +66,9 @@ internal fun FactoryHud(api: Api, manager: FactoryManager) {
     }
     refresh.value
     val view = state.value
-    if (view.hidden || !isGameplayHudVisible()) return
+    // 显示只由引擎实时状态决定（isGameplayHudVisible 已覆盖菜单/主菜单）；
+    // 不再看 snapshot.hidden——那是后台异步写入的，一旦被误置 true 又没及时恢复，按钮就会卡住消失。
+    if (!isGameplayHudVisible()) return
 
     var expanded by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf(false) }
