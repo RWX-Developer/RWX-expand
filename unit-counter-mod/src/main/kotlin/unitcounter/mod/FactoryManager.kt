@@ -39,12 +39,13 @@ internal class FactoryManager {
         snapshot.set(snapshot.get().copy(hidden = true))
     }
 
-    /** 离开对局时清空旧局工厂/生产线/待处理意图，避免主菜单或新局残留。 */
+    /** 离开对局/进入新局时清空旧局工厂、生产线、待处理意图与游标，避免旧局数据残留。 */
     fun reset() {
         linesRef.set(emptyList())
         pending.clear()
         pendingActionRuns.clear()
         unitCursors.clear()
+        nextLineId.set(1)
         snapshot.set(FactoryUiState(hidden = true))
     }
 

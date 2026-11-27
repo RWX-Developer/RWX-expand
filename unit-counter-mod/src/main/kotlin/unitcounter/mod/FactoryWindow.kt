@@ -57,22 +57,11 @@ internal fun FactoryHud(api: Api, manager: FactoryManager) {
     val dragOffset = remember { mutableStateOf(IntOffset.Zero) }
     val refresh = remember { mutableStateOf(0L) }
     LaunchedEffect(Unit) {
-        var outsideGameHandled = false
+        // 这里只做 UI 刷新；对局边沿检测由独立后台协程负责（本函数 hidden 时会提前 return，Effect 会被取消）。
         while (true) {
-            val engine = GameEngine.getInstance()
-            if (engine == null || !engine.isInGameOrLobby()) {
-                // 主菜单/加载页不跑调度任务，必须在这里主动清掉旧局工厂。
-                if (!outsideGameHandled) {
-                    manager.reset()
-                    outsideGameHandled = true
-                }
-            } else {
-                outsideGameHandled = false
-                if (engine.isMenuOpen) manager.setHidden()
-            }
             state.value = manager.snapshot.get()
             refresh.value++
-            delay(150)
+            delay(120)
         }
     }
     refresh.value

@@ -31,6 +31,7 @@ import io.github.rwx.mod.api.ModTask
 import io.github.rwx.mod.api.ScheduledTask
 import io.github.rwx.mod.api.UnitQuery
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicReference
 
 /** JVM mod 的调度任务只在对局逻辑里运行；主菜单必须靠 HUD 自己判定，避免残留上一局快照。 */
@@ -66,42 +67,93 @@ class UnitCounterMod : JvmMod() {
     private val factoryHudId = HudId("unitcounter:factory")
     private val factoryManager = FactoryManager()
 
+    /** HUD 实时时钟用：currentTick 在新局归零，据此识别对局边沿。 */
+    private data class SessionMark(val active: Boolean, val tick: Long)
+    private val sessionMark = AtomicReference(SessionMark(false, -1L))
+    private val sessionLock = Any()
+
+    private val samplingTask = ModTask { context ->
+        val engine = GameEngine.getInstance()
+        if (engine == null || !engine.isInGameOrLobby()) {
+            // 主菜单/加载页不会跑调度任务，一旦回到这类状态就清掉旧局数据。
+            snapshot.set(UnitBreakdown(hidden = true))
+            factoryManager.reset()
+            return@ModTask
+        }
+        if (engine.isMenuOpen) {
+            // 局内菜单只隐藏，不清空玩家已经配置的生产线。
+            snapshot.set(UnitBreakdown(hidden = true))
+            factoryManager.setHidden()
+            return@ModTask
+        }
+        factoryManager.tick(context)
+        val localTeamId = context.game.localTeam()?.teamId
+        val localFactionId = localTeamId?.let { PlayerTeam.k(it)?.teamColorId }
+        val raw = context.unitWorld.query(UnitQuery()).map { state ->
+            RawUnit(state.ref.teamId, state.isBuilding)
+        }
+        snapshot.set(
+            buildBreakdown(
+                rawUnits = raw,
+                teamLabel = { id -> teamLabel(id) },
+                factionOf = { id -> factionOf(id) },
+                factionLabel = { id -> "阵营 ${PlayerTeam.getTeamSlotLabel(id)}" },
+                localFactionId = localFactionId,
+            ).copy(hidden = false)
+        )
+    }
+
     override fun init() {
         val api = this.api
-        sampler = api.game.repeat(5, ModTask { context ->
-            val engine = GameEngine.getInstance()
-            if (engine == null || !engine.isInGameOrLobby()) {
-                // 主菜单/加载页不会跑调度任务，一旦回到这类状态就清掉旧局数据。
-                snapshot.set(UnitBreakdown(hidden = true))
-                factoryManager.reset()
-                return@ModTask
+        sampler = api.game.repeat(5, samplingTask)
+        // 独立的实时时钟：主菜单/加载页不跑仿真 tick，且 HUD 隐藏时 Compose 的 Effect 会被取消，
+        // 所以对局边沿检测必须放在不依赖 UI 存活的协程里。
+        sessionWatcher = kotlinx.coroutines.GlobalScope.launch {
+            while (true) {
+                // 单次检测异常不能让整个时钟静默死亡，否则新局再也不会重置。
+                runCatching { refreshSession() }
+                delay(100)
             }
-            if (engine.isMenuOpen) {
-                // 局内菜单只隐藏，不清空玩家已经配置的生产线。
-                snapshot.set(UnitBreakdown(hidden = true))
-                factoryManager.setHidden()
-                return@ModTask
-            }
-            factoryManager.tick(context)
-            val localTeamId = context.game.localTeam()?.teamId
-            val localFactionId = localTeamId?.let { PlayerTeam.k(it)?.teamColorId }
-            val raw = context.unitWorld.query(UnitQuery()).map { state ->
-                RawUnit(state.ref.teamId, state.isBuilding)
-            }
-            snapshot.set(
-                buildBreakdown(
-                    rawUnits = raw,
-                    teamLabel = { id -> teamLabel(id) },
-                    factionOf = { id -> factionOf(id) },
-                    factionLabel = { id -> "阵营 ${PlayerTeam.getTeamSlotLabel(id)}" },
-                    localFactionId = localFactionId,
-                ).copy(hidden = false)
-            )
-        })
+        }
         if (!api.game.headless) {
             api.ui.registerHud(hudId, order = 20) { UnitCounterCard(rememberSnapshot(snapshot)) }
             api.ui.registerHud(factoryHudId, order = 21) { FactoryHud(api, factoryManager) }
             api.game.log(LogLevel.INFO, "UnitCounter HUD + factory HUD registered")
+        }
+    }
+
+    private var sessionWatcher: kotlinx.coroutines.Job? = null
+
+    /**
+     * 对局边沿检测：调度任务按绝对 tick 排期，新局 currentTick 归零后旧排期还停在上局的大 tick，
+     * 要等 tick 涨回旧值才首次采样——上局越久，新局越晚显示。所以一旦检测到进入新对局，
+     * 就立刻清空旧局数据，并取消旧任务、从当前 tick 重新排期采样，保证战斗开始即显示。
+     */
+    internal fun refreshSession() {
+        synchronized(sessionLock) {
+            val engine = GameEngine.getInstance()
+            val tick = engine?.currentTick?.toLong() ?: 0L
+            val active = engine != null && engine.isInGameOrLobby()
+            val prev = sessionMark.get()
+            // tick 归零 = 新局；从非对局进入对局也算新局。
+            val newMatch = active && (!prev.active || tick < prev.tick)
+            val leftGame = !active && prev.active
+            if (newMatch || leftGame) {
+                snapshot.set(UnitBreakdown(hidden = true))
+                factoryManager.reset()
+                if (newMatch) {
+                    // 旧排期停在上局的大 tick，必须取消并从新局当前 tick 重新排期。
+                    // 额外 schedule(1) 让战斗第一个 tick 就采样显示，常规采样维持 5 tick。
+                    sampler?.cancel()
+                    api.game.schedule(1, samplingTask)
+                    sampler = api.game.repeat(5, samplingTask)
+                }
+            }
+            if (active && engine != null && engine.isMenuOpen) {
+                snapshot.set(snapshot.get().copy(hidden = true))
+                factoryManager.setHidden()
+            }
+            sessionMark.set(SessionMark(active, tick))
         }
     }
 
@@ -168,6 +220,8 @@ class UnitCounterMod : JvmMod() {
     }
 
     override fun dispose() {
+        sessionWatcher?.cancel()
+        sessionWatcher = null
         sampler?.cancel()
         sampler = null
         api.ui.unregisterHud(hudId)

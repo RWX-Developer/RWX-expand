@@ -152,3 +152,18 @@
 #   M unit-counter-mod/.../FactoryWindow.kt  行动行改为 Column：名称 + 生产/转换标记 + 转换明细小字。
 # 验证：:unit-counter-mod:build 成功；7+4 测试全绿；GUI 启动无反射异常。
 # jar：unit-counter-mod-1.1.4.jar 已重新部署，旧包备份为 .bak-20261127-080953。
+
+# ===== 2026-11-27 新对局即时重置 + 战斗开始即显示 =====
+# 根因：调度任务按绝对 tick 排期（nextTick=now+5），新局 currentTick 归零后旧排期停在上局大 tick，
+#      要等 tick 涨回旧值才首次采样——上局越久新局越晚显示；且 HUD 隐藏时 Compose Effect 被取消，
+#      主菜单又不跑仿真 tick，旧局数据无人重置。
+#   M unit-counter-mod/.../UnitCounterMod.kt
+#      采样 lambda 抽成成员 samplingTask；新增独立 GlobalScope 后台时钟（100ms）调用 refreshSession，
+#      不依赖仿真 tick 与 UI 存活，单次异常 runCatching 兜底。
+#      refreshSession：检测 active 边沿或 tick 归零判为新局 -> 立即 snapshot 置 hidden + factoryManager.reset()，
+#      cancel 旧 sampler 后 schedule(1) 首 tick 立即采样 + repeat(5) 常规采样，保证战斗开始即显示。
+#      离开对局边沿也 reset；局内菜单仅 setHidden 不清空生产线。
+#   M unit-counter-mod/.../FactoryManager.kt  reset 额外把 nextLineId 游标归零。
+#   M unit-counter-mod/.../FactoryWindow.kt   FactoryHud 的 LaunchedEffect 只做 UI 刷新，去掉内部 reset 逻辑。
+# 验证：:unit-counter-mod:build 成功；7+4 测试全绿；GUI 启动无异常、mod 正常注册。
+# jar：unit-counter-mod-1.1.4.jar 已重新部署，旧包备份为 .bak-20261127-102203。
