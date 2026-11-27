@@ -79,7 +79,7 @@ internal fun FactoryHud(api: Api, manager: FactoryManager) {
             modifier = Modifier
                 .padding(start = 12.dp, bottom = 12.dp)
                 .widthIn(max = 430.dp)
-                .hudDraggable(dragOffset, HudAnchor.BOTTOM_LEFT),
+                .hudDraggable(dragOffset),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             if (!expanded) {

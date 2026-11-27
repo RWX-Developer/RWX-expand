@@ -206,3 +206,18 @@
 #      含极端 Int.MIN/MAX 与组件大于窗口——正是“从上方消失”场景的回归测试。
 # 验证：:unit-counter-mod:build 成功；7+3+4=14 测试全绿；GUI 启动无异常、mod 正常注册。
 # jar：unit-counter-mod-1.1.4.jar 已重新部署，旧包备份为 .bak-20261127-111820。
+
+# ===== 2026-11-27 拖拽改为“越界即贴回”（实测位置，废弃钳制预测） =====
+# 用户指出：预测式钳制（base=win-comp 假设组件布局位置）本身就是把 HUD 推出屏幕的元凶。
+# 改为用户建议的“拖出屏幕外就回到边界位置”，且完全基于实测、不假设布局基准。
+#   M unit-counter-mod/.../UnitCounterMod.kt
+#      删除 HudAnchor / clampAxis / effectiveWindow / onSizeChanged。
+#      hudDraggable(offset) 去掉 anchor 参数：拖动回调纯累加；
+#      onGloballyPositioned 读 coords.positionInWindow()（已含偏移的真实屏幕位置）+ coords.size，
+#      越界则把 offset 修正 delta=clampPosition(actual)-actual 贴回边界（收敛，不循环）。
+#      新增纯函数 clampPosition(pos,comp,win)：pos 钳到 [visible-comp, win-visible]，
+#      visible=min(KEEP,comp,win)，供测试。
+#   M unit-counter-mod/.../FactoryWindow.kt 调用去掉 anchor 参数。
+#   M unit-counter-mod/.../HudDragTest.kt 改用 clampPosition，3 项测试。
+# 验证：:unit-counter-mod:build 成功；7+3+4=14 测试全绿；GUI 启动无异常、mod 正常注册、无重组循环。
+# jar：unit-counter-mod-1.1.4.jar 已重新部署，旧包备份为 .bak-20261127-113906。

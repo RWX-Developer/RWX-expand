@@ -16,12 +16,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
@@ -50,82 +50,54 @@ internal fun isGameplayHudVisible(): Boolean {
 internal const val HUD_KEEP_VISIBLE_PX = 48
 
 /**
- * 可拖拽 HUD：偏移被钳制在窗口范围内，保证组件至少 [HUD_KEEP_VISIBLE_PX] 留在屏幕里。
- * 旧实现纯累加、无边界，HUD 能被拖出屏幕且偏移一直保留，表现为“按钮离奇消失”。
+ * 可拖拽 HUD。
  *
- * 两道保险：
- *  1. 拖动回调里钳制 [offset] 本身；
- *  2. 渲染时 [offset] 也再钳制一次——即使 offset 因任何原因越界（如窗口尺寸变化、
- *     containerSize 读到 0），画出来的位置也一定在屏幕内。
- *
- * [anchor] 决定组件初始位置：计数板在左上、生产按钮在左下，两者可移动的偏移区间不同。
+ * 不做偏移的“预测式钳制”——那需要假设组件的布局基准，一旦假设错误反而会把 HUD 推错方向。
+ * 改成“越界贴回”：拖动时自由累加偏移；每次布局后用 [onGloballyPositioned] 读到组件
+ * **已含偏移的真实屏幕位置**，一旦发现它超出窗口，就把偏移修正相应的增量，
+ * 让组件贴回边界。这样完全基于实测，不依赖任何锚点假设。
  */
 @Composable
-internal fun Modifier.hudDraggable(
-    offset: MutableState<IntOffset>,
-    anchor: HudAnchor,
-): Modifier {
+internal fun Modifier.hudDraggable(offset: MutableState<IntOffset>): Modifier {
     val container = LocalWindowInfo.current.containerSize
-    val compSize = remember { mutableStateOf(IntSize.Zero) }
     return this
-        .onSizeChanged { compSize.value = it }
-        .offset {
-            val w = compSize.value.width
-            val h = compSize.value.height
-            val (winW, winH) = effectiveWindow(container, w, h)
-            IntOffset(
-                clampAxis(offset.value.x, w, winW, anchor.baseAtEndX),
-                clampAxis(offset.value.y, h, winH, anchor.baseAtEndY),
-            )
-        }
-        .pointerInput(anchor, container) {
-            val w = compSize.value.width
-            val h = compSize.value.height
-            val (winW, winH) = effectiveWindow(container, w, h)
+        .offset { IntOffset(offset.value.x, offset.value.y) }
+        .pointerInput(Unit) {
             detectDragGestures { _, dragAmount ->
-                val nextX = offset.value.x + dragAmount.x.roundToInt()
-                val nextY = offset.value.y + dragAmount.y.roundToInt()
                 offset.value = IntOffset(
-                    clampAxis(nextX, w, winW, anchor.baseAtEndX),
-                    clampAxis(nextY, h, winH, anchor.baseAtEndY),
+                    offset.value.x + dragAmount.x.roundToInt(),
+                    offset.value.y + dragAmount.y.roundToInt(),
                 )
+            }
+        }
+        .onGloballyPositioned { coords ->
+            val winW = container.width
+            val winH = container.height
+            if (winW <= 0 || winH <= 0) return@onGloballyPositioned
+            val p = coords.positionInWindow()
+            val actualX = p.x.roundToInt()
+            val actualY = p.y.roundToInt()
+            val w = coords.size.width
+            val h = coords.size.height
+            val targetX = clampPosition(actualX, w, winW)
+            val targetY = clampPosition(actualY, h, winH)
+            val dx = targetX - actualX
+            val dy = targetY - actualY
+            if (dx != 0 || dy != 0) {
+                // 越界：把偏移修正到贴边位置（下次布局读到合法位置，自然收敛）。
+                offset.value = IntOffset(offset.value.x + dx, offset.value.y + dy)
             }
         }
 }
 
 /**
- * containerSize 在无头/某些桌面环境可能读到 0；此时用组件尺寸推导一个保守窗口，
- * 至少保证钳制仍生效、组件不会被拖出。
+ * 把组件的真实左上角坐标钳到「与窗口至少重叠 min(KEEP, 组件尺寸, 窗口尺寸)」的范围。
+ * 这是纯函数，便于单测覆盖极端拖动。
  */
-private fun effectiveWindow(container: IntSize, compW: Int, compH: Int): Pair<Int, Int> {
-    val w = if (container.width > 0) container.width else maxOf(compW * 2, 400)
-    val h = if (container.height > 0) container.height else maxOf(compH * 2, 400)
-    return w to h
-}
-
-/**
- * 把单轴偏移钳制到「组件矩形与窗口矩形至少重叠 [HUD_KEEP_VISIBLE_PX]」的范围。
- * [baseAtEnd] 表示组件初始贴在该轴的末端（左下锚点的 Y 轴），此时基准位置 = win - comp。
- */
-internal fun clampAxis(next: Int, comp: Int, win: Int, baseAtEnd: Boolean): Int {
-    if (comp <= 0 || win <= 0) return next
-    val base = if (baseAtEnd) win - comp else 0
-    // 可见目标不超过组件自身尺寸（收起态按钮可能比 KEEP 还小）。
+internal fun clampPosition(pos: Int, comp: Int, win: Int): Int {
+    if (comp <= 0 || win <= 0) return pos
     val visible = minOf(HUD_KEEP_VISIBLE_PX, comp, win)
-    val minPos = visible - comp   // 组件上/左边界下限：不能整块移出起点侧
-    val maxPos = win - visible    // 组件下/右边界上限：不能整块移出末端侧
-    val pos = (base + next).coerceIn(minPos, maxPos)
-    return pos - base
-}
-
-internal enum class HudAnchor(
-    val baseAtEndX: Boolean,
-    val baseAtEndY: Boolean,
-) {
-    /** 左上角锚点（计数板）：初始在 (0,0)。 */
-    TOP_LEFT(baseAtEndX = false, baseAtEndY = false),
-    /** 左下角锚点（生产按钮）：初始 X 在起点、Y 在末端。 */
-    BOTTOM_LEFT(baseAtEndX = false, baseAtEndY = true),
+    return pos.coerceIn(visible - comp, win - visible)
 }
 
 /**
@@ -265,7 +237,7 @@ class UnitCounterMod : JvmMod() {
                 .padding(12.dp)
                 .background(Color(0x99000000))
                 .padding(horizontal = 12.dp, vertical = 8.dp)
-                .hudDraggable(dragOffset, HudAnchor.TOP_LEFT),
+                .hudDraggable(dragOffset),
         ) {
             BasicText(
                 text = "我方 ${counts.friendlyUnits}    敌军 ${counts.enemyUnits}",
