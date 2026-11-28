@@ -23,6 +23,7 @@ public final class RwxFullProbe {
     private static boolean announced;
     private static int intervalFrames = 60;
     private static int spikeMs = 50;
+    private static int spikeCooldownMs = 1000;
     private static volatile String globalBackend = "unknown";
     private static volatile int globalTextures = -1;
     private static java.io.Writer fileOut;
@@ -35,6 +36,7 @@ public final class RwxFullProbe {
         long renderNs;
         long gapNs;
         long endNs;
+        long lastSpikeOutNs;
         int tick = -1;
         int deltaMs;
         int objects;
@@ -108,6 +110,8 @@ public final class RwxFullProbe {
                 RwxFlags.getInt("RWX_FULL_INTERVAL", 60, 1, 3600), 1, 3600);
         spikeMs = parseIntEnv("RWX_FULL_SPIKE_MS",
                 RwxFlags.getInt("RWX_FULL_SPIKE_MS", 50, 1, 10000), 1, 10000);
+        spikeCooldownMs = parseIntEnv("RWX_FULL_SPIKE_COOLDOWN_MS",
+                RwxFlags.getInt("RWX_FULL_SPIKE_COOLDOWN_MS", 1000, 0, 600000), 0, 600000);
         String flagsPath = RwxFlags.loadedFrom();
         if (enabled) {
             RwxPerf.enableFromFullProbe("RWX_FULL_PROBE");
@@ -116,6 +120,7 @@ public final class RwxFullProbe {
                 Runtime rt = Runtime.getRuntime();
                 out("RWX_FULL_INIT enabled=1 interval=" + intervalFrames
                         + " spikeMs=" + spikeMs
+                        + " spikeCooldown=" + spikeCooldownMs + "ms"
                         + " flags=" + flagsPath
                         + " java=" + System.getProperty("java.version")
                         + " os=" + System.getProperty("os.name") + '/' + System.getProperty("os.arch")
@@ -285,8 +290,16 @@ public final class RwxFullProbe {
             f.winSpikes++;
         }
         if (spike || f.exception) {
-            out(new StringBuilder("RWX_FULL_SPIKE reason=").append(safe(reason))
-                    .append(metrics(f)).append(topSections(f)).toString());
+            // RWX：拖动时可能连续掉帧，尖峰行若每帧同步写盘会反过来放大卡顿。
+            // 仍然每帧计数，但日志按冷却间隔输出；异常永远立即写。
+            long cooldownNs = (long) spikeCooldownMs * 1000000L;
+            boolean due = f.exception || f.lastSpikeOutNs == 0L
+                    || f.endNs - f.lastSpikeOutNs >= cooldownNs;
+            if (due) {
+                out(new StringBuilder("RWX_FULL_SPIKE reason=").append(safe(reason))
+                        .append(metrics(f)).append(topSections(f)).toString());
+                f.lastSpikeOutNs = f.endNs;
+            }
         }
         if (f.frames >= intervalFrames) {
             out(new StringBuilder("RWX_FULL_SUM frames=").append(f.frames)

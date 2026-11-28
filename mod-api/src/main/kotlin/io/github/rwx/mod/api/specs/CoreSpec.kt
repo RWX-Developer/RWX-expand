@@ -53,7 +53,7 @@ data class CoreSpec(
     /**
      * Defaults to 0. 1 = Errors if keys are duplicated. Add to "all-units.template" in root to apply to all units.
      */
-    var strictLevel: Float? = null,
+    var strictLevel: Int? = null,
     // Example: isBio: true
     /**
      * Choose whether the unit is bioligical or not, affects sound and splat (unless hideScorchMark:true)

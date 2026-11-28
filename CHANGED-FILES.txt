@@ -397,3 +397,31 @@
 #   107,978,063B md5=165480c2164cecbce4c4f0476a6ddf48。
 # 部署：桌面 jar 113,738,265B md5=883f7b02935354a8fe2113aacf77a313，旧包备份 logs-archive/。
 # 用法：数据根 rwx-flags.txt 写 RWX_FULL_PROBE=1；可选 RWX_FULL_INTERVAL=30、RWX_FULL_SPIKE_MS=10。
+
+# ===== 2026-11-28 触屏/严格等级/拖动卡顿修复 =====
+# 用户反馈：导入模组界面与模组选择界面触屏失效；原版可加载的 MOD 被误判 strictLevel=1；
+#   拖动极其卡顿。逐项定位后修复：
+# 触屏：根因是原生游戏 View 在 Compose 菜单层之上并 return true 吞掉触摸。
+#   M ui/.../AndroidComposeHost.kt  setVisible(visible=true) 时无条件 bringToFront + requestFocus，
+#     不再只在 visibility 变化时调整。
+#   M android/.../AndroidGameSession.kt  新增 ensureOverlayZOrder()：每帧与 setGameVisible
+#     检查 ComposeView 是否被原生 View 盖住，发现后立即 bringToFront，并写 RWX_FULL_LIFE。
+# 严格等级：1.2.1 同步包把单位并行解析默认打开；解析线程共享 currentModInfo/iniCache/
+#   pendingUnitFiles，模板合并会合入 all-units.template 的 strictLevel: 1，导致 0 被当 1。
+#   M core/.../CustomUnitConfigParser.java
+#     RWX_PARALLEL_UNIT 默认恢复 false；仍可用 flags=1 或 -Drwx.parallelUnitParse=true 显式开启。
+#     hiddenAction_/canBuild_ 重复键不再无条件抛错，改为 strictLevel>=1 才转 error。
+#   M mod-api/.../CoreSpec.kt  strictLevel Float? -> Int?，避免 "0.0" 写进 INI 后解析失败。
+# 拖动卡顿：单位计数 HUD 每 100ms、生产 HUD 每 120ms 强制 refresh.value++，
+#   触发整块 Compose 重组；拖动时叠加造成明显卡顿。
+#   本地模组（.gitignore，不进仓库）M UnitCounterMod.kt / FactoryWindow.kt：
+#     仅在 data class 快照内容变化时写 State，去掉强制重组。
+#   M core/.../RwxFullProbe.java  新增 RWX_FULL_SPIKE_COOLDOWN_MS（默认 1000ms）：
+#     尖峰仍每帧计数，但日志按冷却输出，异常仍立即写，避免探针放大拖动卡顿。
+# 验证：:core:compileJava :android:assembleDebug :desktop:packageUberJarForCurrentOS
+#   :unit-counter-mod:build :bench-mod:build 成功（build-bugfix-compile.log，3m23s）；
+#   headless 120 tick 冒烟 exit=0，日志确认 RWX_UNIT_PARALLEL: enabled=false。
+# APK：D:/Game/RWX-整合包/android/rwx-bugfix-debug.apk
+#   108,015,591B md5=e1dce2a8d5a0a56f8f1ebd123d3cce9a。
+# 部署：桌面 jar 113,738,583B md5=6cba091b44dce10f2cf5916ddd98c0af；
+#   mod jar 181,126B md5=dcf90afce64fa16069d2c30a6910d0dd（旧包已备份）。

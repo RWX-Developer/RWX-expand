@@ -242,6 +242,7 @@ internal class AndroidGameSession(
             val engine = ensureStarted(viewport)
             applyViewport(engine, viewport)
             loadPendingMap(engine)
+            ensureOverlayZOrder()
 
             val presenter = framePresenter
             val androidGraphics = graphicsEngine
@@ -408,6 +409,8 @@ internal class AndroidGameSession(
             requestedOverlay == uiOverlay &&
             requestedPausedBackground == pausedBackground
         ) {
+            // RWX：状态没变但原生 View 可能后来又 bringToFront 盖住了 Compose。
+            if (visible && uiOverlay) ensureOverlayZOrder()
             return
         }
         visibilityRequestInitialized = true
@@ -440,9 +443,28 @@ internal class AndroidGameSession(
             } else {
                 presenter.setVisible(false)
             }
+            if (uiOverlay) ensureOverlayZOrder()
         }
         visibilityUpdate = update
         mainHandler.post(update)
+    }
+
+    /** 确保 Compose 菜单层永远压在原生游戏 View 之上，否则会出现“界面可见但点不动”。 */
+    private fun ensureOverlayZOrder() {
+        val compose = composeView ?: return
+        val gameView = framePresenter?.view ?: return
+        if (!requestedOverlay || compose.visibility != View.VISIBLE) return
+        val parent = compose.parent as? ViewGroup ?: return
+        val composeIndex = parent.indexOfChild(compose)
+        val gameIndex = parent.indexOfChild(gameView)
+        if (composeIndex >= 0 && gameIndex >= 0 && composeIndex < gameIndex) {
+            compose.bringToFront()
+            compose.requestFocus()
+            RwxFullProbe.onLifecycle(
+                "composeZOrderFixed",
+                "composeIndex=$composeIndex gameIndex=$gameIndex",
+            )
+        }
     }
 
     private fun handleMotionEvent(event: MotionEvent) {

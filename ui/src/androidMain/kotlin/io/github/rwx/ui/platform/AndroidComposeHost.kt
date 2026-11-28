@@ -32,6 +32,9 @@ class AndroidComposeHost(
             composeView.visibility = target
         }
         if (visible) {
+            // RWX：即便可见状态没变，也要重新压到原生游戏 View 之上。
+            // 之前只在 visibility 变化时 bringToFront，游戏 View 后续 bringToFront 后
+            // 会卡在顶层并吞掉模组界面/导入弹窗的触摸。
             composeView.bringToFront()
             requestFocus()
         }

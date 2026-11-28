@@ -90,18 +90,22 @@ public class CustomUnitConfigParser {
     public static FastArrayList tempUnitList = new FastArrayList();
 
     // ==== RWX: 并行加载单位配置 ====
-    // 真机日志（1.1.x）显示：CustomUnits 5895ms 里 unitParse 5220ms、贴图只有 968ms，
-    // 也就是解析是纯 CPU 大头，贴图占比不到两成 —— 并行解析的收益成立，默认开启。
-    // 贴图 / 音效仍然只能回主线程做（Slick 的 Image 构造当场绑 GL），走 glWork 队列，
-    // 主线程在等待 latch 期间代跑这些任务，所以并行不会把 GL 撕开。
-    // 关闭方式：flags 文件写 RWX_PARALLEL_UNIT=0；系统属性 -Drwx.parallelUnitParse=false 也可强制关。
+    // 1.2.1 同步包曾把并行解析默认打开，但解析线程共享 currentModInfo / iniCache /
+    // pendingUnitFiles，mergeAndApplyUnitChanges 又会合入全局 all-units.template 的
+    // strictLevel: 1。真机上出现严格等级 0 的旧 MOD 被当成 1、warning 被转成 error，
+    // 原版能加载的 MOD 反而加载失败。这里恢复原版默认值 false；需要性能时显式开启。
+    // 开启方式：flags 文件 RWX_PARALLEL_UNIT=1，或系统属性 -Drwx.parallelUnitParse=true。
     private static boolean PARALLEL_UNIT_ENABLED = rwxComputeParallelUnit();
 
     private static boolean rwxComputeParallelUnit() {
-        if ("false".equalsIgnoreCase(System.getProperty("rwx.parallelUnitParse"))) {
+        String property = System.getProperty("rwx.parallelUnitParse");
+        if ("false".equalsIgnoreCase(property)) {
             return false;
         }
-        return io.github.rwx.probe.RwxFlags.isOnDefault("RWX_PARALLEL_UNIT", true);
+        if ("true".equalsIgnoreCase(property)) {
+            return true;
+        }
+        return io.github.rwx.probe.RwxFlags.isOnDefault("RWX_PARALLEL_UNIT", false);
     }
 
     // 静态字段在类加载时就定型，那时容器（Koin）还没起来、读不到 flags 文件。
@@ -2601,8 +2605,15 @@ public class CustomUnitConfigParser {
                 recordLoadPhaseTime(jA, LoadPhase.unitParsePartC);
                 iniFile.checkForUnusedKeys();
                 for (ConfigKeyValue configKeyValue : iniFile.duplicateKeys) {
+                    // RWX：旧版 MOD 可能有重复的 hiddenAction_/canBuild_ 键，strictLevel=0
+                    // 时只能警告；原版此前不区分严格等级直接抛错，导致旧 MOD 被误杀。
                     if (configKeyValue.a() != null && (configKeyValue.a().startsWith("hiddenAction_") || configKeyValue.a().startsWith("canBuild_"))) {
-                        throw new RuntimeException("Error [" + configKeyValue.a() + "]" + configKeyValue.b() + " has been repeated");
+                        String repeated = "Repeated key " + configKeyValue;
+                        customUnitConfig.logWarningToMod(repeated);
+                        if (customUnitConfig.strictLevel >= 1) {
+                            throw new ConfigParseException(repeated);
+                        }
+                        continue;
                     }
                     String str21 = "Repeated key " + configKeyValue;
                     customUnitConfig.logWarningToMod(str21);
