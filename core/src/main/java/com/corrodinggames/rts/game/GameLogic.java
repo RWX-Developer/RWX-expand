@@ -1625,12 +1625,29 @@ public class GameLogic extends GameEngine {
         if (isInNetworkOrReplay() && f < 0.1f) {
             NetworkEngine.reportDesync("updateAllGame3: deltaSpeed:" + f + " frame:" + this.currentTick);
         }
+        // RWX 安卓崩溃修复：pendingOperations 是本帧新增/删除对象的待处理队列。
+        // 原代码在循环外抓 size2、循环内 get(i2)，而循环体 gameObject2.update(f) 会 spawn
+        // 新单位 -> GameObject.a.a() -> pendingOperations.add()，同一 tick 若有 commit
+        // (TransactionalArrayList.a()) 更会 clear() 整个队列。于是 size 与 get 之间竞态，
+        // 安卓真机实测 172 次 "Invalid index N, size is 0/1" -> game loop failed（每崩一次丢一帧）。
+        // 先做浅快照：遍历固定数组，不再读原列表的 size/get；顺序与内容与原逻辑逐字一致，
+        // 不改变锁步确定性（正常无增删时行为完全相同，新增对象本就不在本帧遍历范围内）。
+        // 抓底层数组引用 + size 后即与列表的 get(size) 校验解耦：clear() 只填 null 不改引用，
+        // add 扩容会换引用但旧引用仍有效，故遍历快照不会再触发 "Invalid index N, size is 0"。
+        Object[] pendingArray = transactionalArrayListDK.pendingOperations.a();
         int size2 = transactionalArrayListDK.pendingOperations.size();
-        for (int i2 = 0; i2 < size2; i2++) {
-            ListOperationEntry listOperationEntry = (ListOperationEntry) transactionalArrayListDK.pendingOperations.get(i2);
-            if (listOperationEntry.operation == ListOperation.add) {
+        // 取 size 与数组长度的较小者：正常恒有 size<=length（add 会先扩容），
+        // 竞态下若抓到旧引用而 size 已变大，也不会用旧数组越界访问。
+        int pendingCount = Math.min(size2, pendingArray.length);
+        ListOperationEntry[] pendingSnapshot = new ListOperationEntry[pendingCount];
+        for (int i2 = 0; i2 < pendingCount; i2++) {
+            pendingSnapshot[i2] = (ListOperationEntry) pendingArray[i2];
+        }
+        for (int i2 = 0; i2 < pendingSnapshot.length; i2++) {
+            ListOperationEntry listOperationEntry = pendingSnapshot[i2];
+            if (listOperationEntry != null && listOperationEntry.operation == ListOperation.add) {
                 GameObject gameObject2 = (GameObject) listOperationEntry.value;
-                if (!gameObject2.isDestroyed && (!(gameObject2 instanceof BaseUnit) || !((BaseUnit) gameObject2).isTransferUnavailable())) {
+                if (gameObject2 != null && !gameObject2.isDestroyed && (!(gameObject2 instanceof BaseUnit) || !((BaseUnit) gameObject2).isTransferUnavailable())) {
                     gameObject2.update(f);
                 }
             }

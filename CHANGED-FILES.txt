@@ -349,3 +349,24 @@
 # 验证：:desktop:packageUberJarForCurrentOS + :bench-mod:build 成功（2m10s）；
 #       GUI 22s 到主菜单，无异常，模组正常注册。
 # jar：RWX-windows-x64-1.1.4.jar 113,728,605B md5=a2aa8848…（旧包备份 logs-archive/）。
+
+# ===== 2026-11-28 安卓崩溃修复：pendingOperations 快照遍历 =====
+# 用户提供 D:/文/logs.zip 真机日志：172 次 " game loop failed"，异常全部是
+#   java.lang.IndexOutOfBoundsException: Invalid index N, size is 0/1；
+#   FastArrayList.get -> GameLogic.update -> AndroidGameSession.updateFrame -> Choreographer.doFrame。
+# 根因：GameLogic.update 在循环外抓 pendingOperations.size()，循环内用 get(i2)；
+#   gameObject2.update(f) 会 spawn 新对象并写 pendingOperations.add()，
+#   TransactionalArrayList.a() 还会 clear() 同一队列，导致 size 与 get 间竞态，每次抛异常丢一帧。
+#   M core/.../game/GameLogic.java
+#     改为抓底层 Object[] pendingArray + size，取 min(size, array.length) 后复制到固定
+#     ListOperationEntry[] 快照，再遍历快照；顺序与 old add 条目保持一致，
+#     null / isDestroyed / isTransferUnavailable 判定均补齐。正常无增删时行为不变，
+#     新增对象本就不在本帧遍历范围，不改变锁步确定性。
+# 验证：:core:compileJava :android:assembleDebug 成功（BUILD SUCCESSFUL in 2m39s，
+#   日志 build-crashfix-final.log）；尚未实机复验，需新 APK 跑一局回传 rwx.log。
+# APK：D:/Game/RWX-整合包/android/rwx-crashfix-debug.apk
+#   106,418,471B md5=1b58ac29fa11ffc8d8b254ef6c8586c3；包名 io.github.rwx；
+#   versionCode 10104 / versionName 1.1.4；Android Debug 签名，v2 有效。
+# 部署：桌面 jar 同步重建并部署，113,728,767B md5=829f4305bf32740dfb3230f37b76e191，
+#   旧包 113,728,605B 备份 logs-archive/。
+# 注意：debug 签名与旧版正式签名可能不同；若无法覆盖安装，先卸载旧版再装。
