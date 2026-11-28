@@ -146,6 +146,7 @@ public class TileAtlasCache {
         int iAllocateSlotForTile;
         tileset.computeTileRect(i, tmpRectA);
         if (this.allocatedSlotCount >= 400) {
+            io.github.rwx.probe.RwxFullProbe.addAtlasMiss(1);
             return -1;
         }
         boolean z = true;
@@ -161,6 +162,7 @@ public class TileAtlasCache {
         if (this.alphaAtlasCache != null && (iAllocateSlotForTile = this.alphaAtlasCache.allocateSlotForTile(tileset, i)) != -1) {
             return iAllocateSlotForTile + 500;
         }
+        io.github.rwx.probe.RwxFullProbe.addAtlasMiss(1);
         return -1;
     }
 

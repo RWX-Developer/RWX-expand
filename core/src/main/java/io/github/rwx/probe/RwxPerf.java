@@ -114,6 +114,18 @@ private static boolean ON = "1".equals(trimmedEnv("RWX_PROF")) || RwxFlags.isOn(
 // 那时读不到存储根 → ON 被定死为 false。所以允许在头几帧重新判定一次，并打一行自证日志。
 private static boolean onResolved;
 
+    /** 全量探针可以把本剖析器一起点亮；仍保持默认关，且只打一次自证日志。 */
+    public static synchronized void enableFromFullProbe(String reason) {
+        if (onResolved) {
+            return;
+        }
+        if (!ON) {
+            ON = true;
+            GameEngine.log("RWX_FULL: RwxPerf enabled by " + reason);
+        }
+        onResolved = true;
+    }
+
     // 逻辑线程
     private static final long[] acc = new long[SECTIONS];
     private static final long[] max = new long[SECTIONS];
@@ -354,6 +366,8 @@ private static boolean onResolved;
             "u_sdraw", "u_edraw", "u_layer", "u_adraw"};
     private static final long[] racc = new long[RD_NAMES.length];
     private static final long[] rmax = new long[RD_NAMES.length];
+    // RWX_FULL：单帧渲染段耗时（racc/rmax 是 600 帧窗口，尖峰行需要本帧值）
+    private static final long[] renderFrameAcc = new long[RD_NAMES.length];
     private static long rLast;
     private static long rPrevBegin;
     private static boolean rActive = false;
@@ -395,6 +409,7 @@ private static boolean onResolved;
         rPrevBegin = now;
         rLast = now;
         rActive = true;
+        java.util.Arrays.fill(renderFrameAcc, 0L);
         return now;
     }
 
@@ -406,6 +421,7 @@ private static boolean onResolved;
         long now = System.nanoTime();
         long d = now - rLast;
         racc[id] += d;
+        renderFrameAcc[id] += d;
         if (d > rmax[id]) {
             rmax[id] = d;
         }
@@ -446,5 +462,26 @@ private static boolean onResolved;
         renderFrames = 0;
         renderGapAcc = 0L;
         renderGapMax = 0L;
+    }
+
+    // ===== 给 RWX_FULL 探针读取的只读出口（不改任何计数） =====
+    public static boolean isOn() {
+        return ON;
+    }
+
+    public static long frameSectionNs(int id) {
+        return ON && id >= 0 && id < SECTIONS ? frameAcc[id] : 0L;
+    }
+
+    public static String sectionName(int id) {
+        return id >= 0 && id < SECTIONS ? NAMES[id] : "unknown";
+    }
+
+    public static long renderFrameSectionNs(int id) {
+        return ON && id >= 0 && id < RD_NAMES.length ? renderFrameAcc[id] : 0L;
+    }
+
+    public static String renderSectionName(int id) {
+        return id >= 0 && id < RD_NAMES.length ? RD_NAMES[id] : "unknown";
     }
 }

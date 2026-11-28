@@ -1,6 +1,7 @@
 package io.github.rwx.app
 
 import io.github.rwx.geometry.Viewport
+import io.github.rwx.probe.RwxFullProbe
 import io.github.rwx.session.GameSession
 import io.github.rwx.ui.AppScreen
 
@@ -39,6 +40,7 @@ internal class FrameRenderController(
             FrameSource.Empty -> Unit
         }
         if (screen != lastScreen) {
+            RwxFullProbe.onLifecycle("screen", "from=$lastScreen to=$screen source=$source")
             lastScreen = screen
             presentationRefreshFrames = PRESENTATION_REFRESH_FRAMES
         }

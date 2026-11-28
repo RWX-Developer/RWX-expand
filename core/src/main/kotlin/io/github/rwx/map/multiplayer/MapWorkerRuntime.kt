@@ -10,6 +10,7 @@ import com.corrodinggames.rts.gameFramework.GameMode
 import com.corrodinggames.rts.gameFramework.network.GameModeType
 import com.corrodinggames.rts.gameFramework.network.GameOutputStream
 import com.corrodinggames.rts.gameFramework.network.NetworkEngine
+import io.github.rwx.probe.RwxFullProbe
 import java.io.File
 import java.io.RandomAccessFile
 import java.nio.channels.FileLock
@@ -147,10 +148,12 @@ class MapWorkerRuntime(
                 } else {
                     engine.shouldSkipNextDraw = true
                     engine.gameLoop(1f, 16)
+                    RwxFullProbe.endFrame("mapWorker")
                 }
                 LockSupport.parkNanos((frameNanos - (System.nanoTime() - frameStart)).coerceAtLeast(0))
             }
         } catch (failure: Throwable) {
+            RwxFullProbe.onException(failure, "mapWorker")
             ready.completeExceptionally(failure)
             if (ready.isDone && !ready.isCompletedExceptionally) failure.printStackTrace()
         } finally {

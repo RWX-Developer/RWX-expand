@@ -14,6 +14,7 @@ import io.github.rwx.geometry.Viewport
 import io.github.rwx.input.MultiTouchPointerState
 import io.github.rwx.logger
 import io.github.rwx.platform.CoreGameView
+import io.github.rwx.probe.RwxFullProbe
 import io.github.rwx.render.RenderBackend
 import io.github.rwx.render.SkiaGraphicsEngine
 import io.github.rwx.session.BattleRoomLaunchConfig
@@ -61,7 +62,9 @@ class HeadlessGameSession(
             engine.networkEngine.a(layout)
             true
         }
-    override fun prepareForNewSession() = Unit
+    override fun prepareForNewSession() {
+        RwxFullProbe.onLifecycle("prepareForNewSession", "backend=HEADLESS")
+    }
 
     fun step(deltaSeconds: Float = 1f / 60f) = updateFrame(defaultPreloadViewport, deltaSeconds)
 
@@ -98,6 +101,7 @@ class HeadlessGameSession(
                 if (!engine.hasLoadedLevel) engine.networkEngine.a(gameDelta)
                 engine.shouldSkipNextDraw = true
                 engine.gameLoop(gameDelta, (deltaSeconds * 1000f).roundToInt())
+                RwxFullProbe.endFrame("headless")
             }
         }
     }

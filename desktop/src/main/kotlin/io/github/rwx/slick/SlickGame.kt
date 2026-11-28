@@ -19,6 +19,7 @@ import io.github.rwx.input.MultiTouchPointerState
 import io.github.rwx.logger
 import io.github.rwx.net.CoreUiNetworkCallbacks
 import io.github.rwx.platform.CoreGameView
+import io.github.rwx.probe.RwxFullProbe
 import io.github.rwx.geometry.Viewport
 import com.corrodinggames.rts.gameFramework.graphics.GraphicsEngine
 import io.github.rwx.session.*
@@ -409,6 +410,7 @@ class SlickGame(
             (activeEngine as GameLogic).drawWorldOnlyThreadSafe(0f)
         } else if (gameLoopDriven) {
             activeEngine.gameLoop(legacySlickDeltaSpeed(deltaMillis), deltaMillis)
+            RwxFullProbe.endFrame("slick")
         }
         // 地图还没被宣布就绪（加载中的那一段时间）就持续逼图块缓存排干；就绪之后立刻回到
         // 正常的小预算，免得平时缩放平移也跟着排视野外的图块。

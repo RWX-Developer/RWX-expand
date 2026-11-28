@@ -107,6 +107,7 @@ public final class BatchRenderer {
 
     public final void a() {
         if (this.e > 0) {
+            io.github.rwx.probe.RwxFullProbe.addDrawStats(1, this.e);
             OpenGLRenderer.j();
             this.f557a.a(this.b, this.c);
             this.f557a.a();

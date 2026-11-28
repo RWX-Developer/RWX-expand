@@ -1,6 +1,7 @@
 package io.github.rwx
 
 import android.app.Activity
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.MotionEvent
@@ -20,6 +21,7 @@ import io.github.rwx.geometry.Point
 import io.github.rwx.geometry.Viewport
 import io.github.rwx.input.MultiTouchPointerState
 import io.github.rwx.platform.CoreGameView
+import io.github.rwx.probe.RwxFullProbe
 import io.github.rwx.session.GameSession
 import io.github.rwx.ui.BattleRoomUiBridge
 import io.github.rwx.ui.InGameMenuController
@@ -69,6 +71,11 @@ internal class AndroidGameSession(
         if (graphicsEngine == null) {
             graphicsEngine = AndroidGraphicsEngine(activity.applicationContext, renderBackend)
         }
+        RwxFullProbe.setRenderBackend(renderBackend.name)
+        RwxFullProbe.onLifecycle(
+            "androidAttach",
+            "api=${Build.VERSION.SDK_INT} model=${Build.MODEL} backend=${renderBackend.name}",
+        )
         host.addView(presenter.view, 0, matchParentLayoutParams())
         (composeView.parent as? ViewGroup)?.removeView(composeView)
         host.addView(composeView, matchParentLayoutParams())
@@ -143,6 +150,8 @@ internal class AndroidGameSession(
                 }
             }
             logger.info { "Switched Android game renderer to ${renderBackend.name}" }
+            RwxFullProbe.setRenderBackend(renderBackend.name)
+            RwxFullProbe.onLifecycle("renderBackend", "to=${renderBackend.name}")
         }
     }
 
@@ -191,6 +200,7 @@ internal class AndroidGameSession(
 
     fun onPause() {
         resumed = false
+        RwxFullProbe.onLifecycle("androidPause", "")
         framePresenter?.pause()
         view.pause()
         view.clearTouchSnapshot()
@@ -198,6 +208,7 @@ internal class AndroidGameSession(
 
     fun onResume() {
         resumed = true
+        RwxFullProbe.onLifecycle("androidResume", "")
         resumeBackgroundFrameReady = false
         view.onResume()
         framePresenter?.takeIf { it.view.isVisible }?.resume()
@@ -205,11 +216,13 @@ internal class AndroidGameSession(
 
     override fun submitPointer(screenX: Float, screenY: Float, isDown: Boolean, pointerId: Int) {
         if (linkedInputBlocked) return
+        RwxFullProbe.addInputEvent(1)
         view.submitPointer(screenX, screenY, isDown, pointerId)
     }
 
     override fun movePointer(screenX: Float, screenY: Float) {
         if (linkedInputBlocked) return
+        RwxFullProbe.addInputEvent(1)
         view.movePointer(screenX, screenY)
     }
 
@@ -289,9 +302,11 @@ internal class AndroidGameSession(
                     (deltaSeconds * 1000f).roundToInt().coerceAtLeast(0),
                 )
             }.onFailure { error ->
+                RwxFullProbe.onException(error, "android.gameLoop")
                 logger.error(error) { " game loop failed" }
             }
         } finally {
+            RwxFullProbe.endFrame(if (skipDraw) "skipDraw" else "normal")
             if (skipDraw) {
                 engine.shouldSkipNextDraw = false
             }
@@ -302,6 +317,7 @@ internal class AndroidGameSession(
         runCatching {
             (engine as GameLogic).drawWorldOnlyThreadSafe(0f)
         }.onFailure { error ->
+            RwxFullProbe.onException(error, "android.pausedBackground")
             logger.error(error) { " paused background render failed" }
         }
     }

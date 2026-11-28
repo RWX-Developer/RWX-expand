@@ -10,6 +10,7 @@ import io.github.rwx.geometry.Viewport
 import io.github.rwx.input.MultiTouchPointerState
 import io.github.rwx.logger
 import io.github.rwx.platform.CoreGameView
+import io.github.rwx.probe.RwxFullProbe
 import io.github.rwx.render.RenderBackend
 import io.github.rwx.render.SkiaGraphicsEngine
 import io.github.rwx.render.canvas.Paint
@@ -63,6 +64,7 @@ class SkiaGameSession(
     private val frameProbe by lazy { BenchFrameProbe() }
 
     init {
+        RwxFullProbe.setRenderBackend("SKIA")
         if (registerShutdownHook) {
             Runtime.getRuntime().addShutdownHook(
                 Thread({ runCatching { close() } }, "skia-session-shutdown")
@@ -170,7 +172,9 @@ class SkiaGameSession(
 
     override fun canResume(): Boolean = !closed.get() && super.canResume()
 
-    override fun prepareForNewSession() = Unit
+    override fun prepareForNewSession() {
+        RwxFullProbe.onLifecycle("prepareForNewSession", "backend=SKIA")
+    }
 
     override fun isMapLoaded(mapPath: String?): Boolean = !closed.get() && super.isMapLoaded(mapPath)
 
@@ -403,8 +407,10 @@ class SkiaGameSession(
                 (deltaSeconds * 1000f).roundToInt().coerceAtLeast(0),
             )
         }.onFailure { error ->
+            RwxFullProbe.onException(error, "desktop.skia.gameLoop")
             logger.warn(error) { "Skia game loop failed" }
         }
+        RwxFullProbe.endFrame("normal")
     }
 
     private fun shouldRenderPausedFrame(engine: GameEngine): Boolean {

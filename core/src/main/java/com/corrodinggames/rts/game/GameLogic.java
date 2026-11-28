@@ -1111,6 +1111,7 @@ public class GameLogic extends GameEngine {
     @Override // com.corrodinggames.rts.gameFramework.GameEngine
     /* JADX INFO: renamed from: a */
     public void gameLoop(float f, int i) throws ConfigParseException, IOException {
+        io.github.rwx.probe.RwxFullProbe.beginFrame(this.currentTick, i);
         synchronized (this.gameStateLock) {
             runGameLoopFrame(f, i);
         }
@@ -1572,7 +1573,10 @@ public class GameLogic extends GameEngine {
         boolean hasOutcomeFence = this.missionEngine != null && this.missionEngine.linkedWorldState != null
                 && this.missionEngine.linkedWorldState.isOutcomeFenced();
         if (hadOutcomeFence || hasOutcomeFence) this.gameTimeMillis = timeBeforeOutcomeFence;
-        if (hasOutcomeFence) return;
+        if (hasOutcomeFence) {
+            io.github.rwx.probe.RwxFullProbe.skipLogic("outcomeFence");
+            return;
+        }
         { long t0 = io.github.rwx.probe.RwxPerf.now(); ModScheduler.tick(); io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.C_MODS, t0); }
         { long t0 = io.github.rwx.probe.RwxPerf.now(); PlayerTeam.g(f); io.github.rwx.probe.RwxPerf.mark(io.github.rwx.probe.RwxPerf.C_TEAMSG, t0); }
         io.github.rwx.probe.RwxProbe.tick(this.currentTick);
@@ -1715,14 +1719,25 @@ public class GameLogic extends GameEngine {
         io.github.rwx.probe.RwxPerf.stateSum(this.currentTick, this.networkEngine.stateChecksum);
         this.gameStatistics.b();
         io.github.rwx.probe.RwxPerf.endFrame(rwxT, this.currentTick, transactionalArrayListDK.size(), System.identityHashCode(this));
+        // RWX_FULL：只读计数，不改列表；pendingCount 是本帧开头抓到的快照长度。
+        io.github.rwx.probe.RwxFullProbe.endLogic(
+                this.currentTick,
+                transactionalArrayListDK.size(),
+                com.corrodinggames.rts.game.units.BaseUnit.bE.b,
+                this.effectManager.activeEffectsCount,
+                this.commandController.pendingCommands.size() + this.commandController.queuedCommands.size(),
+                pendingCount,
+                transactionalArrayListDK.completedOperations.size());
     }
 
     /* JADX INFO: renamed from: a */
     public void drawThreadSafe(float f) {
         long rwxDrawT = io.github.rwx.probe.RwxPerf.beginRender();
+        io.github.rwx.probe.RwxFullProbe.beginRender(this.currentTick);
         synchronized (this.drawLock) {
             draw(f, true);
         }
+        io.github.rwx.probe.RwxFullProbe.endRender(this.currentTick);
         io.github.rwx.probe.RwxPerf.endRender(rwxDrawT, this.currentTick, System.identityHashCode(this));
     }
 

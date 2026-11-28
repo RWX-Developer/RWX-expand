@@ -416,6 +416,7 @@ public class GameViewOpenGL extends GLSurfaceViewShared implements InputContext,
 
     protected void onGLDraw(GraphicsEngine graphicsEngine) {
         GameEngine.getInstance();
+        io.github.rwx.probe.RwxFullProbe.setRenderBackend("OPENGL_ES", OpenGLRenderer.G);
         if (this.drawPending) {
             synchronized (this.canvasDirectGL.c) {
                 OpenGLGraphicsRenderer openGLGraphicsRenderer = this.canvasDirectGL;
@@ -443,6 +444,7 @@ public class GameViewOpenGL extends GLSurfaceViewShared implements InputContext,
                 deferredGraphicsInterface.f773a = this.canvasDirectGL;
                 GLDrawCommand[] gLDrawCommandArr = deferredGraphicsInterface.k.b;
                 int i = deferredGraphicsInterface.l;
+                io.github.rwx.probe.RwxFullProbe.addDeferredCommands(i);
                 for (int i2 = 0; i2 < i; i2++) {
                     GLDrawCommand gLDrawCommand = gLDrawCommandArr[i2];
                     gLDrawCommand.f753a.a(gLDrawCommand.g.f773a, gLDrawCommand);

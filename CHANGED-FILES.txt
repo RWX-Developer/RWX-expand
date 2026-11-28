@@ -370,3 +370,30 @@
 # 部署：桌面 jar 同步重建并部署，113,728,767B md5=829f4305bf32740dfb3230f37b76e191，
 #   旧包 113,728,605B 备份 logs-archive/。
 # 注意：debug 签名与旧版正式签名可能不同；若无法覆盖安装，先卸载旧版再装。
+
+# ===== 2026-11-28 全量日志/探针：RWX_FULL_PROBE =====
+# 用户要求“加个完全日志和探针，日志里能记录方方面面方便分析”。默认关闭。
+#   A core/.../probe/RwxFullProbe.java
+#     开关 RWX_FULL_PROBE=1（环境变量或 rwx-flags.txt），自动点亮 RwxPerf；
+#     RWX_FULL_INTERVAL 默认 60 帧，RWX_FULL_SPIKE_MS 默认 50ms（支持环境变量与 flags）。
+#     输出 RWX_FULL_INIT / RWX_FULL_SUM / RWX_FULL_SPIKE / RWX_FULL_EX / RWX_FULL_LIFE，
+#     同时写 rwx.log 与 logs/rwx-full.log。只读取计数，不改列表/tick/随机数，不破坏锁步。
+#     字段覆盖：tick/delta/gap/total/logic/render、38 段逻辑 Top、12 段渲染 Top、
+#     objects/pending/completed/units/effects/commands、drawCalls/quads/deferred/textures/
+#     atlasMiss/input、aiHits/trig/cb/heap、线程/相位/后端；异常另打最多 3 层 cause 栈。
+#   M core/.../probe/RwxPerf.java  新增只读出口与 enableFromFullProbe；补 renderFrameAcc。
+#   M core/.../GameLogic.java      gameLoop 起帧、update 末记逻辑计数、drawThreadSafe 记渲染。
+#   M android/.../AndroidGameSession.kt  异常/帧结束/生命周期/触摸输入事件接入；设备型号与 API 入日志。
+#   M android/.../GameViewOpenGL.java    OPENGL_ES 后端、贴图数、deferred 指令数。
+#   M android/.../BatchRenderer.java     glDrawElements 前记 drawCalls/quads。
+#   M core/.../SkiaAtlasBatch.kt         drawVertices 前记 drawCalls/quads。
+#   M core/.../TileAtlasCache.java       图集槽分配失败记 atlasMiss。
+#   M SkiaGameSession / HeadlessGameSession / SlickGame / MapWorkerRuntime / FrameRenderController
+#     补齐桌面/无头/地图工坊的帧结束、异常与界面切换日志。
+# 验证：:core:compileJava :android:assembleDebug :desktop:packageUberJarForCurrentOS :bench-mod:build 成功
+#   （build-fullprobe-final2.log，2m55s）；headless 180 tick 开 RWX_FULL_PROBE 实测
+#   RWX_FULL_INIT/SUM/SPIKE 全部出现（fullprobe-smoke2.log），日志落 logs/rwx-full.log。
+# APK：D:/Game/RWX-整合包/android/rwx-fullprobe-debug.apk
+#   107,978,063B md5=165480c2164cecbce4c4f0476a6ddf48。
+# 部署：桌面 jar 113,738,265B md5=883f7b02935354a8fe2113aacf77a313，旧包备份 logs-archive/。
+# 用法：数据根 rwx-flags.txt 写 RWX_FULL_PROBE=1；可选 RWX_FULL_INTERVAL=30、RWX_FULL_SPIKE_MS=10。

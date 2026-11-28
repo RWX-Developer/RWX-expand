@@ -46,6 +46,7 @@ internal class SkiaAtlasBatch(private val buffers: SkiaAtlasBuffers) : AutoClose
 
     fun flush(canvas: Canvas) {
         if (count == 0) return
+        io.github.rwx.probe.RwxFullProbe.addDrawStats(1, count / 8)
         val vertices: FloatArray
         val uv: FloatArray
         val indices: ShortArray
