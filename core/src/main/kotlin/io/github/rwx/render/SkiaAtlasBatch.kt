@@ -124,7 +124,7 @@ internal class SkiaAtlasBuffers {
     }
 }
 
-private const val MAX_QUADS = 2048
+private const val MAX_QUADS = 4096
 
 /** TL/TR/BR/BL vertices retain the same two ordered triangles as the expanded mesh. */
 private fun quadIndices(quads: Int): ShortArray = ShortArray(quads * 6).also { indices ->
